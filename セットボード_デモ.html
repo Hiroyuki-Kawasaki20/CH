@@ -1,0 +1,2171 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>セットボード（工程×時間）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+<style>
+  :root {
+    --pxPerMinute: 10;
+    --laneHeight: 88px;
+    --gap: 10px;
+    --nowColor: #FF3B30;
+    --primary: #2563eb;
+    --primary-light: #3b82f6;
+    --primary-dark: #1d4ed8;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --bg-main: #f8fafc;
+    --bg-card: #ffffff;
+    --border: #e2e8f0;
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
+    --text-muted: #94a3b8;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
+    --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1);
+    --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
+  * { box-sizing: border-box; }
+  
+  body {
+    font-family: 'Noto Sans JP', system-ui, -apple-system, sans-serif;
+    margin: 0;
+    background: var(--bg-main);
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+  
+  /* ===== ヘッダー ===== */
+  header {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: white;
+    padding: 16px 24px;
+    box-shadow: var(--shadow-lg);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  
+  .header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  
+  .app-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  
+  .app-title .material-icons-round {
+    font-size: 32px;
+    opacity: 0.9;
+  }
+  
+  .header-controls {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  
+  /* ===== ドロップゾーン ===== */
+  .dropzone-container {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  
+  .dropzone {
+    flex: 1;
+    min-width: 240px;
+    border: 2px dashed rgba(255,255,255,0.4);
+    padding: 16px 20px;
+    border-radius: var(--radius-md);
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(10px);
+    cursor: pointer;
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  
+  .dropzone:hover {
+    border-color: rgba(255,255,255,0.7);
+    background: rgba(255,255,255,0.15);
+    transform: translateY(-2px);
+  }
+  
+  .dropzone.dragover {
+    border-color: #fff;
+    background: rgba(255,255,255,0.25);
+    transform: scale(1.02);
+  }
+  
+  .dropzone.loaded {
+    border-color: var(--success);
+    background: rgba(16, 185, 129, 0.2);
+    border-style: solid;
+  }
+  
+  .dropzone-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  
+  .dropzone-icon .material-icons-round {
+    font-size: 24px;
+  }
+  
+  .dropzone-text {
+    font-size: 0.9rem;
+  }
+  
+  .dropzone-text b {
+    display: block;
+    font-weight: 600;
+    font-size: 1rem;
+    margin-bottom: 2px;
+  }
+  
+  .dropzone-text small {
+    opacity: 0.8;
+    font-size: 0.8rem;
+  }
+  
+  /* ===== コントロールパネル ===== */
+  .control-panel {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+    background: rgba(0,0,0,0.1);
+    padding: 12px 16px;
+    border-radius: var(--radius-md);
+  }
+  
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255,255,255,0.1);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+  }
+  
+  .control-group label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    opacity: 0.9;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  
+  .control-group label .material-icons-round {
+    font-size: 18px;
+    opacity: 0.8;
+  }
+  
+  .control-group input[type="time"],
+  .control-group input[type="range"] {
+    background: rgba(255,255,255,0.9);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    font-family: inherit;
+  }
+  
+  .control-group input[type="range"] {
+    width: 100px;
+    height: 6px;
+    -webkit-appearance: none;
+    background: rgba(255,255,255,0.3);
+    border-radius: 3px;
+    padding: 0;
+  }
+  
+  .control-group input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    background: white;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: var(--shadow-md);
+  }
+  
+  .zoom-value {
+    background: rgba(255,255,255,0.2);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    min-width: 32px;
+    text-align: center;
+  }
+  
+  /* ===== 工程フィルター ===== */
+  .proc-filter-group {
+    display: flex;
+    gap: 6px;
+  }
+  
+  .proc-btn {
+    padding: 6px 14px;
+    border: 2px solid rgba(255,255,255,0.3);
+    background: transparent;
+    color: white;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+    font-family: inherit;
+  }
+  
+  .proc-btn:hover {
+    border-color: rgba(255,255,255,0.6);
+    background: rgba(255,255,255,0.1);
+  }
+  
+  .proc-btn.active {
+    background: white;
+    color: var(--primary);
+    border-color: white;
+  }
+  
+  .proc-btn.proc-1 { --proc-color: #3b82f6; }
+  .proc-btn.proc-2 { --proc-color: #10b981; }
+  .proc-btn.proc-3 { --proc-color: #ec4899; }
+  .proc-btn.proc-unset { --proc-color: #f59e0b; }
+  
+  .proc-btn.active.proc-1 { background: #dbeafe; color: #1e40af; border-color: #3b82f6; }
+  .proc-btn.active.proc-2 { background: #d1fae5; color: #065f46; border-color: #10b981; }
+  .proc-btn.active.proc-3 { background: #fce7f3; color: #9d174d; border-color: #ec4899; }
+  .proc-btn.active.proc-4 { background: #fef3c7; color: #92400e; border-color: #f59e0b; }
+  
+  /* ===== 凡例 ===== */
+  .legend-container {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    margin-left: auto;
+  }
+  
+  .legend {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    font-size: 0.8rem;
+    opacity: 0.9;
+  }
+  
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  
+  .legend-color {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.3);
+  }
+  
+  .legend-color.mixed {
+    background: linear-gradient(to bottom, #fff 60%, #fecaca 60%);
+  }
+  
+  /* ===== 直選択ボタン ===== */
+  .shift-btn-group {
+    display: flex;
+    gap: 6px;
+    margin-right: 12px;
+  }
+  
+  .shift-btn {
+    padding: 8px 20px;
+    border: 2px solid rgba(255,255,255,0.5);
+    background: rgba(255,255,255,0.15);
+    color: white;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+    font-family: inherit;
+  }
+  
+  .shift-btn:hover {
+    border-color: rgba(255,255,255,0.8);
+    background: rgba(255,255,255,0.25);
+  }
+  
+  .shift-btn.active {
+    background: white;
+    color: var(--primary);
+    border-color: white;
+    box-shadow: var(--shadow-md);
+  }
+  
+  /* ===== メタ情報 ===== */
+  .meta {
+    background: rgba(255,255,255,0.15);
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  
+  .meta .material-icons-round {
+    font-size: 18px;
+  }
+  
+  /* ===== ボード ===== */
+  .board-wrapper {
+    padding: 20px;
+  }
+  
+  .board {
+    position: relative;
+    overflow: auto;
+    background: var(--bg-card);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    border: 1px solid var(--border);
+  }
+  
+  /* ===== タイムライン ===== */
+  .timeline {
+    position: sticky;
+    top: 0;
+    background: linear-gradient(to bottom, #f8fafc 0%, #f1f5f9 100%);
+    border-bottom: 2px solid var(--border);
+    z-index: 10;
+    height: 40px !important;
+  }
+  
+  .tick {
+    position: absolute;
+    top: 0;
+    height: 40px;
+    border-left: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 10px 0 0 6px;
+    user-select: none;
+  }
+  
+  .tick.major {
+    border-left: 2px solid #cbd5e1;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  
+  /* ===== レーン ===== */
+  .lanes { position: relative; }
+  
+  .lane {
+    position: relative;
+    height: var(--laneHeight);
+    border-bottom: 1px solid var(--border);
+    transition: background 0.2s;
+  }
+  
+  .lane:hover {
+    background: #f8fafc;
+  }
+  
+  .lane:nth-child(even) {
+    background: #fafbfc;
+  }
+  
+  .lane:nth-child(even):hover {
+    background: #f1f5f9;
+  }
+  
+  .lane-label {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 110px;
+    background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+    border-right: 2px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 0.9rem;
+    z-index: 5;
+  }
+  
+  .lane-label.proc-1 { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); border-color: #93c5fd; color: #1e40af; }
+  .lane-label.proc-2 { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); border-color: #6ee7b7; color: #065f46; }
+  .lane-label.proc-3 { background: linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%); border-color: #f9a8d4; color: #9d174d; }
+  .lane-label.proc-4 { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-color: #fcd34d; color: #92400e; }
+  
+  .lane-body {
+    position: absolute;
+    left: 110px;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent calc(var(--pxPerMinute) * 10px - 1px),
+      #f1f5f9 calc(var(--pxPerMinute) * 10px - 1px),
+      #f1f5f9 calc(var(--pxPerMinute) * 10px)
+    );
+  }
+  
+  /* ===== カード ===== */
+  .card {
+    position: absolute;
+    height: calc(var(--laneHeight) - var(--gap) * 2);
+    top: var(--gap);
+    border-radius: var(--radius-md);
+    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+    border: 2px solid #93c5fd;
+    box-shadow: var(--shadow-sm);
+    box-sizing: border-box;
+    padding: 8px 10px;
+    overflow: hidden;
+    cursor: move;
+    transition: var(--transition);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  
+  .card.dragging {
+    opacity: 0.5;
+    transform: scale(0.95);
+    cursor: grabbing;
+  }
+  
+  .lane-body.drag-over {
+    background: rgba(59, 130, 246, 0.1);
+    box-shadow: inset 0 0 0 2px rgba(59, 130, 246, 0.3);
+  }
+  
+  .card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-lg);
+    z-index: 20;
+  }
+  
+  .card b {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: #1e3a5f;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+  }
+  
+  .card small {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    margin-top: 2px;
+    line-height: 1.3;
+  }
+  
+  .card small span {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  
+  .card.p2 {
+    background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+    border-color: #6ee7b7;
+  }
+  .card.p2 b { color: #065f46; }
+  
+  .card.p3 {
+    background: linear-gradient(135deg, #fdf2f8 0%, #fce7f3 100%);
+    border-color: #f9a8d4;
+  }
+  .card.p3 b { color: #9d174d; }
+  
+  .card.p4 {
+    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+    border-color: #fcd34d;
+  }
+  .card.p4 b { color: #92400e; }
+  
+  .card.mixed {
+    box-shadow: inset 0 -6px 0 #fecaca, var(--shadow-sm);
+  }
+  
+  .card.mixed:hover {
+    box-shadow: inset 0 -6px 0 #fecaca, var(--shadow-lg);
+  }
+  
+  /* ===== デッドライン超過カード ===== */
+  @keyframes deadline-blink {
+    0%, 100% { 
+      background: linear-gradient(135deg, #fecaca 0%, #fca5a5 100%);
+      border-color: #ef4444;
+      box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.3);
+    }
+    50% { 
+      background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+      border-color: #f87171;
+      box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.5);
+    }
+  }
+  
+  .card.deadline-over {
+    animation: deadline-blink 1s ease-in-out infinite;
+    border-width: 3px;
+  }
+  
+  .card.deadline-over b {
+    color: #b91c1c !important;
+  }
+  
+  .card.deadline-over small {
+    color: #dc2626;
+  }
+  
+  .card.deadline-over::after {
+    content: '⚠';
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    font-size: 0.75rem;
+    color: #dc2626;
+  }
+  
+  /* ===== 現在時刻ライン ===== */
+  .now {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: linear-gradient(to bottom, var(--nowColor), #ff6b6b);
+    pointer-events: none;
+    z-index: 15;
+    box-shadow: 0 0 8px rgba(255, 59, 48, 0.5);
+  }
+  
+  .now::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: -5px;
+    width: 13px;
+    height: 13px;
+    background: var(--nowColor);
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px rgba(255, 59, 48, 0.3);
+  }
+  
+  .now-label {
+    position: absolute;
+    top: -24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--nowColor);
+    color: white;
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  
+  /* ===== デッドライン（非表示） ===== */
+  .deadline {
+    display: none;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: linear-gradient(to bottom, #9333ea, #a855f7);
+    opacity: 0.8;
+    z-index: 12;
+  }
+  
+  .deadline::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -4px;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 8px solid #9333ea;
+  }
+  
+  /* ===== ダイヤレーン（入車時間表示用） ===== */
+  .lane.lane-dia {
+    position: relative !important;
+    height: 100px !important;
+    min-height: 100px !important;
+    max-height: 100px !important;
+    border-bottom: 3px solid #dc2626 !important;
+    background: #fef2f2 !important;
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    overflow: visible !important;
+  }
+  
+  .lane.lane-dia .lane-label {
+    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%) !important;
+    color: white !important;
+    width: 110px !important;
+    min-width: 110px !important;
+  }
+  
+  .lane-dia .lane-body {
+    position: relative !important;
+    flex: 1 !important;
+    height: 100% !important;
+    background: #fee2e2 !important;
+  }
+  
+  .arrival-card {
+    position: absolute;
+    top: 8px;
+    height: 34px;
+    min-width: 60px;
+    background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+    color: white;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3);
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    z-index: 10;
+  }
+  
+  .arrival-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+  }
+  
+  .arrival-card .bin-num {
+    font-size: 0.85rem;
+    font-weight: 700;
+    margin-right: 6px;
+  }
+  
+  .arrival-card .time {
+    font-size: 0.7rem;
+    opacity: 0.9;
+  }
+
+  /* ===== ツールチップ ===== */
+  .tip {
+    position: fixed;
+    z-index: 1000;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    box-shadow: var(--shadow-xl);
+    display: none;
+    max-width: 400px;
+    backdrop-filter: blur(10px);
+  }
+  
+  .tip-header {
+    font-weight: 600;
+    font-size: 1rem;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  .tip-badge {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+  }
+  
+  .tip-badge.proc-1 { background: #dbeafe; color: #1e40af; }
+  .tip-badge.proc-2 { background: #d1fae5; color: #065f46; }
+  .tip-badge.proc-3 { background: #fce7f3; color: #9d174d; }
+  .tip-badge.proc-4 { background: #fef3c7; color: #92400e; }
+  
+  .tip-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 6px;
+  }
+  
+  .tip-label {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    min-width: 60px;
+  }
+  
+  .tip-value {
+    font-weight: 500;
+  }
+  
+  .tip-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 10px 0;
+  }
+  
+  .tip-list {
+    max-height: 180px;
+    overflow-y: auto;
+    font-size: 0.8rem;
+  }
+  
+  .tip-list-item {
+    padding: 6px 8px;
+    background: #f8fafc;
+    border-radius: var(--radius-sm);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  .tip-list-item .material-icons-round {
+    font-size: 16px;
+    color: var(--text-secondary);
+  }
+  
+  /* ===== 空状態 ===== */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 40px;
+    color: var(--text-secondary);
+    text-align: center;
+  }
+  
+  .empty-state .material-icons-round {
+    font-size: 64px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+  
+  .empty-state h3 {
+    font-size: 1.2rem;
+    color: var(--text-primary);
+    margin: 0 0 8px 0;
+  }
+  
+  .empty-state p {
+    margin: 0;
+    font-size: 0.9rem;
+  }
+  
+  /* ===== アニメーション ===== */
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  
+  .now {
+    animation: pulse 2s infinite;
+  }
+  
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  
+  .card {
+    animation: fadeIn 0.3s ease-out;
+  }
+  
+  /* ===== スクロールバー ===== */
+  .board::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  
+  .board::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 5px;
+  }
+  
+  .board::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 5px;
+  }
+  
+  .board::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
+  
+  /* ===== レスポンシブ ===== */
+  @media (max-width: 1200px) {
+    .dropzone-container {
+      flex-direction: column;
+    }
+    
+    .control-panel {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    
+    .legend-container {
+      margin-left: 0;
+      margin-top: 8px;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-top">
+    <div class="app-title">
+      <span class="material-icons-round">dashboard</span>
+      セットボード（工程×時間）
+    </div>
+    <span class="meta" id="meta">
+      <span class="material-icons-round">info</span>
+      データ未読み込み
+    </span>
+  </div>
+  
+  <div class="dropzone-container">
+    <div class="dropzone" id="dropExcel">
+      <div class="dropzone-icon">
+        <span class="material-icons-round">upload_file</span>
+      </div>
+      <div class="dropzone-text">
+        <b>① SPOアップロード用.xlsx</b>
+        <small>ファイルをドラッグ＆ドロップ</small>
+      </div>
+    </div>
+    <div class="dropzone" id="dropMaster">
+      <div class="dropzone-icon">
+        <span class="material-icons-round">schedule</span>
+      </div>
+      <div class="dropzone-text">
+        <b>② 入車時間マスタ.xlsx（任意）</b>
+        <small>デッドライン表示用</small>
+      </div>
+    </div>
+  </div>
+  
+  <div class="control-panel">
+    <div class="shift-btn-group">
+      <button class="shift-btn active" data-shift="1">1直</button>
+      <button class="shift-btn" data-shift="2">2直</button>
+    </div>
+    
+    <div class="control-group">
+      <label>
+        <span class="material-icons-round">zoom_in</span>
+        ズーム
+      </label>
+      <input id="zoom" type="range" min="2" max="20" step="1" value="10">
+      <span class="zoom-value" id="zoomValue">10</span>
+    </div>
+    
+    <div class="control-group">
+      <label>
+        <span class="material-icons-round">filter_list</span>
+        工程
+      </label>
+      <div class="proc-filter-group" id="procFilter">
+        <button class="proc-btn proc-1 active" data-proc="1工程">1工程</button>
+        <button class="proc-btn proc-2 active" data-proc="2工程">2工程</button>
+        <button class="proc-btn proc-3 active" data-proc="3工程">3工程</button>
+        <button class="proc-btn proc-4 active" data-proc="4工程">4工程</button>
+      </div>
+    </div>
+    
+    <div class="control-group" style="margin-left: auto;">
+      <label>
+        <span class="material-icons-round">history</span>
+        履歴
+      </label>
+      <select id="historySelect" style="padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, 0.3); background: rgba(255, 255, 255, 0.05); color: white; font-size: 13px; cursor: pointer; min-width: 200px;">
+        <option value="-1">履歴なし</option>
+      </select>
+      <button id="clearHistoryBtn" class="shift-btn" style="margin-left: 8px; background: rgba(148, 163, 184, 0.2); border-color: rgba(148, 163, 184, 0.5); color: white; padding: 4px 8px;" title="すべての履歴を削除">
+        <span class="material-icons-round" style="font-size: 16px;">delete_sweep</span>
+      </button>
+    </div>
+    
+    <div class="legend-container">
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-color" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #93c5fd;"></div>
+          1工程
+        </div>
+        <div class="legend-item">
+          <div class="legend-color" style="background: linear-gradient(135deg, #ecfdf5, #d1fae5); border-color: #6ee7b7;"></div>
+          2工程
+        </div>
+        <div class="legend-item">
+          <div class="legend-color" style="background: linear-gradient(135deg, #fdf2f8, #fce7f3); border-color: #f9a8d4;"></div>
+          3工程
+        </div>
+        <div class="legend-item">
+          <div class="legend-color" style="background: linear-gradient(135deg, #fffbeb, #fef3c7); border-color: #fcd34d;"></div>
+          4工程
+        </div>
+        <div class="legend-item">
+          <div class="legend-color mixed"></div>
+          混載
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="board-wrapper">
+  <div class="board" id="board">
+    <div class="timeline" id="timeline"></div>
+    <div class="lanes" id="lanes"></div>
+  </div>
+</div>
+
+<div id="tip" class="tip"></div>
+
+<!-- SheetJS（Excel読込） -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+const state = {
+  rows: [],   // {工程, 山通番, 引取開始時間, 引取工数(秒), GroupedData(JSON), タイトル}
+  master: [], // {vendor, bin2, pickup(HH:MM)}
+  originalRows: [], // 元のデータ（リセット用）
+  nowTimer: null,
+  selectedProcs: new Set(['1工程', '2工程', '3工程', '4工程']),
+  currentShift: 1,  // 1直 or 2直
+  history: [],  // データ履歴
+  currentHistoryIndex: -1  // 現在表示中の履歴インデックス
+};
+
+// 直ごとの時間設定
+const SHIFT_TIMES = {
+  1: { start: '06:00', end: '16:00' },   // 1直: 6:00~16:00
+  2: { start: '16:00', end: '26:00' }    // 2直: 16:00~翌2:00（26:00として扱う）
+};
+
+// 直ごとの休憩時間設定
+const BREAK_TIMES = {
+  1: [
+    { start: '08:30', end: '08:40', label: '休憩' },
+    { start: '10:40', end: '11:25', label: '昼休憩' },
+    { start: '12:55', end: '13:05', label: '休憩' }
+  ],
+  2: [
+    { start: '18:45', end: '18:55', label: '休憩' },
+    { start: '20:55', end: '21:40', label: '夜休憩' },
+    { start: '23:10', end: '23:20', label: '休憩' }
+  ]
+};
+
+function parseTimeToMin(hhmm) {
+  if (!hhmm) return null;
+  const m = String(hhmm).match(/(\d{1,2}):(\d{1,2})/);
+  if (!m) return null;
+  let hours = parseInt(m[1],10);
+  let mins = parseInt(m[2],10);
+  
+  // 深夜の時間（0:xx～5:xx）は翌日として処理（24時間加算）
+  if (hours >= 0 && hours <= 5) {
+    hours += 24;
+  }
+  
+  return hours*60 + mins;
+}
+function minToHHMM(mins) {
+  mins = Math.max(0, Math.round(mins));
+  let hh = Math.floor(mins/60);
+  const mm = mins%60;
+  
+  // 24時間以上の場合（深夜時間）の表示
+  if (hh >= 24) {
+    const actualHour = hh - 24;
+    // 0～5時の場合は翌日表示
+    if (actualHour >= 0 && actualHour <= 5) {
+      return String(actualHour).padStart(2,'0') + ':' + String(mm).padStart(2,'0') + '(翌)';
+    }
+    // それ以外はそのまま表示
+    return String(hh).padStart(2,'0') + ':' + String(mm).padStart(2,'0');
+  }
+  
+  return String(hh).padStart(2,'0') + ':' + String(mm).padStart(2,'0');
+}
+function pxPerMinute() { return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--pxPerMinute')) || 4; }
+function setPxPerMinute(v){ 
+  document.documentElement.style.setProperty('--pxPerMinute', v); 
+  document.getElementById('zoomValue').textContent = v;
+}
+
+function parseGroupedData(s) {
+  if (!s) return [];
+  try { return JSON.parse(s); } catch(e) {}
+  try { const s2 = JSON.parse(s); return Array.isArray(s2) ? s2 : JSON.parse(s2); } catch(e) {}
+  return [];
+}
+
+function updateHistoryUI() {
+  const historySelect = document.getElementById('historySelect');
+  if (!historySelect) return;
+  
+  historySelect.innerHTML = '';
+  
+  if (state.history.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '-1';
+    opt.textContent = '履歴なし';
+    historySelect.appendChild(opt);
+    historySelect.disabled = true;
+  } else {
+    // 最新が上に来るように逆順で表示
+    for (let i = state.history.length - 1; i >= 0; i--) {
+      const item = state.history[i];
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${item.timestamp} (${item.data.length}山)`;
+      if (i === state.currentHistoryIndex) {
+        opt.selected = true;
+      }
+      historySelect.appendChild(opt);
+    }
+    historySelect.disabled = false;
+  }
+}
+
+function loadHistoryItem(index) {
+  if (index < 0 || index >= state.history.length) return;
+  
+  const item = state.history[index];
+  state.rows = JSON.parse(JSON.stringify(item.data));
+  state.originalRows = JSON.parse(JSON.stringify(item.data));
+  if (item.master) {
+    state.master = JSON.parse(JSON.stringify(item.master));
+  }
+  state.currentHistoryIndex = index;
+  
+  console.log('履歴データを読み込みました:', item.timestamp);
+  render();
+}
+
+function extractInfoFromGD(items){
+  const seenVendor = new Set();
+  let bin2 = '';
+  for (const it of items){
+    const vendor = (it["OData_納入先"] || it["OData__x7d0d___x5165___x5148_"] || it["納入先"] || '').toString().trim();
+    const nony = (it["NONYUHIBIN"] || it["納入日便"] || '').toString();
+    if (vendor) seenVendor.add(vendor);
+    if (!bin2 && nony.length>=2) bin2 = nony.slice(-2);
+  }
+  console.log('extractInfoFromGD: items=', items, 'vendors=', Array.from(seenVendor), 'bin2=', bin2);
+  return {bin2, vendors: Array.from(seenVendor)};
+}
+
+function setupDrop(el, onFiles){
+  el.addEventListener('dragover', e=>{ 
+    e.preventDefault(); 
+    el.classList.add('dragover');
+  });
+  el.addEventListener('dragleave', e=>{ 
+    el.classList.remove('dragover');
+  });
+  el.addEventListener('drop', async e=>{
+    e.preventDefault(); 
+    el.classList.remove('dragover');
+    if (!e.dataTransfer.files.length) return;
+    await onFiles(e.dataTransfer.files);
+    el.classList.add('loaded');
+  });
+}
+
+async function readExcel(file){
+  const data = await file.arrayBuffer();
+  const wb = XLSX.read(data, {type:'array'});
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(ws, {defval:'', raw:true});
+}
+
+function loadSPO(rows){
+  const out = [];
+  for (const r of rows){
+    const proc = String(r["工程"]||"").trim();
+    const yama = r["グループ番号"];
+    const start = String(r["引取開始時間"]||"").trim();
+    const workSec = Number(r["引取工数"]||0);
+    const gd = String(r["GroupedData"]||r["groupdata"]||"");
+    const title = String(r["タイトル"]||`山${yama}`);
+    const pallet = Number(r["パレット数"]||0);
+    if (!proc || !yama || !start || !workSec) continue;
+    out.push({工程:proc, 山通番:yama, 引取開始時間:start, 引取工数:workSec, GroupedData:gd, タイトル:title, パレット数:pallet});
+  }
+  
+  // 履歴に保存
+  const timestamp = new Date().toLocaleString('ja-JP');
+  const historyItem = {
+    timestamp: timestamp,
+    data: JSON.parse(JSON.stringify(out)),
+    master: JSON.parse(JSON.stringify(state.master))
+  };
+  
+  state.history.push(historyItem);
+  state.currentHistoryIndex = state.history.length - 1;
+  
+  // localStorageに保存（最大20件まで）
+  if (state.history.length > 20) {
+    state.history.shift();
+    state.currentHistoryIndex--;
+  }
+  try {
+    localStorage.setItem('kanbanHistory', JSON.stringify(state.history));
+  } catch(e) {
+    console.warn('localStorage保存エラー:', e);
+  }
+  
+  state.rows = out;
+  // 元のデータをバックアップ（ディープコピー）
+  state.originalRows = JSON.parse(JSON.stringify(out));
+  
+  updateHistoryUI();
+  render();
+}
+
+function loadMaster(rows){
+  console.log('loadMaster called with rows:', rows);
+  console.log('First row sample:', rows[0]);
+  console.log('First row keys:', Object.keys(rows[0] || {}));
+  
+  // Excelシリアル値を HH:MM に変換する関数
+  function excelTimeToHHMM(val) {
+    if (typeof val === 'string') return val;
+    if (typeof val === 'number') {
+      // Excelのシリアル値（0～1の小数 = 1日の割合）
+      const totalMinutes = Math.round(val * 24 * 60);
+      const hh = Math.floor(totalMinutes / 60);
+      const mm = totalMinutes % 60;
+      return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+    }
+    return '';
+  }
+  
+  // 列名のスペースを除去してキーを探す関数
+  function findKey(obj, ...candidates) {
+    for (const key of Object.keys(obj)) {
+      const trimmedKey = key.trim();
+      for (const cand of candidates) {
+        if (trimmedKey === cand || trimmedKey.includes(cand)) {
+          return obj[key];
+        }
+      }
+    }
+    return '';
+  }
+  
+  const out = [];
+  for (const r of rows){
+    // 複数の列名パターンに対応（スペース含む）
+    const v = String(findKey(r, 'OData_納入先', '納入先', 'OData__x7d0d__x5165__x5148_', 'vendor')).trim();
+    let nony = String(findKey(r, 'NONYUHIBIN', '便番号', 'bin') || '').replace(/[^0-9]/g,'');
+    const rawTime = findKey(r, '入車時間', 'pickup', '時間');
+    const t = excelTimeToHHMM(rawTime);
+    
+    console.log('Extracted: vendor=', v, 'nony=', nony, 'rawTime=', rawTime, 'time=', t);
+    
+    if (!nony) {
+      console.log('Skipping row - missing nony');
+      continue;
+    }
+    if (nony.length>=2) nony = nony.slice(-2);
+    // vendor が空でも便番号と入車時間があれば追加
+    if (t) {
+      out.push({vendor: v || '不明', bin2:nony, pickup:t});
+      console.log('Added to master:', {vendor: v || '不明', bin2:nony, pickup:t});
+    }
+  }
+  console.log('loadMaster result:', out);
+  state.master = out;
+  console.log('state.master set, calling render()');
+  render();
+}
+
+function timeScale(startMin, endMin, container){
+  container.innerHTML = '';
+  const width = (endMin-startMin)*pxPerMinute();
+  container.style.position = 'relative';
+  container.style.width = (width + 110) + 'px';
+  
+  // タイムラインの背景用ラベルスペース
+  const labelSpace = document.createElement('div');
+  labelSpace.style.cssText = 'position:absolute; left:0; top:0; bottom:0; width:110px; background: linear-gradient(to bottom, #f8fafc, #f1f5f9); border-right: 2px solid #e2e8f0;';
+  container.appendChild(labelSpace);
+  
+  for (let m = startMin; m<=endMin; m+=10){
+    const x = (m-startMin)*pxPerMinute() + 110;
+    const div = document.createElement('div');
+    div.className = 'tick' + (m % 30 === 0 ? ' major' : '');
+    div.style.left = x+'px';
+    div.textContent = minToHHMM(m);
+    container.appendChild(div);
+  }
+  
+  // 休憩時間の背景をタイムラインに追加
+  const breaks = BREAK_TIMES[state.currentShift] || [];
+  for (const brk of breaks) {
+    const brkStart = parseTimeToMin(brk.start);
+    const brkEnd = parseTimeToMin(brk.end);
+    if (brkStart >= startMin && brkEnd <= endMin) {
+      const brkDiv = document.createElement('div');
+      brkDiv.className = 'break-zone';
+      brkDiv.style.cssText = `position:absolute; left:${(brkStart-startMin)*pxPerMinute() + 110}px; width:${(brkEnd-brkStart)*pxPerMinute()}px; top:0; bottom:0; background:rgba(148,163,184,0.3); z-index:1;`;
+      brkDiv.title = `${brk.label} ${minToHHMM(brkStart)}～${minToHHMM(brkEnd)}`;
+      container.appendChild(brkDiv);
+    }
+  }
+}
+
+// 休憩時間の背景をレーンボディに追加する関数
+function renderBreakZones(body, startMin, endMin) {
+  const breaks = BREAK_TIMES[state.currentShift] || [];
+  for (const brk of breaks) {
+    const brkStart = parseTimeToMin(brk.start);
+    const brkEnd = parseTimeToMin(brk.end);
+    if (brkStart >= startMin && brkEnd <= endMin) {
+      const brkDiv = document.createElement('div');
+      brkDiv.className = 'break-zone';
+      brkDiv.style.cssText = `position:absolute; left:${(brkStart-startMin)*pxPerMinute()}px; width:${(brkEnd-brkStart)*pxPerMinute()}px; top:0; bottom:0; background:rgba(148,163,184,0.25); z-index:1; pointer-events:none;`;
+      brkDiv.title = `${brk.label} ${minToHHMM(brkStart)}～${minToHHMM(brkEnd)}`;
+      body.appendChild(brkDiv);
+    }
+  }
+}
+
+function renderNowLine(startMin, endMin, lanesEl) {
+  // 既存の現在時刻ラインを削除
+  const existingNow = lanesEl.querySelectorAll('.now');
+  existingNow.forEach(el => el.remove());
+  
+  const nowMin = new Date().getHours()*60 + new Date().getMinutes();
+  if (nowMin >= startMin && nowMin <= endMin) {
+    const now = document.createElement('div');
+    now.className = 'now';
+    now.style.left = ((nowMin-startMin)*pxPerMinute() + 110) + 'px';
+    
+    const label = document.createElement('div');
+    label.className = 'now-label';
+    label.textContent = '現在 ' + minToHHMM(nowMin);
+    now.appendChild(label);
+    
+    lanesEl.appendChild(now);
+  }
+}
+
+function renderAllHistory() {
+  const container = document.getElementById('historyBoards');
+  if (!container) return;
+  
+  container.innerHTML = '';
+  
+  if (state.history.length === 0) {
+    container.innerHTML = '<div style="text-align: center; padding: 40px; color: rgba(148, 163, 184, 0.7);">履歴データがありません。SPOファイルを読み込んでください。</div>';
+    return;
+  }
+  
+  // 最新が上に来るように逆順で表示
+  const reversedHistory = [...state.history].reverse();
+  
+  reversedHistory.forEach((item, reverseIndex) => {
+    const originalIndex = state.history.length - 1 - reverseIndex;
+    const section = document.createElement('div');
+    section.className = 'history-section';
+    section.style.cssText = 'background: rgba(15, 23, 42, 0.6); border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.2); overflow: hidden;';
+    
+    const header = document.createElement('div');
+    header.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(148, 163, 184, 0.1); cursor: pointer; user-select: none;';
+    header.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <span class="material-icons-round" style="font-size: 20px; color: #60a5fa;">calendar_today</span>
+        <div>
+          <div style="font-weight: 600; font-size: 14px;">${item.timestamp}</div>
+          <div style="font-size: 12px; color: rgba(148, 163, 184, 0.9);">${item.data.length}山 / ${item.data.reduce((acc, r) => acc + parseGroupedData(r.GroupedData).length, 0)}アイテム</div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button class="delete-history-btn" data-index="${originalIndex}" style="padding: 4px 8px; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.5); border-radius: 6px; color: white; cursor: pointer; display: flex; align-items: center; gap: 4px;" title="この履歴を削除">
+          <span class="material-icons-round" style="font-size: 16px;">delete</span>
+        </button>
+        <span class="material-icons-round toggle-icon" style="font-size: 24px; transition: transform 0.2s;">expand_more</span>
+      </div>
+    `;
+    
+    const content = document.createElement('div');
+    content.className = 'history-content';
+    content.style.cssText = 'display: block; padding: 16px;';
+    
+    const boardId = `board-${originalIndex}`;
+    content.innerHTML = `
+      <div class="board" id="${boardId}" style="background: rgba(15, 23, 42, 0.4); border-radius: 8px; overflow-x: auto; padding: 16px;">
+        <div class="timeline" id="timeline-${originalIndex}"></div>
+        <div class="lanes" id="lanes-${originalIndex}"></div>
+      </div>
+    `;
+    
+    section.appendChild(header);
+    section.appendChild(content);
+    container.appendChild(section);
+    
+    // 折りたたみ機能
+    header.addEventListener('click', (e) => {
+      if (e.target.closest('.delete-history-btn')) return;
+      const icon = header.querySelector('.toggle-icon');
+      if (content.style.display === 'none') {
+        content.style.display = 'block';
+        icon.style.transform = 'rotate(0deg)';
+      } else {
+        content.style.display = 'none';
+        icon.style.transform = 'rotate(-90deg)';
+      }
+    });
+    
+    // 削除ボタン
+    const deleteBtn = header.querySelector('.delete-history-btn');
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm(`${item.timestamp}の履歴を削除しますか？`)) {
+        state.history.splice(originalIndex, 1);
+        try {
+          localStorage.setItem('kanbanHistory', JSON.stringify(state.history));
+        } catch(err) {
+          console.warn('localStorage保存エラー:', err);
+        }
+        updateHistoryUI();
+        renderAllHistory();
+      }
+    });
+    
+    // このボードをレンダリング
+    renderHistoryBoard(item, originalIndex);
+  });
+}
+
+function renderHistoryBoard(historyItem, index) {
+  const tempRows = historyItem.data;
+  const tempMaster = historyItem.master || [];
+  
+  const shiftTimes = SHIFT_TIMES[state.currentShift] || SHIFT_TIMES[1];
+  const startMin = parseTimeToMin(shiftTimes.start);
+  const endMin = parseTimeToMin(shiftTimes.end);
+  const lanesEl = document.getElementById(`lanes-${index}`);
+  const timelineEl = document.getElementById(`timeline-${index}`);
+  
+  if (!lanesEl || !timelineEl) return;
+  
+  lanesEl.innerHTML = '';
+  timelineEl.innerHTML = '';
+  
+  // タイムライン描画
+  timeScale(startMin, endMin, timelineEl);
+  
+  // 各工程レーン
+  ['1工程', '2工程', '3工程', '4工程'].forEach(procName => {
+    if (!state.selectedProcs.has(procName)) return;
+    
+    const lane = document.createElement('div');
+    lane.className = `lane lane-${procName.charAt(0)}`;
+    const procNum = procName.charAt(0);
+    const procColors = {
+      '1': { bg: 'linear-gradient(135deg, #eff6ff, #dbeafe)', border: '#93c5fd' },
+      '2': { bg: 'linear-gradient(135deg, #ecfdf5, #d1fae5)', border: '#6ee7b7' },
+      '3': { bg: 'linear-gradient(135deg, #fdf2f8, #fce7f3)', border: '#f9a8d4' },
+      '4': { bg: 'linear-gradient(135deg, #fefce8, #fef9c3)', border: '#fde047' }
+    };
+    const color = procColors[procNum] || procColors['4'];
+    
+    const lab = document.createElement('div');
+    lab.className = 'lane-label';
+    lab.style.background = color.bg;
+    lab.style.borderRight = `2px solid ${color.border}`;
+    lab.textContent = procName;
+    
+    const body = document.createElement('div');
+    body.className = 'lane-body';
+    body.style.cssText = 'position:relative; flex:1; border-bottom: 2px solid rgba(148,163,184,0.2);';
+    
+    lane.appendChild(lab);
+    lane.appendChild(body);
+    lanesEl.appendChild(lane);
+    
+    renderBreakZones(body, startMin, endMin);
+    
+    // カード配置
+    const rows = tempRows.filter(r => {
+      const proc = r.工程 === '未設定' ? '4工程' : r.工程;
+      return proc === procName;
+    });
+    
+    rows.forEach(r => {
+      const startMins = parseTimeToMin(r.引取開始時間);
+      const wMin = (r.引取工数||0) / 60;
+      if (startMins == null) return;
+      
+      const start = startMins;
+      const x = (start-startMin)*pxPerMinute();
+      const w = Math.max(20, wMin*pxPerMinute());
+      
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.style.cssText = `position:absolute; left:${x}px; width:${w}px; top:10px; height:60px; padding:8px; border-radius:6px; background:#1e293b; border:1px solid #334155; color:white; font-size:11px; display:flex; flex-direction:column; gap:4px; box-shadow:0 2px 4px rgba(0,0,0,0.3);`;
+      
+      const items = parseGroupedData(r.GroupedData);
+      const info = extractInfoFromGD(items);
+      const vendorName = info.vendors.length > 0 ? info.vendors[0] : '不明';
+      
+      card.innerHTML = `
+        <div style="font-weight:600; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${vendorName}</div>
+        <div style="font-size:10px; color:#94a3b8;">⏰ ${r.引取開始時間} (${Math.round(wMin)}分)</div>
+        <div style="font-size:10px; color:#94a3b8;">📦 便${info.bin2||'-'} / ${r.パレット数||0}PLT</div>
+      `;
+      
+      body.appendChild(card);
+    });
+  });
+  
+  // 現在時刻ライン
+  renderNowLine(startMin, endMin, lanesEl);
+  
+  lanesEl.style.width = (endMin-startMin)*pxPerMinute() + 120 + 'px';
+}
+
+function render(){
+  const lanesEl = document.getElementById('lanes');
+  const timelineEl = document.getElementById('timeline');
+  const metaEl = document.getElementById('meta');
+  
+  if (!state.rows.length){
+    lanesEl.innerHTML = `
+      <div class="empty-state">
+        <span class="material-icons-round">cloud_upload</span>
+        <h3>データを読み込んでください</h3>
+        <p>上部のドロップエリアにExcelファイルをドラッグ＆ドロップしてください</p>
+      </div>
+    `;
+    timelineEl.innerHTML = '';
+    metaEl.innerHTML = '<span class="material-icons-round">info</span>データ未読み込み';
+    return;
+  }
+  
+  // currentShiftの値を検証（1または2でない場合は1にリセット）
+  if (state.currentShift !== 1 && state.currentShift !== 2) {
+    console.warn('不正なcurrentShift値:', state.currentShift, 'を1にリセット');
+    state.currentShift = 1;
+  }
+  
+  // 直に応じた時間範囲を取得
+  const shiftTimes = SHIFT_TIMES[state.currentShift] || SHIFT_TIMES[1];
+  const startMin = parseTimeToMin(shiftTimes.start);
+  const endMin = parseTimeToMin(shiftTimes.end);
+  const laneNames = ['1工程','2工程','3工程','4工程'].filter(x=>state.selectedProcs.has(x));
+  
+  lanesEl.innerHTML = '';
+  lanesEl.style.width = (endMin-startMin)*pxPerMinute() + 120 + 'px';
+  timeScale(startMin, endMin, timelineEl);
+
+  // 入車時間リスト（全便表示用）
+  const arrivalList = [];  // {bin2, vendor, time}
+  console.log('state.master:', state.master);
+  console.log('startMin:', startMin, 'endMin:', endMin);
+  for (const m of state.master){
+    const min = parseTimeToMin(m.pickup);
+    console.log('Processing master:', m, 'parsed time:', min);
+    // 時間範囲内のもののみ追加
+    if (min != null && min >= startMin && min <= endMin) {
+      arrivalList.push({bin2: m.bin2, vendor: m.vendor, time: min});
+    }
+  }
+  // 便番号でソート
+  arrivalList.sort((a, b) => a.time - b.time);
+  console.log('arrivalList:', arrivalList);
+
+  const deadlineMap = new Map();
+  for (const m of state.master){
+    const key = `${m.vendor}|${m.bin2}`;
+    const min = parseTimeToMin(m.pickup);
+    if (min!=null) deadlineMap.set(key, min-10);
+  }
+
+  // ダイヤレーン（入車時間表示）を最初に追加 - 常に表示
+  console.log('Adding dia lane? master.length:', state.master.length, 'arrivalList.length:', arrivalList.length);
+  {
+    console.log('Creating dia lane...');
+    const diaLane = document.createElement('div');
+    diaLane.className = 'lane lane-dia';
+    // 高さを固定値に設定
+    const diaHeight = 100; // 固定高さ
+    diaLane.style.cssText = `position:relative; height:${diaHeight}px; min-height:${diaHeight}px; max-height:${diaHeight}px; display:flex; background:#fef2f2; border-bottom:3px solid #dc2626; visibility:visible; opacity:1; overflow:hidden;`;
+    
+    const diaLab = document.createElement('div');
+    diaLab.className = 'lane-label';
+    diaLab.style.cssText = 'position:absolute; left:0; top:0; bottom:0; width:110px; background:linear-gradient(135deg,#dc2626,#b91c1c); color:white; display:flex; align-items:center; justify-content:center; font-weight:600; border-right:2px solid #dc2626;';
+    diaLab.textContent = 'ダイヤ';
+    
+    const diaBody = document.createElement('div');
+    diaBody.className = 'lane-body';
+    // 通常のlane-bodyと同じ配置方式（position:absolute; left:110px）を使用
+    diaBody.style.cssText = 'position:absolute; left:110px; right:0; top:0; bottom:0; background:#fee2e2; overflow:visible;';
+    
+    diaLane.appendChild(diaLab);
+    diaLane.appendChild(diaBody);
+    lanesEl.appendChild(diaLane);
+    
+    // ダイヤレーンに休憩時間の背景を追加
+    renderBreakZones(diaBody, startMin, endMin);
+    
+    // 入車時間カードを配置（全便表示）
+    console.log('Placing arrival cards, arrivalList.length:', arrivalList.length);
+    if (arrivalList.length > 0) {
+      // 納入先ごとの色マップ
+      const vendorColors = {
+        '武部': { bg: 'linear-gradient(135deg,#dc2626,#ef4444)', border: '#dc2626' },
+        '日野EH': { bg: 'linear-gradient(135deg,#2563eb,#3b82f6)', border: '#2563eb' },
+        '日野': { bg: 'linear-gradient(135deg,#7c3aed,#8b5cf6)', border: '#7c3aed' },
+        '元町': { bg: 'linear-gradient(135deg,#059669,#10b981)', border: '#059669' },
+        '高岡': { bg: 'linear-gradient(135deg,#d97706,#f59e0b)', border: '#d97706' },
+        'KVC': { bg: 'linear-gradient(135deg,#db2777,#ec4899)', border: '#db2777' },
+      };
+      const defaultColor = { bg: 'linear-gradient(135deg,#6b7280,#9ca3af)', border: '#6b7280' };
+      
+      // 同じ納入先・同じ時間のものをグループ化
+      const groupedCards = new Map(); // key: "vendor|time" -> {vendor, time, bins: []}
+      for (const item of arrivalList) {
+        const key = `${item.vendor}|${item.time}`;
+        if (!groupedCards.has(key)) {
+          groupedCards.set(key, { vendor: item.vendor, time: item.time, bins: [] });
+        }
+        groupedCards.get(key).bins.push(item.bin2);
+      }
+      
+      // グループを時間順にソート
+      const sortedGroups = Array.from(groupedCards.values()).sort((a, b) => a.time - b.time);
+      
+      // 重なりを避けるための配置計算
+      const placedCards = []; // {left, right, row}
+      const cardWidth = 90; // カードの推定幅（px）
+      
+      for (const group of sortedGroups) {
+        const x = (group.time - startMin) * pxPerMinute();
+        const cardRight = x + cardWidth;
+        
+        // どの行に配置するか決定（重ならない行を探す）
+        let row = 0;
+        while (true) {
+          const conflict = placedCards.find(p => p.row === row && !(cardRight < p.left || x > p.right));
+          if (!conflict) break;
+          row++;
+        }
+        placedCards.push({ left: x, right: cardRight, row });
+        
+        // 便番号の表示形式を決定（連番なら範囲表示）
+        const bins = group.bins.map(b => parseInt(b)).sort((a, b) => a - b);
+        let binLabel = '';
+        if (bins.length === 1) {
+          binLabel = String(bins[0]);
+        } else if (bins.length === 2) {
+          binLabel = `${bins[0]},${bins[1]}`;
+        } else {
+          // 連番かチェック
+          const isConsecutive = bins.every((v, i) => i === 0 || v === bins[i-1] + 1);
+          if (isConsecutive) {
+            binLabel = `${bins[0]}~${bins[bins.length-1]}`;
+          } else {
+            binLabel = bins.join(',');
+          }
+        }
+        
+        const color = vendorColors[group.vendor] || defaultColor;
+        const rowHeight = 28; // 1行あたりの高さ（カード22px + 余白6px）
+        const yOffset = row * rowHeight;
+        
+        const card = document.createElement('div');
+        card.className = 'arrival-card';
+        // 点線と同じ位置（カードの左ボーダーが点線に合う）
+        card.style.cssText = `position:absolute; left:${x}px; top:${6 + yOffset}px; height:22px; min-width:60px; background:${color.bg}; color:white; border-radius:4px; padding:2px 8px; font-size:0.7rem; font-weight:600; display:flex; align-items:center; justify-content:center; box-shadow:0 2px 4px rgba(0,0,0,0.2); z-index:10; white-space:nowrap; border-left:3px solid ${color.border}; cursor:pointer; transition:all 0.2s ease;`;
+        card.title = `入車: ${minToHHMM(group.time)}\n納入先: ${group.vendor}\n便番号: ${binLabel}`;
+        card.innerHTML = `<span style="font-weight:700;margin-right:4px;">${minToHHMM(group.time)}</span><span style="opacity:0.9;margin-right:4px;font-size:0.7rem;">${group.vendor}</span><span style="opacity:0.85;font-size:0.65rem;">${binLabel}</span>`;
+        // ホバー時のハイライト効果
+        card.addEventListener('mouseenter', () => {
+          card.style.transform = 'scale(1.05)';
+          card.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+          card.style.zIndex = '20';
+        });
+        card.addEventListener('mouseleave', () => {
+          card.style.transform = 'scale(1)';
+          card.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
+          card.style.zIndex = '10';
+        });
+        diaBody.appendChild(card);
+      }
+      
+      // 行数に応じてダイヤレーンの高さを再調整
+      const maxRow = placedCards.length > 0 ? Math.max(...placedCards.map(p => p.row)) + 1 : 1;
+      const rowHeight = 28; // カード配置の行高さと同じ値を使用
+      const newHeight = Math.max(55, maxRow * rowHeight + 16); // 各行28px + 上下余白16px（カードtop:6 + bottom:10）
+      console.log('Dia lane height adjustment: maxRow=', maxRow, 'newHeight=', newHeight);
+      diaLane.style.height = newHeight + 'px';
+      diaLane.style.minHeight = newHeight + 'px';
+      diaLane.style.maxHeight = newHeight + 'px';
+      diaBody.style.height = newHeight + 'px';
+    } else {
+      // マスタがない場合のプレースホルダー
+      const placeholder = document.createElement('div');
+      placeholder.style.cssText = 'color: #dc2626; font-size: 0.75rem; padding: 10px; opacity: 0.6;';
+      placeholder.textContent = '入車時間マスタをドロップすると表示されます';
+      diaBody.appendChild(placeholder);
+    }
+  }
+
+  for (const name of laneNames){
+    const lane = document.createElement('div');
+    lane.className = 'lane';
+    const lab = document.createElement('div');
+    const procClass = name==='1工程'?'proc-1':(name==='2工程'?'proc-2':(name==='3工程'?'proc-3':'proc-4'));
+    lab.className = `lane-label ${procClass}`;
+    lab.textContent = name;
+    const body = document.createElement('div');
+    body.className = 'lane-body';
+    body.dataset.proc = name;
+    
+    // ドロップゾーンとしての設定
+    body.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      body.classList.add('drag-over');
+    });
+    
+    body.addEventListener('dragleave', (e) => {
+      body.classList.remove('drag-over');
+    });
+    
+    body.addEventListener('drop', (e) => {
+      e.preventDefault();
+      body.classList.remove('drag-over');
+      
+      try {
+        const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+        const targetProc = body.dataset.proc;
+        
+        // ドロップ位置の時間を計算
+        const rect = body.getBoundingClientRect();
+        const relX = e.clientX - rect.left;
+        const dropMin = Math.round(relX / pxPerMinute()) + startMin;
+        
+        // 同じ工程内の他のカードを取得して、ドロップ位置の前にあるカードを見つける
+        const sameProc = state.rows.filter(r => {
+          const proc = r.工程 === '未設定' ? '4工程' : r.工程;
+          return proc === targetProc && r.山通番 !== data.yama;
+        });
+        
+        // ドロップ位置の直前のカードを探す
+        let prevCard = null;
+        let prevEndTime = null;
+        for (const r of sameProc) {
+          const cardStart = parseTimeToMin(r.引取開始時間);
+          const cardEnd = cardStart + (r.引取工数 || 0) / 60;
+          if (cardEnd <= dropMin) {
+            if (!prevEndTime || cardEnd > prevEndTime) {
+              prevCard = r;
+              prevEndTime = cardEnd;
+            }
+          }
+        }
+        
+        // 休憩時間の直後かチェック（休憩終了から5分以内）
+        const breaks = BREAK_TIMES[state.currentShift] || [];
+        let afterBreakTime = null;
+        for (const brk of breaks) {
+          const brkEnd = parseTimeToMin(brk.end);
+          if (dropMin >= brkEnd && dropMin <= brkEnd + 5) {
+            // ドロップ位置が休憩終了時間の直後なら、休憩終了時間を優先
+            if (!afterBreakTime || brkEnd > afterBreakTime) {
+              afterBreakTime = brkEnd;
+            }
+          }
+        }
+        
+        // 工程変更とデータ更新
+        const rowIndex = state.rows.findIndex(r => r.山通番 === data.yama);
+        if (rowIndex !== -1) {
+          // 優先順位: 休憩終了時間 > 前のカード終了時間+1分（10分以内の場合のみ） > ドロップ位置
+          let newStartMin;
+          if (afterBreakTime) {
+            // 休憩直後の場合は休憩終了時間に配置
+            newStartMin = afterBreakTime;
+          } else if (prevCard && (dropMin - prevEndTime <= 10)) {
+            // 前のカードがあり、ドロップ位置が終了時間から10分以内の場合は終了時間+1分
+            newStartMin = prevEndTime + 1;
+          } else {
+            // それ以外の場合はドロップ位置を尊重
+            newStartMin = dropMin;
+          }
+          const newEndMin = newStartMin + data.workMin;
+          
+          // 休憩時間との重複チェック
+          const breaks = BREAK_TIMES[state.currentShift] || [];
+          let hasBreakConflict = false;
+          let conflictBreak = null;
+          
+          for (const brk of breaks) {
+            const brkStart = parseTimeToMin(brk.start);
+            const brkEnd = parseTimeToMin(brk.end);
+            
+            // カードの時間範囲と休憩時間が重なっているかチェック
+            // (newStart < brkEnd) && (newEnd > brkStart) なら重複
+            if (newStartMin < brkEnd && newEndMin > brkStart) {
+              hasBreakConflict = true;
+              conflictBreak = brk;
+              break;
+            }
+          }
+          
+          if (hasBreakConflict) {
+            // 休憩時間と被る場合は移動を拒否
+            alert(`移動できません：作業時間が${conflictBreak.label}（${conflictBreak.start}〜${conflictBreak.end}）と重なります。\n別の位置に配置してください。`);
+            console.warn(`移動拒否: 休憩時間との重複 (${conflictBreak.label})`);
+            return;
+          }
+          
+          state.rows[rowIndex].工程 = targetProc;
+          state.rows[rowIndex].引取開始時間 = minToHHMM(newStartMin);
+          
+          // 再描画
+          render();
+          
+          // 変更を通知
+          console.log(`山${data.yama}を${data.proc}から${targetProc}に移動。新しい開始時間: ${minToHHMM(newStartMin)}`);
+          if (prevCard) {
+            console.log(`山${prevCard.山通番}の後に配置（終了時間: ${minToHHMM(prevEndTime)}）`);
+          }
+        }
+      } catch (err) {
+        console.error('ドロップ処理エラー:', err);
+      }
+    });
+    
+    lane.appendChild(lab); lane.appendChild(body);
+    lanesEl.appendChild(lane);
+    
+    // 休憩時間の背景を追加
+    renderBreakZones(body, startMin, endMin);
+    
+    // 納入先ごとの点線色マップ
+    const vendorLineColors = {
+      '武部': 'rgba(220,38,38,0.5)',      // 赤
+      '日野EH': 'rgba(37,99,235,0.5)',    // 青
+      '日野': 'rgba(124,58,237,0.5)',     // 紫
+      '元町': 'rgba(5,150,105,0.5)',      // 緑
+      '高岡': 'rgba(217,119,6,0.5)',      // オレンジ
+      'KVC': 'rgba(219,39,119,0.5)',      // ピンク
+    };
+    const defaultLineColor = 'rgba(107,114,128,0.5)'; // グレー
+    
+    // 入車時間の点線を各工程に描画（納入先ごとの色で）
+    for (const item of arrivalList) {
+      const lineX = (item.time - startMin) * pxPerMinute();
+      const lineColor = vendorLineColors[item.vendor] || defaultLineColor;
+      const arrivalLine = document.createElement('div');
+      arrivalLine.className = 'arrival-line';
+      arrivalLine.style.cssText = `position:absolute; left:${lineX}px; top:0; bottom:0; width:1px; border-left:2px dashed ${lineColor}; z-index:5; pointer-events:none;`;
+      arrivalLine.title = `入車 ${minToHHMM(item.time)} (${item.vendor} ${item.bin2}便)`;
+      body.appendChild(arrivalLine);
+    }
+
+    const tempStateParam = arguments[4];
+  const currentState = tempStateParam || state;
+  const rows = currentState.rows.filter(r=>{
+      // 「未設定」→「4工程」への変換も考慮
+      const proc = r.工程 === '未設定' ? '4工程' : r.工程;
+      return proc === name;
+    });
+    
+    // 同じ開始時間のカードを縦に分散配置するための処理
+    const cardsByTime = new Map();
+    for (const r of rows){
+      const start = parseTimeToMin(r.引取開始時間);
+      if (start==null) continue;
+      if (!cardsByTime.has(start)) {
+        cardsByTime.set(start, []);
+      }
+      cardsByTime.get(start).push(r);
+    }
+    
+    for (const [start, cardsAtTime] of cardsByTime) {
+      const numCards = cardsAtTime.length;
+      const laneHeightPx = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--laneHeight')) || 88;
+      const gap = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--gap')) || 10;
+      const availableHeight = laneHeightPx - gap * 2;
+      const cardHeight = numCards > 1 ? Math.floor(availableHeight / numCards) - 2 : availableHeight;
+      
+      cardsAtTime.forEach((r, idx) => {
+        const wMin = (r.引取工数||0) / 60; // 引取工数は秒単位なので分に変換
+        const x = (start-startMin)*pxPerMinute();
+        const w = Math.max(20, wMin*pxPerMinute());
+        const card = document.createElement('div');
+        const cardProcClass = name==='1工程'?'':(name==='2工程'?'p2':(name==='3工程'?'p3':'p4'));
+        card.className = `card ${cardProcClass}`;
+        card.style.left = x+'px';
+        card.style.width = w+'px';
+        
+        // 複数カードの場合、縦に分散
+        if (numCards > 1) {
+          card.style.height = cardHeight + 'px';
+          card.style.top = (gap + idx * (cardHeight + 2)) + 'px';
+        }
+
+        const items = parseGroupedData(r.GroupedData);
+        const info = extractInfoFromGD(items);
+        const isMixed = new Set(info.vendors).size >= 2;
+        if (isMixed) card.classList.add('mixed');
+        
+        // デッドライン（入車時間）超過チェック - 対象の納入先・便番号のみ
+        const cardEndTime = start + wMin; // カードの終了時刻
+        let isDeadlineOver = false;
+        let overArrivalTime = null;
+        let overVendor = null;
+        
+        // カードに含まれる全ての納入先・便番号について入車時間をチェック
+        console.log('Card:', r.タイトル, 'bin2:', info.bin2, 'vendors:', info.vendors, 'cardEndTime:', cardEndTime);
+        if (info.bin2 && info.vendors.length) {
+          for (const vendor of info.vendors) {
+            // まず完全一致を優先、次に部分一致でマスタエントリを検索
+            let masterEntry = state.master.find(m => m.vendor === vendor && m.bin2 === info.bin2);
+            
+            // 完全一致がない場合のみ部分一致を試す
+            if (!masterEntry) {
+              masterEntry = state.master.find(m => {
+                const vendorMatch = m.vendor.includes(vendor) || vendor.includes(m.vendor);
+                const binMatch = m.bin2 === info.bin2;
+                return vendorMatch && binMatch;
+              });
+            }
+            
+            console.log('  Checking vendor:', vendor, 'masterEntry:', masterEntry);
+            if (masterEntry) {
+              const arrivalTime = parseTimeToMin(masterEntry.pickup);
+              console.log('  arrivalTime:', arrivalTime, 'cardEndTime:', cardEndTime, 'isOver:', cardEndTime > arrivalTime);
+              if (arrivalTime != null && cardEndTime > arrivalTime) {
+                isDeadlineOver = true;
+                overArrivalTime = arrivalTime;
+                overVendor = vendor;
+                break; // 一つでも超過があれば点滅させる
+              }
+            }
+          }
+        }
+        
+        if (isDeadlineOver) {
+          card.classList.add('deadline-over');
+          card.title = `⚠ 入車時間超過！\n納入先: ${overVendor}\n便: ${info.bin2}\n入車: ${minToHHMM(overArrivalTime)}\n終了予定: ${minToHHMM(Math.round(cardEndTime))}`;
+        }
+
+        card.dataset.title = r.タイトル;
+        card.dataset.yama = r.山通番;
+        card.dataset.proc = name;
+        card.draggable = true;
+        
+        const vendorLabel = info.vendors.length > 0 ? info.vendors.join(',') : r.タイトル;
+        const palletCount = r.パレット数 || items.length;
+        card.innerHTML = `
+          <b style="font-size:0.9rem;margin-bottom:2px;">${vendorLabel}</b>
+          <small style="display:flex;flex-direction:column;gap:1px;font-size:0.65rem;line-height:1.2;">
+            <span>🕐 ${r.引取開始時間} (${Math.round(wMin)}分)</span>
+            <span>📦 便:${info.bin2||'-'} / ${palletCount}パレ</span>
+          </small>
+        `;
+        
+        // ドラッグ開始
+        card.addEventListener('dragstart', (e) => {
+          card.classList.add('dragging');
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', JSON.stringify({
+            yama: r.山通番,
+            proc: name,
+            startMin: start,
+            workMin: wMin
+          }));
+        });
+        
+        // ドラッグ終了
+        card.addEventListener('dragend', (e) => {
+          card.classList.remove('dragging');
+        });
+        
+        body.appendChild(card);
+
+        if (info.bin2 && info.vendors.length){
+          const key = `${info.vendors[0]}|${info.bin2}`;
+          const ddl = deadlineMap.get(key);
+          if (ddl!=null && ddl>=startMin && ddl<=endMin){
+            const dl = document.createElement('div');
+            dl.className = 'deadline';
+            dl.title = `入車-10分: ${minToHHMM(ddl)}  (ベンダ:${info.vendors[0]} 便:${info.bin2})`;
+            dl.style.left = (ddl-startMin)*pxPerMinute() + 'px';
+            body.appendChild(dl);
+          }
+        }
+
+        card.addEventListener('mouseenter', (ev)=>{
+          const tip = document.getElementById('tip');
+          const badgeClass = name==='1工程'?'proc-1':(name==='2工程'?'proc-2':(name==='3工程'?'proc-3':'proc-4'));
+          const html = `
+            <div class="tip-header">
+              ${r.タイトル}
+              <span class="tip-badge ${badgeClass}">${name}</span>
+            </div>
+            <div class="tip-row">
+              <span class="tip-label">開始時刻</span>
+              <span class="tip-value">${r.引取開始時間}</span>
+            </div>
+            <div class="tip-row">
+              <span class="tip-label">作業時間</span>
+              <span class="tip-value">約${Math.round(wMin)}分</span>
+            </div>
+            <div class="tip-row">
+              <span class="tip-label">山通番</span>
+              <span class="tip-value">${r.山通番}</span>
+            </div>
+            <div class="tip-row">
+              <span class="tip-label">便番号</span>
+              <span class="tip-value">${info.bin2||'-'}</span>
+            </div>
+            <div class="tip-row">
+              <span class="tip-label">納入先</span>
+              <span class="tip-value">${info.vendors.join(', ')||'-'}</span>
+            </div>
+            ${items.length > 0 ? `
+              <hr class="tip-divider">
+              <div class="tip-list">
+                ${items.map(it=>`
+                  <div class="tip-list-item">
+                    <span class="material-icons-round">store</span>
+                  ${(it["OData_ストア"]||'-')} / ${(it["OData_納入先"]||it["OData__x7d0d___x5165___x5148_"]||'-')}
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        `;
+        tip.innerHTML = html;
+        tip.style.display='block';
+        
+        // ツールチップの位置調整（画面端対応）
+        const tipRect = tip.getBoundingClientRect();
+        let left = ev.clientX + 16;
+        let top = ev.clientY + 16;
+        
+        if (left + tipRect.width > window.innerWidth - 20) {
+          left = ev.clientX - tipRect.width - 16;
+        }
+        if (top + tipRect.height > window.innerHeight - 20) {
+          top = ev.clientY - tipRect.height - 16;
+        }
+        
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+      });
+      
+      card.addEventListener('mousemove', (ev)=>{
+        const tip = document.getElementById('tip');
+        const tipRect = tip.getBoundingClientRect();
+        let left = ev.clientX + 16;
+        let top = ev.clientY + 16;
+        
+        if (left + tipRect.width > window.innerWidth - 20) {
+          left = ev.clientX - tipRect.width - 16;
+        }
+        if (top + tipRect.height > window.innerHeight - 20) {
+          top = ev.clientY - tipRect.height - 16;
+        }
+        
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+      });
+      
+      card.addEventListener('mouseleave', ()=>{ 
+        const tip=document.getElementById('tip'); 
+        tip.style.display='none'; 
+      });
+    }); // forEach cardsAtTime end
+  } // for cardsByTime end
+  } // for laneNames end
+  
+  // 現在時刻ラインを描画
+  renderNowLine(startMin, endMin, lanesEl);
+  
+  // メタ情報を更新
+  const totalItems = state.rows.reduce((acc, r) => acc + parseGroupedData(r.GroupedData).length, 0);
+  metaEl.innerHTML = `
+    <span class="material-icons-round">check_circle</span>
+    ${state.rows.length} 山 / ${totalItems} アイテム${state.master.length > 0 ? ` / マスタ ${state.master.length} 件` : ''}
+  `;
+}
+
+// ドロップゾーンの設定
+setupDrop(document.getElementById('dropExcel'), async (files)=>{
+  const rows = await readExcel(files[0]);
+  loadSPO(rows);
+});
+setupDrop(document.getElementById('dropMaster'), async (files)=>{
+  const rows = await readExcel(files[0]);
+  loadMaster(rows);
+});
+
+// ズームコントロール
+document.getElementById('zoom').addEventListener('input', (e)=>{ 
+  setPxPerMinute(e.target.value); 
+  render(); 
+});
+
+// 直選択ボタン
+document.querySelectorAll('.shift-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.shift-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const shiftValue = parseInt(btn.dataset.shift);
+    // 1 または 2 以外の値を防ぐ
+    state.currentShift = (shiftValue === 1 || shiftValue === 2) ? shiftValue : 1;
+    console.log('直変更:', state.currentShift);
+    render();
+  });
+});
+
+// 工程フィルターボタン
+document.querySelectorAll('.proc-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const proc = btn.dataset.proc;
+    btn.classList.toggle('active');
+    if (btn.classList.contains('active')) {
+      state.selectedProcs.add(proc);
+    } else {
+      state.selectedProcs.delete(proc);
+    }
+    renderAllHistory();
+  });
+});
+
+// 履歴クリアボタン
+const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+if (clearHistoryBtn) {
+  clearHistoryBtn.addEventListener('click', () => {
+    if (confirm('すべての履歴を削除しますか？')) {
+      state.history = [];
+      state.currentHistoryIndex = -1;
+      state.rows = [];
+      state.originalRows = [];
+      try {
+        localStorage.removeItem('kanbanHistory');
+      } catch(e) {
+        console.warn('localStorage削除エラー:', e);
+      }
+      updateHistoryUI();
+      render();
+      console.log('履歴をすべて削除しました');
+    }
+  });
+}
+
+// 履歴選択イベント
+document.getElementById('historySelect').addEventListener('change', (e) => {
+  const index = parseInt(e.target.value);
+  if (index >= 0) {
+    loadHistoryItem(index);
+    updateHistoryUI();
+  }
+});
+
+// 現在時刻ラインの自動更新（1分ごと）
+setInterval(()=>{
+  const shiftTimes = SHIFT_TIMES[state.currentShift] || SHIFT_TIMES[1];
+  const startMin = parseTimeToMin(shiftTimes.start);
+  const endMin = parseTimeToMin(shiftTimes.end);
+  const lanesEl = document.getElementById('lanes');
+  if (state.rows.length > 0) {
+    renderNowLine(startMin, endMin, lanesEl);
+  }
+}, 60000);
+
+// localStorageから履歴を読み込み
+try {
+  const savedHistory = localStorage.getItem('kanbanHistory');
+  if (savedHistory) {
+    state.history = JSON.parse(savedHistory);
+    console.log(`履歴を復元しました (${state.history.length}件)`);
+  }
+} catch(e) {
+  console.warn('履歴の読み込みエラー:', e);
+}
+
+// 初期ズーム値を適用
+const initialZoom = document.getElementById('zoom').value;
+setPxPerMinute(initialZoom);
+
+// 履歴UIを更新
+updateHistoryUI();
+
+// 履歴があれば最新を読み込み、なければ空表示
+if (state.history.length > 0) {
+  loadHistoryItem(state.history.length - 1);
+} else {
+  render();
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "base_dir": "C:\\Users\\1588386\\トヨタ自動車株式会社\\資材物流課　車体部　連絡・共有 - 発注情報_河崎",
+  "export_dir": "C:\\Users\\1588386\\トヨタ自動車株式会社\\資材物流課　車体部　連絡・共有 - テスト_河崎",
+  "height_cap": 2450,
+  "worker_speed_sec_per_unit": 3.0,
+  "work_start_time": "08:00",
+  "break_times": [
+    [
+      "08:30",
+      "08:41"
+    ],
+    [
+      "10:20",
+      "10:31"
+    ],
+    [
+      "12:00",
+      "13:01"
+    ],
+    [
+      "14:50",
+      "15:01"
+    ]
+  ],
+  "auto_reload_minute": 30,
+  "enable_battery_change": true
+}

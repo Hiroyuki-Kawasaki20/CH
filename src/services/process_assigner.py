@@ -1,0 +1,1511 @@
+# -*- coding: utf-8 -*-
+"""
+CHかんばんセット — 工程割当ロジック（メイン工程 / リリーフ工程）
+
+かんばん自動仕分けPJとの最大の相違点:
+- 引取作業者が1人のみ → メイン工程は1つ
+- メイン工程で入車時間に間に合わない山 → リリーフ工程に回す
+"""
+
+from typing import Optional, Dict, List, Tuple
+import copy
+import pandas as pd
+import numpy as np
+
+from ..models.constants import (
+    BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
+    PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, PROC_MAIN_LABEL, PROC_RELIEF_LABEL,
+    BREAK_TIMES, is_virtual_yama,
+)
+from ..utils.normalizer import (
+    _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
+)
+
+
+# 各直の開始時刻（秒）: 1直=06:25, 2直=16:40
+SHIFT_START_SECS = [6 * 3600 + 25 * 60, 16 * 3600 + 40 * 60]
+ARRIVAL_BUFFER_SECS = 10 * 60  # 入車時間の10分前完了を締切とする
+DAY_SECS = 24 * 3600
+# セットあり便のメイン工程許容上限（1直:15:20, 2直:01:35(=25:35)）
+SET_FLAG_MAIN_LIMIT_SECS = [15 * 3600 + 20 * 60, DAY_SECS + 1 * 3600 + 35 * 60]
+
+# 昼休み（長休憩）特別ルール:
+# - 休憩前最後の山は休憩開始10分前までに完了
+# - 休憩後最初の山は休憩終了15分後から開始
+SPECIAL_LUNCH_BREAKS = {
+    (10 * 3600 + 40 * 60, 11 * 3600 + 25 * 60),
+    (20 * 3600 + 55 * 60, 21 * 3600 + 40 * 60),
+}
+
+
+def _break_policy(bs: int, be: int) -> Tuple[int, int, int]:
+    """休憩ごとの (休憩前完了バッファ秒, 再開オフセット秒, 休憩後開始禁止秒) を返す。"""
+    if (int(bs), int(be)) in SPECIAL_LUNCH_BREAKS:
+        return 10 * 60, 15 * 60, 15 * 60
+    return 0, 60, 0
+
+
+def _is_truthy_flag(v) -> bool:
+    s = str(v).strip().lower()
+    return s in {"1", "true", "t", "yes", "y", "on", "〇", "○", "有", "あり"}
+
+
+def _shift_index_for_secs(secs: int) -> int:
+    starts = sorted(SHIFT_START_SECS)
+    idx = 0
+    for i, st in enumerate(starts):
+        if secs >= st:
+            idx = i
+        else:
+            break
+    return idx
+
+
+def _shift_start_secs(shift_idx: int) -> int:
+    starts = sorted(SHIFT_START_SECS)
+    return starts[max(0, min(shift_idx, len(starts) - 1))]
+
+
+def _set_flag_main_limit_secs(shift_idx: int) -> int:
+    limits = list(SET_FLAG_MAIN_LIMIT_SECS)
+    return limits[max(0, min(shift_idx, len(limits) - 1))]
+
+
+def _to_operational_timeline_secs(secs: Optional[int]) -> Optional[int]:
+    """業務日タイムラインへ正規化する。
+
+    00:00〜1直開始前は「前日2直の続き」とみなし +24h へ寄せる。
+    これにより 23:xx と 00:xx を同一日の連続時刻として扱える。
+    """
+    if secs is None:
+        return None
+    day_secs = int(secs)
+    first_shift_start = min(SHIFT_START_SECS)
+    if day_secs < first_shift_start:
+        return day_secs + DAY_SECS
+    return day_secs
+
+
+def _schedule_work(current_end: int, mountain_count: int, work_duration: int) -> Tuple[int, int, int]:
+    """工程内の次山を開始/終了する時刻を返す（2山ごと照合+180秒を含む）。"""
+    next_idx = mountain_count + 1
+    # 2山集荷後に照合180秒が入るため、3山目/5山目/...開始前に加算
+    inspection_delay = 180 if (next_idx >= 3 and next_idx % 2 == 1) else 0
+    start = _adjust_start_for_breaks(current_end + inspection_delay, work_duration)
+    end = _calc_work_end_with_breaks(start, work_duration)
+    return start, end, inspection_delay
+
+
+def _floored_schedule(
+    current_end: int,
+    mountain_count: int,
+    work_duration: int,
+    start_floor: Optional[int] = None,
+) -> Tuple[int, int, int]:
+    """前便入車+10分（start_floor）を考慮した開始/終了時刻を返す。
+    照合180秒は後処理で開始時間順に付与するため、ここでは加算しない。"""
+    next_idx = mountain_count + 1
+    inspection_delay = 0
+    floor_time = max(current_end + inspection_delay, start_floor or 0)
+    start = _adjust_start_for_breaks(floor_time, work_duration)
+    end = _calc_work_end_with_breaks(start, work_duration)
+    return start, end, inspection_delay
+
+
+def _can_keep_primary_deadline(
+    main_end_time: int,
+    main_mountain_count: int,
+    candidate_work: int,
+    primary_work: int,
+    primary_deadline: Optional[int],
+    candidate_start_floor: Optional[int] = None,
+    primary_start_floor: Optional[int] = None,
+) -> bool:
+    """候補山を先に処理しても、主対象山の締切を守れるかを判定。"""
+    if primary_deadline is None:
+        return True
+    _, candidate_end, _ = _floored_schedule(main_end_time, main_mountain_count, candidate_work, candidate_start_floor)
+    primary_start, primary_end, _ = _floored_schedule(candidate_end, main_mountain_count + 1, primary_work, primary_start_floor)
+    if primary_start is None:
+        return False
+    return primary_end <= primary_deadline
+
+
+def _pick_next_main_mountain(
+    unscheduled: List[dict],
+    main_end_time: int,
+    main_mountain_count: int,
+) -> Tuple[dict, bool]:
+    """
+    次にメイン工程で処理する山を返す。
+
+    方針:
+    - 主対象山: 締切が最も早い山
+    - 主対象山を遅らせない範囲で、先に処理できる山があれば前倒し採用
+    """
+    if not unscheduled:
+        raise ValueError("unscheduled is empty")
+
+    with_deadline = [m for m in unscheduled if m.get("締め切り_秒") is not None]
+    if not with_deadline:
+        chosen = sorted(unscheduled, key=lambda x: x["山通番"])[0]
+        return chosen, False
+
+    primary = sorted(with_deadline, key=lambda x: (x["締め切り_秒"], x["山通番"]))[0]
+    primary_work = int(primary["引取工数_秒"])
+    primary_deadline = primary.get("締め切り_秒")
+
+    # 主対象山をいま処理して間に合う見込みがない場合は、前倒しせず主対象を優先
+    primary_floor = primary.get("開始時間_秒")
+    primary_start_now, _, _ = _floored_schedule(main_end_time, main_mountain_count, primary_work, primary_floor)
+    latest_primary_start = _latest_start_to_meet_deadline(primary_deadline, primary_work)
+    if latest_primary_start is not None and primary_start_now > latest_primary_start:
+        return primary, False
+
+    safe_prefetch = []
+    for cand in unscheduled:
+        if int(cand["山通番"]) == int(primary["山通番"]):
+            continue
+        cand_work = int(cand["引取工数_秒"])
+        cand_deadline = cand.get("締め切り_秒")
+        cand_floor = cand.get("開始時間_秒")
+        cand_start, cand_end, _ = _floored_schedule(main_end_time, main_mountain_count, cand_work, cand_floor)
+
+        # 候補山自身の締切を守れない前倒しは不可
+        if cand_deadline is not None and cand_end > cand_deadline:
+            continue
+
+        # 候補山を先に処理しても主対象山の締切を守れる場合のみ採用候補
+        if _can_keep_primary_deadline(
+            main_end_time=main_end_time,
+            main_mountain_count=main_mountain_count,
+            candidate_work=cand_work,
+            primary_work=primary_work,
+            primary_deadline=primary_deadline,
+            candidate_start_floor=cand_floor,
+            primary_start_floor=primary_floor,
+        ):
+            safe_prefetch.append((cand_start, cand_end, cand))
+
+    if not safe_prefetch:
+        return primary, False
+
+    # 前倒し候補は「より早い締切」を優先。締切なしは最後に回す。
+    safe_prefetch.sort(
+        key=lambda x: (
+            x[2].get("締め切り_秒") is None,
+            x[2].get("締め切り_秒") or float("inf"),
+            -int(x[2].get("引取工数_秒", 0)),
+            int(x[2].get("山通番", 0)),
+        )
+    )
+    chosen = safe_prefetch[0][2]
+    return chosen, True
+
+
+def _time_to_seconds(hhmm: str) -> Optional[int]:
+    """HH:MM形式を秒に変換"""
+    s = _normalize_hhmm(hhmm)
+    if not s:
+        return None
+    try:
+        hh, mm = s.split(":", 1)
+        return int(hh) * 3600 + int(mm) * 60
+    except Exception:
+        return None
+
+
+def _seconds_to_hhmm(secs: int) -> str:
+    """秒をHH:MM形式に変換"""
+    if secs < 0:
+        secs = 0
+    hh = secs // 3600
+    mm = (secs % 3600) // 60
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _adjust_start_for_breaks(start_secs: int, work_duration_secs: int = 0) -> int:
+    """開始時間が休憩時間中、または作業が休憩をまたぐ場合、休憩終了1分後に調整"""
+    for bs, be in BREAK_TIMES:
+        pre_end_buffer, resume_offset, post_start_lock = _break_policy(bs, be)
+        effective_break_start = bs - pre_end_buffer
+        lock_until = be + post_start_lock
+        if effective_break_start <= start_secs < lock_until:
+            return be + resume_offset
+    if work_duration_secs > 0:
+        end_secs = start_secs + work_duration_secs
+        for bs, be in BREAK_TIMES:
+            pre_end_buffer, resume_offset, _ = _break_policy(bs, be)
+            effective_break_start = bs - pre_end_buffer
+            if start_secs < effective_break_start < end_secs:
+                return be + resume_offset
+    return start_secs
+
+
+def _calc_work_end_with_breaks(start_secs: int, work_duration_secs: int) -> int:
+    """作業開始時間と作業時間から、休憩を考慮した作業終了時間を計算"""
+    current = start_secs
+    remaining = work_duration_secs
+    while remaining > 0:
+        next_break_start = None
+        next_break_end = None
+        next_resume_offset = 60
+        for bs, be in BREAK_TIMES:
+            pre_end_buffer, resume_offset, post_start_lock = _break_policy(bs, be)
+            effective_break_start = bs - pre_end_buffer
+            lock_until = be + post_start_lock
+            if current < effective_break_start:
+                if next_break_start is None or effective_break_start < next_break_start:
+                    next_break_start = effective_break_start
+                    next_break_end = be
+                    next_resume_offset = resume_offset
+            elif effective_break_start <= current < lock_until:
+                current = be + resume_offset
+                continue
+        if next_break_start is None:
+            current += remaining
+            remaining = 0
+        else:
+            time_until_break = next_break_start - current
+            if remaining <= time_until_break:
+                current += remaining
+                remaining = 0
+            else:
+                remaining -= time_until_break
+                current = next_break_end + next_resume_offset
+    return current
+
+
+def _latest_start_to_meet_deadline(deadline_secs: Optional[int], work_duration_secs: int) -> Optional[int]:
+    """締切までに完了できる最遅開始時刻を返す（見つからなければNone）"""
+    if deadline_secs is None:
+        return None
+    low, high = 0, max(int(deadline_secs), 0)
+    best = None
+    while low <= high:
+        mid = (low + high) // 2
+        end_secs = _calc_work_end_with_breaks(mid, work_duration_secs)
+        if end_secs <= deadline_secs:
+            best = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best
+
+
+def compute_proc_details(mountain_details: pd.DataFrame) -> pd.DataFrame:
+    """各行に仮の工程列を付与（CH版では初期値は全てメイン工程）"""
+    if mountain_details is None or mountain_details.empty:
+        return pd.DataFrame()
+    df = mountain_details.copy()
+    if "納入先" not in df.columns or not df["納入先"].notna().any():
+        df["納入先"] = df.get("納入先コード", df.get("SYUKKASAKI", "")).astype(str)
+    df["納入先"] = df["納入先"].astype(str).fillna("").map(_normalize_dest_name)
+    df["工程"] = PROC_MAIN
+    # 並び：山通番↑ → 移動工数↓ → 納入先↑
+    sort_plan = [("山通番", True), ("移動工数", False), ("納入先", True)]
+    sort_cols, ascending = [], []
+    for col, asc in sort_plan:
+        if col in df.columns:
+            sort_cols.append(col)
+            ascending.append(asc)
+    if sort_cols:
+        if "移動工数" in sort_cols:
+            df["移動工数"] = pd.to_numeric(df["移動工数"], errors="coerce")
+        df = df.sort_values(by=sort_cols, ascending=ascending)
+    grp_cols = [c for c in ["山通番", "工程"] if c in df.columns]
+    if grp_cols:
+        df["工程内No"] = df.groupby(grp_cols).cumcount() + 1
+    else:
+        df["工程内No"] = 1
+    return df
+
+
+def _legacy_assign_processes_by_arrival_time(
+    proc_details: pd.DataFrame,
+    master_df: pd.DataFrame,
+    previous_lane_end_times: Optional[Dict[str, int]] = None,
+    return_lane_end_times: bool = False,
+) -> pd.DataFrame:
+    """
+    入車時間マスタを元に、メイン工程（1人）で間に合うか判定。
+    間に合わない山はリリーフ工程に自動割当。
+
+    ロジック:
+    1. 各山の締め切り時間（入車時間）と引取工数を算出
+    2. 締め切り時間順に山をソート
+    3. メイン工程で「間に合うか」をチェック
+    4. 間に合わない場合 → リリーフ工程に割当
+    """
+    if proc_details is None or proc_details.empty:
+        empty_df = pd.DataFrame(columns=["山通番", "山工程", "実開始時間", "照合追加180秒"])
+        if return_lane_end_times:
+            return empty_df, {PROC_MAIN: 0, PROC_RELIEF: 0, PROC_OVERFLOW: 0}
+        return empty_df
+
+    if master_df is None or master_df.empty:
+        # マスタがない場合は全てメイン工程
+        yamas = sorted(proc_details["山通番"].unique())
+        out_df = pd.DataFrame({
+            "山通番": yamas,
+            "山工程": [PROC_MAIN] * len(yamas),
+            "実開始時間": [""] * len(yamas),
+            # 2山集荷後に照合180秒: 3山目/5山目/...をTrue
+            "照合追加180秒": [((idx + 1) >= 3 and ((idx + 1) % 2 == 1)) for idx in range(len(yamas))],
+        })
+        if return_lane_end_times:
+            return out_df, {PROC_MAIN: 0, PROC_RELIEF: 0, PROC_OVERFLOW: 0}
+        return out_df
+
+    prev_lane_end = previous_lane_end_times or {}
+    prev_main_end = int(prev_lane_end.get(PROC_MAIN, 0) or 0)
+    prev_relief_end = int(prev_lane_end.get(PROC_RELIEF, 0) or 0)
+    prev_overflow_end = int(prev_lane_end.get(PROC_OVERFLOW, 0) or 0)
+
+    # 入車時間マスタからマッピングを作成
+    master = master_df.copy()
+    master["OData_納入先"] = master["OData_納入先"].astype(str).str.strip().apply(_normalize_dest_name)
+    master["NONYUHIBIN"] = master["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
+    master["入車時間"] = master["入車時間"].astype(str).str.strip()
+    master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in master.iterrows()}
+    has_set_flag_col = "セットありフラグ" in master.columns
+    set_flag_map = {
+        (r["OData_納入先"], r["NONYUHIBIN"]): _is_truthy_flag(r.get("セットありフラグ", ""))
+        for _, r in master.iterrows()
+    }
+
+    # 納入先×各直ごとの「1便目」を特定（セットなし便に対する開始時刻判定で使用）
+    vendor_shift_first_bin: Dict[Tuple[str, int], str] = {}
+    vendor_shift_first_offset: Dict[Tuple[str, int], int] = {}
+    for (v, bin_no), pickup_time in master_map.items():
+        ts = _to_operational_timeline_secs(_time_to_seconds(pickup_time))
+        if ts is None:
+            continue
+        shift_idx = _shift_index_for_secs(ts)
+        shift_start = _shift_start_secs(shift_idx)
+        offset = (ts - shift_start) % (24 * 3600)
+        key = (v, shift_idx)
+        if key not in vendor_shift_first_offset or offset < vendor_shift_first_offset[key]:
+            vendor_shift_first_offset[key] = offset
+            vendor_shift_first_bin[key] = str(bin_no).strip()
+
+    # 納入先ごとの入車時間グループ（武部の前グループ検索用）
+    vendor_time_groups: Dict[str, Dict[int, List[str]]] = {}
+    for (v, bin_no), pickup_time in master_map.items():
+        if v not in vendor_time_groups:
+            vendor_time_groups[v] = {}
+        ts = _to_operational_timeline_secs(_time_to_seconds(pickup_time))
+        if ts is None:
+            continue
+        mins = int(ts) // 60
+        if mins not in vendor_time_groups[v]:
+            vendor_time_groups[v][mins] = []
+        vendor_time_groups[v][mins].append(bin_no)
+
+    vendor_sorted_groups: Dict[str, List[Tuple[int, List[str]]]] = {}
+    for v, time_dict in vendor_time_groups.items():
+        sorted_times = sorted(time_dict.keys())
+        vendor_sorted_groups[v] = [(t, time_dict[t]) for t in sorted_times]
+
+    vendor_bin_numbers: Dict[str, List[int]] = {}
+    for (v, bin_no), _ in master_map.items():
+        try:
+            bn = int(str(bin_no).strip())
+        except Exception:
+            continue
+        vendor_bin_numbers.setdefault(v, set()).add(bn)
+    vendor_bin_numbers = {v: sorted(list(bset)) for v, bset in vendor_bin_numbers.items()}
+
+    def _is_hino_vendor(vendor: str) -> bool:
+        v = str(vendor).strip()
+        return v.startswith("日野")
+
+    def _get_prev_bin_for_vendor(vendor: str, current_bin: int, allow_wrap: bool = False) -> Optional[str]:
+        if current_bin <= 0:
+            return None
+        # 前便は基本「小さい便番号の最大値」。必要時のみ循環を許可する。
+        bins = vendor_bin_numbers.get(vendor, [])
+        if not bins:
+            # マスタに便番号が無い場合は単純前便（循環なし）
+            if current_bin > 1:
+                return f"{current_bin - 1:02d}"
+            return None
+        lowers = [b for b in bins if b < current_bin]
+        if lowers:
+            return f"{int(max(lowers)):02d}"
+        if allow_wrap:
+            return f"{int(max(bins)):02d}"
+        return None
+
+    def _get_prev_group_time(vendor: str, current_mins: int) -> Optional[int]:
+        if vendor not in vendor_sorted_groups:
+            return None
+        groups = vendor_sorted_groups[vendor]
+        prev_time = None
+        for time_mins, _ in groups:
+            if time_mins >= current_mins:
+                break
+            prev_time = time_mins
+        return prev_time
+
+    df = proc_details.copy()
+    df["移動工数"] = pd.to_numeric(df.get("移動工数", np.nan), errors="coerce")
+
+    # 各山の情報を集計
+    mountain_info = []
+    mtn_prev_arrival_floor_map: Dict[int, int] = {}
+    for yama, sub in df.groupby("山通番", sort=True):
+        yama_int = int(yama)
+        pal = int(sub.shape[0])
+        max_cost = float(sub["移動工数"].max()) if sub["移動工数"].notna().any() else 0.0
+        pick_cost_secs = int(np.round(
+            max_cost + BASE_ONE_TIME + ((pal - 1) * MIDDLE_WORK) + (pal * BASE_PER_PAL), 0
+        ))
+
+        deadline_secs = None
+        start_time_secs = None
+        prev_arrival_floor_secs = None
+
+        for _, row in sub.iterrows():
+            # 納入先が空の場合は OData_納入先 → SYUKKASAKI の順でフォールバック
+            _dest_raw = str(row.get("納入先", "")).strip()
+            if not _dest_raw:
+                _dest_raw = str(row.get("OData_納入先", "")).strip()
+            if not _dest_raw:
+                _dest_raw = str(row.get("SYUKKASAKI", "")).strip()
+            vendor = _normalize_dest_name(_dest_raw)
+            nony = str(row.get("NONYUHIBIN", "")).strip().translate(_ZEN2HAN_DIGIT_COLON)
+            order2 = nony[-2:] if len(nony) >= 2 else ""
+            if not vendor or not order2:
+                continue
+            pickup = master_map.get((vendor, order2), "")
+            if not pickup:
+                continue
+            pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup))
+            if pickup_secs is None:
+                continue
+            set_flag = bool(set_flag_map.get((vendor, order2), False))
+            shift_idx = _shift_index_for_secs(pickup_secs)
+            strict_deadline = max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS)
+            # 引取開始時間を計算
+            is_first_trip_in_shift = (vendor_shift_first_bin.get((vendor, shift_idx), "") == order2)
+
+            if not has_set_flag_col:
+                # 旧マスタ（セットありフラグ列なし）は従来ルールを維持
+                if vendor == "武部":
+                    mins = pickup_secs // 60
+                    prev_group_time = _get_prev_group_time(vendor, mins)
+                    if prev_group_time is not None:
+                        st = (prev_group_time + 10) * 60
+                        st_prev = st
+                    else:
+                        st = 0
+                        st_prev = 0
+                else:
+                    try:
+                        current_bin = int(order2)
+                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False)
+                        if prev_bin is not None:
+                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                            if prev_secs is not None:
+                                st = prev_secs + 10 * 60
+                                st_prev = st
+                            else:
+                                st = 0
+                                st_prev = 0
+                        else:
+                            st = 0
+                            st_prev = 0
+                    except (ValueError, TypeError):
+                        st = 0
+                        st_prev = 0
+            elif set_flag:
+                # セットあり便は従来ルールを適用（前便入車+10分）
+                if vendor == "武部":
+                    mins = pickup_secs // 60
+                    prev_group_time = _get_prev_group_time(vendor, mins)
+                    if prev_group_time is not None:
+                        st = (prev_group_time + 10) * 60
+                        st_prev = st
+                    else:
+                        st = pickup_secs + 10 * 60
+                        st_prev = st
+                else:
+                    try:
+                        current_bin = int(order2)
+                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                        if prev_bin is not None:
+                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                            if prev_secs is not None:
+                                st = prev_secs + 10 * 60
+                                st_prev = st
+                            else:
+                                st = 0
+                                st_prev = 0
+                        else:
+                            st = 0
+                            st_prev = 0
+                    except (ValueError, TypeError):
+                        st = 0
+                        st_prev = 0
+            elif is_first_trip_in_shift:
+                # セットなし × 各直1便目は納入先に関わらず各直開始+15分。
+                st = _shift_start_secs(shift_idx) + 15 * 60
+                try:
+                    current_bin = int(order2)
+                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False)
+                    if prev_bin is not None:
+                        prev_pickup = master_map.get((vendor, prev_bin), "")
+                        prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                        st_prev = (prev_secs + 10 * 60) if prev_secs is not None else 0
+                    else:
+                        st_prev = 0
+                except (ValueError, TypeError):
+                    st_prev = 0
+            elif vendor == "武部":
+                mins = pickup_secs // 60
+                prev_group_time = _get_prev_group_time(vendor, mins)
+                if prev_group_time is not None:
+                    st = (prev_group_time + 10) * 60
+                    st_prev = st
+                else:
+                    st = pickup_secs + 10 * 60
+                    st_prev = st
+            else:
+                try:
+                    current_bin = int(order2)
+                    # 前便入車時刻 + 10分 を引取開始下限に設定
+                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                    if prev_bin is not None:
+                        prev_pickup = master_map.get((vendor, prev_bin), "")
+                        prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                        if prev_secs is not None:
+                            st = prev_secs + 10 * 60
+                            st_prev = st
+                        else:
+                            st = 0  # 前便マスタなし or 解析不可 → 開始制約なし
+                            st_prev = 0
+                    else:
+                        st = 0  # 初便：前便なし → 開始制約なし
+                        st_prev = 0
+                except (ValueError, TypeError):
+                    st = 0  # order2 解析失敗 → 開始制約なし
+                    st_prev = 0
+
+            effective_deadline = strict_deadline
+            if has_set_flag_col and set_flag:
+                # セットあり便の直判定は st / pickup の両方から上限を求め、
+                # より緩い（大きい）方を採用する。
+                # - 日付またぎ便（例: 日野01）: pickup=06:50→1直, st=24:30→2直
+                #   → st基準で2直上限(01:35)を適用
+                # - 2直1便目（前便が1直）: pickup=17:30→2直, st=15:10→1直
+                #   → pickup基準で2直上限(01:35)を適用
+                limit_from_st = (
+                    _set_flag_main_limit_secs(_shift_index_for_secs(int(st)))
+                    if (st is not None and st > 0) else 0
+                )
+                limit_from_pickup = _set_flag_main_limit_secs(shift_idx)
+                effective_deadline = max(
+                    effective_deadline,
+                    limit_from_st,
+                    limit_from_pickup,
+                )
+
+            if deadline_secs is None or effective_deadline < deadline_secs:
+                deadline_secs = effective_deadline
+            if start_time_secs is None or st > start_time_secs:
+                start_time_secs = st  # 最も遅い「前便入車+10分」を開始下限にする
+            if prev_arrival_floor_secs is None or st_prev > prev_arrival_floor_secs:
+                prev_arrival_floor_secs = st_prev
+
+        mountain_info.append({
+            "山通番": yama_int,
+            "引取工数_秒": pick_cost_secs,
+            "締め切り_秒": deadline_secs,
+            "開始時間_秒": start_time_secs,
+        })
+        mtn_prev_arrival_floor_map[yama_int] = int(prev_arrival_floor_secs or 0)
+
+    if not mountain_info:
+        return pd.DataFrame(columns=["山通番", "山工程", "実開始時間", "照合追加180秒"])
+
+    # 混載山の救済判定用: 納入先×便(末尾2桁)単位で仮分割した作業単位を構築
+    # 実山の組み方は変えず、「分割して考えればリリーフで間に合うか」の可否判定だけに使う。
+    yama_split_units_map: Dict[int, List[dict]] = {}
+    for yama, sub in df.groupby("山通番", sort=True):
+        units: Dict[Tuple[str, str], dict] = {}
+        for _, row in sub.iterrows():
+            _dest_raw = str(row.get("納入先", "")).strip()
+            if not _dest_raw:
+                _dest_raw = str(row.get("OData_納入先", "")).strip()
+            if not _dest_raw:
+                _dest_raw = str(row.get("SYUKKASAKI", "")).strip()
+            vendor = _normalize_dest_name(_dest_raw)
+            nony = str(row.get("NONYUHIBIN", "")).strip().translate(_ZEN2HAN_DIGIT_COLON)
+            order2 = nony[-2:] if len(nony) >= 2 else ""
+            if not vendor or not order2:
+                continue
+
+            key = (vendor, order2)
+            if key not in units:
+                units[key] = {
+                    "vendor": vendor,
+                    "order2": order2,
+                    "rows": [],
+                    "deadline": None,
+                    "start_floor": 0,
+                }
+            units[key]["rows"].append(row)
+
+            pickup = master_map.get((vendor, order2), "")
+            pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup)) if pickup else None
+            if pickup_secs is None:
+                continue
+            strict_deadline = max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS)
+
+            set_flag = bool(set_flag_map.get((vendor, order2), False))
+            shift_idx = _shift_index_for_secs(pickup_secs)
+            is_first_trip_in_shift = (vendor_shift_first_bin.get((vendor, shift_idx), "") == order2)
+
+            if not has_set_flag_col:
+                if vendor == "武部":
+                    mins = pickup_secs // 60
+                    prev_group_time = _get_prev_group_time(vendor, mins)
+                    st = ((prev_group_time + 10) * 60) if prev_group_time is not None else 0
+                else:
+                    try:
+                        current_bin = int(order2)
+                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False)
+                        if prev_bin is not None:
+                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                            st = (prev_secs + 10 * 60) if prev_secs is not None else 0
+                        else:
+                            st = 0
+                    except (ValueError, TypeError):
+                        st = 0
+            elif set_flag:
+                if vendor == "武部":
+                    mins = pickup_secs // 60
+                    prev_group_time = _get_prev_group_time(vendor, mins)
+                    st = ((prev_group_time + 10) * 60) if prev_group_time is not None else (pickup_secs + 10 * 60)
+                else:
+                    try:
+                        current_bin = int(order2)
+                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                        if prev_bin is not None:
+                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                            st = (prev_secs + 10 * 60) if prev_secs is not None else 0
+                        else:
+                            st = 0
+                    except (ValueError, TypeError):
+                        st = 0
+            elif is_first_trip_in_shift:
+                st = _shift_start_secs(shift_idx) + 15 * 60
+            elif vendor == "武部":
+                mins = pickup_secs // 60
+                prev_group_time = _get_prev_group_time(vendor, mins)
+                st = ((prev_group_time + 10) * 60) if prev_group_time is not None else (pickup_secs + 10 * 60)
+            else:
+                try:
+                    current_bin = int(order2)
+                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                    if prev_bin is not None:
+                        prev_pickup = master_map.get((vendor, prev_bin), "")
+                        prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                        st = (prev_secs + 10 * 60) if prev_secs is not None else 0
+                    else:
+                        st = 0
+                except (ValueError, TypeError):
+                    st = 0
+
+            effective_deadline = strict_deadline
+            if has_set_flag_col and set_flag:
+                limit_from_st = _set_flag_main_limit_secs(_shift_index_for_secs(int(st))) if (st is not None and st > 0) else 0
+                limit_from_pickup = _set_flag_main_limit_secs(shift_idx)
+                effective_deadline = max(effective_deadline, limit_from_st, limit_from_pickup)
+
+            prev_deadline = units[key]["deadline"]
+            units[key]["deadline"] = effective_deadline if prev_deadline is None else min(prev_deadline, effective_deadline)
+            units[key]["start_floor"] = max(int(units[key]["start_floor"]), int(st or 0))
+
+        split_units = []
+        for u in units.values():
+            u_rows = pd.DataFrame(u["rows"])
+            pal = int(u_rows.shape[0])
+            max_cost = float(pd.to_numeric(u_rows.get("移動工数", np.nan), errors="coerce").max()) if pal > 0 else 0.0
+            work_secs = int(np.round(max_cost + BASE_ONE_TIME + ((pal - 1) * MIDDLE_WORK) + (pal * BASE_PER_PAL), 0))
+            split_units.append({
+                "work": work_secs,
+                "deadline": u.get("deadline"),
+                "start_floor": int(u.get("start_floor") or 0),
+            })
+
+        yama_split_units_map[int(yama)] = split_units
+
+    # 工程ごとの作業終了時間を追跡 + 照合時間（2山目ごとに開始時刻へ180秒加算）
+    main_end_time = 0
+    relief_end_time = 0
+    relief_started = False
+    overflow_started = False
+    main_mountain_count = 0  # メイン工程の山数カウント
+    relief_mountain_count = 0  # リリーフ工程の山数カウント
+    main_schedule_anchored = False  # start_floorで実時刻に固定されたらTrue
+    results = []
+
+    unscheduled = [dict(m) for m in mountain_info]
+    while unscheduled:
+        m, is_prefetch = _pick_next_main_mountain(
+            unscheduled=unscheduled,
+            main_end_time=main_end_time,
+            main_mountain_count=main_mountain_count,
+        )
+
+        yama = int(m["山通番"])
+        work_duration = int(m["引取工数_秒"])
+        deadline = m.get("締め切り_秒")
+        start_time = m.get("開始時間_秒")
+
+        # メイン工程へ置いた場合の可否を評価（前便入車+10分を開始下限として反映）
+        next_main_idx = main_mountain_count + 1
+        main_inspection_delay = 0  # 照合180秒は後処理で開始時間順に付与
+        sequential_time = main_end_time + main_inspection_delay
+        # start_floorが順繋時刻より遅い場合が「前便入車+10分」の拘束が発動した状態
+        is_floor_binding = (
+            start_time is not None and start_time > 0
+            and start_time > sequential_time
+        )
+        if main_mountain_count == 0:
+            floor_time = max(sequential_time, start_time or 0, prev_main_end)
+        else:
+            floor_time = max(sequential_time, start_time or 0)
+        actual_start = _adjust_start_for_breaks(floor_time, work_duration)
+        work_end = _calc_work_end_with_breaks(actual_start, work_duration)
+        can_main = deadline is None or work_end <= deadline
+
+        if can_main:
+            main_mountain_count += 1
+            main_end_time = work_end
+            # 実開始時間は後で締切逆算シフトを適用するため、生の秒数を保持
+            results.append({
+                "山通番": yama,
+                "山工程": PROC_MAIN,
+                "_raw_start": actual_start,
+                "_raw_end": work_end,
+                # start_floor固定 or それ以降の山 → 実時刻確定済み、T0加算不要
+                "_is_anchored": main_schedule_anchored or is_floor_binding,
+                "前倒し": bool(is_prefetch),
+                "照合追加180秒": False,
+                "_end_secs": int(work_end),
+            })
+            if is_floor_binding:
+                main_schedule_anchored = True  # 以降の山も実時刻確定済みとする
+            unscheduled = [u for u in unscheduled if int(u["山通番"]) != yama]
+            continue
+
+        # メインで間に合わない → リリーフ工程
+        next_relief_idx = relief_mountain_count + 1
+        relief_delay = 0  # 照合180秒は後処理で開始時間順に付与
+        if not relief_started:
+            # リリーフ1山目のみ、前回リリーフ終了時刻を開始下限へ反映する。
+            if deadline is not None:
+                latest_start = _latest_start_to_meet_deadline(deadline, work_duration)
+                if latest_start is not None:
+                    constrained_start = max(latest_start, start_time or 0, prev_relief_end)
+                    relief_start = _adjust_start_for_breaks(constrained_start + relief_delay, work_duration)
+                else:
+                    relief_start = _adjust_start_for_breaks(max(start_time or 0, prev_relief_end) + relief_delay, work_duration)
+            else:
+                relief_start = _adjust_start_for_breaks(max(start_time or 0, prev_relief_end) + relief_delay, work_duration)
+        else:
+            relief_start = _adjust_start_for_breaks(
+                max(relief_end_time, start_time or 0) + relief_delay, work_duration
+            )
+        relief_end = _calc_work_end_with_breaks(relief_start, work_duration)
+        relief_mountain_count += 1
+        relief_end_time = relief_end
+        relief_started = True
+        results.append({
+            "山通番": yama,
+            "山工程": PROC_RELIEF,
+            "実開始時間": _seconds_to_hhmm(relief_start),
+            "_raw_start": None,
+            "_raw_end": None,
+            "前倒し": False,
+            "照合追加180秒": False,
+            "_end_secs": int(relief_end),
+        })
+        unscheduled = [u for u in unscheduled if int(u["山通番"]) != yama]
+
+    # ── メイン工程 実開始時間を入車時間マスタに紐づけてシフト ──
+    # 「前便入車+10分」で実時刻に固定されていない山に限り T0 = min(締切-raw_end) でシフトする。
+    # 固定済みの山（_is_anchored=True）は已に実時刻なので T0 を加算しない。
+    mtn_deadline_map = {m["山通番"]: m["締め切り_秒"] for m in mountain_info}
+    mtn_work_map    = {m["山通番"]: m["引取工数_秒"]  for m in mountain_info}
+    mtn_start_floor_map = {m["山通番"]: m.get("開始時間_秒") for m in mountain_info}
+
+    shift_candidates = [
+        mtn_deadline_map[r["山通番"]] - r["_raw_end"]
+        for r in results
+        if r["山工程"] == PROC_MAIN
+        and not r.get("_is_anchored")          # 固定済み山は対象外
+        and r.get("_raw_end") is not None
+        and mtn_deadline_map.get(r["山通番"]) is not None
+    ]
+    T0 = max(0, min(shift_candidates)) if shift_candidates else 0
+
+    # T0後は「山ごとの開始下限(start_floor)」と「前山の終了時刻(seq_floor)」も同時に満たす。
+    # 修正前: _raw_start + T0 を一律適用し、前詰め余地を使えないケースがあった。
+    # 修正後: max(_raw_start + T0, start_floor, seq_floor) で逐次配置する。
+    results_main = [r for r in results if r["山工程"] == PROC_MAIN and r.get("_raw_start") is not None]
+    results_main.sort(
+        key=lambda r: (
+            int(r.get("_raw_start") or 0),
+            int(mtn_start_floor_map.get(r["山通番"]) or 0),
+            int(r["山通番"]),
+        )
+    )
+    seq_floor = _shift_start_secs(0)
+    for r in results_main:
+        work_dur = int(mtn_work_map.get(r["山通番"], 0))
+        if r.get("_is_anchored"):
+            # _is_anchored=True は時刻固定済みのため変更せず、連続制約のみ更新。
+            anchored_start = int(r["_raw_start"])
+            anchored_end = int(r.get("_raw_end") or _calc_work_end_with_breaks(anchored_start, work_dur))
+            r["実開始時間"] = _seconds_to_hhmm(anchored_start)
+            r["実終了時間"] = _seconds_to_hhmm(anchored_end)
+            r["_end_secs"] = int(anchored_end)
+            seq_floor = anchored_end
+            continue
+
+        start_floor = int(mtn_start_floor_map.get(r["山通番"]) or 0)
+        t0_shifted = int(r["_raw_start"]) + int(T0)
+        candidate = max(t0_shifted, start_floor, seq_floor)
+        new_start = _adjust_start_for_breaks(candidate, work_dur)
+        new_end = _calc_work_end_with_breaks(new_start, work_dur)
+        r["実開始時間"] = _seconds_to_hhmm(new_start)
+        r["実終了時間"] = _seconds_to_hhmm(new_end)
+        r["_end_secs"] = int(new_end)
+        seq_floor = new_end
+
+    for r in results:
+        if r["山工程"] == PROC_MAIN and r.get("_raw_start") is not None and not r.get("実開始時間"):
+            # フォールバック: MAIN山で未設定が残った場合のみ従来の生時刻を採用
+            r["実開始時間"] = _seconds_to_hhmm(int(r["_raw_start"]))
+            if r.get("_raw_end") is not None:
+                r["実終了時間"] = _seconds_to_hhmm(int(r["_raw_end"]))
+                r["_end_secs"] = int(r["_raw_end"])
+        r.pop("_raw_start", None)
+        r.pop("_raw_end",   None)
+
+    def _schedule_proc_rows(
+        proc_rows: List[dict],
+        proc_label: str,
+        prefer_deadline_order: bool = False,
+        respect_existing_start: bool = True,
+    ):
+        if not proc_rows:
+            return
+
+        if prefer_deadline_order:
+            proc_rows.sort(
+                key=lambda r: (
+                    mtn_deadline_map.get(int(r["山通番"])) is None,
+                    mtn_deadline_map.get(int(r["山通番"])) or float("inf"),
+                    int(r["山通番"]),
+                )
+            )
+        else:
+            proc_rows.sort(
+                key=lambda r: (
+                    _time_to_seconds(r.get("実開始時間", "99:99")) is None,
+                    _time_to_seconds(r.get("実開始時間", "99:99")) or float("inf"),
+                    int(r["山通番"]),
+                )
+            )
+
+        prev_end = 0
+        for order_idx, r in enumerate(proc_rows):
+            yama_no = int(r["山通番"])
+            work_dur = int(mtn_work_map.get(yama_no, 0))
+            deadline = mtn_deadline_map.get(yama_no)
+            start_floor = mtn_start_floor_map.get(yama_no) or 0
+            existing_start = None
+
+            inspection_delay = 180 if (order_idx >= 2 and order_idx % 2 == 0) else 0
+            seq_floor = prev_end + inspection_delay
+
+            # アンカー済みメイン山は後段再スケジュールで時刻を上書きしない。
+            if proc_label == PROC_MAIN and r.get("_is_anchored"):
+                existing_start = _time_to_seconds(r.get("実開始時間", ""))
+                if existing_start is not None:
+                    r["実開始時間"] = _seconds_to_hhmm(existing_start)
+                    r["照合追加180秒"] = bool(inspection_delay)
+                    prev_end = _calc_work_end_with_breaks(existing_start, work_dur)
+                    continue
+
+            # リリーフ先頭は、後続山がある場合に遅らせ過ぎると連鎖遅延を生むため、
+            # 最早開始（start_floor/seq_floor）を優先する。
+            # 単独山のみ従来どおり締切逆算で遅開始を許容する。
+            if proc_label == PROC_RELIEF and order_idx == 0 and deadline is not None:
+                latest_start = _latest_start_to_meet_deadline(deadline, work_dur)
+                if len(proc_rows) >= 2:
+                    candidate_start = max(start_floor, seq_floor)
+                elif latest_start is not None:
+                    candidate_start = max(latest_start, start_floor, seq_floor)
+                else:
+                    candidate_start = max(start_floor, seq_floor)
+            else:
+                candidate_start = max(start_floor, seq_floor)
+                # メイン工程は既に確定済みの表示開始時刻を不必要に前倒ししない。
+                if proc_label == PROC_MAIN and respect_existing_start:
+                    existing_start = _time_to_seconds(r.get("実開始時間", ""))
+                    if existing_start is not None:
+                        candidate_start = max(candidate_start, existing_start)
+
+            # メイン工程の既存開始時刻は既に休憩調整済みのため、再調整すると二重遅延になる。
+            if proc_label == PROC_MAIN and respect_existing_start and existing_start is not None and candidate_start == existing_start:
+                new_start = existing_start
+            else:
+                new_start = _adjust_start_for_breaks(candidate_start, work_dur)
+            r["実開始時間"] = _seconds_to_hhmm(new_start)
+            r["照合追加180秒"] = bool(inspection_delay)
+            prev_end = _calc_work_end_with_breaks(new_start, work_dur)
+            r["_end_secs"] = int(prev_end)
+
+    # ── 開始時刻を再計算（リリーフは締切優先） ──
+    _schedule_proc_rows([r for r in results if r["山工程"] == PROC_MAIN], PROC_MAIN)
+    _schedule_proc_rows(
+        [r for r in results if r["山工程"] == PROC_RELIEF],
+        PROC_RELIEF,
+        prefer_deadline_order=True,
+    )
+
+    # ── 安全弁: メイン工程で締切超過した山はリリーフへ再振分け ──
+    late_main_yamas = []
+    for r in results:
+        if r.get("山工程") != PROC_MAIN:
+            continue
+        yama_no = int(r["山通番"])
+        deadline = mtn_deadline_map.get(yama_no)
+        if deadline is None:
+            continue
+        start_secs = _time_to_seconds(r.get("実開始時間", ""))
+        if start_secs is None:
+            continue
+        end_secs = _calc_work_end_with_breaks(start_secs, int(mtn_work_map.get(yama_no, 0)))
+        if end_secs > int(deadline):
+            late_main_yamas.append(yama_no)
+
+    if late_main_yamas:
+        # まずメイン工程内の並び替えで救済可能かを試す。
+        # 前倒し判定は近似であるため、ここで締切優先順を再評価する。
+        main_rows = [r for r in results if r["山工程"] == PROC_MAIN]
+        _schedule_proc_rows(
+            main_rows,
+            PROC_MAIN,
+            prefer_deadline_order=True,
+            respect_existing_start=False,
+        )
+
+        # 締切優先で並べ直したメイン工程を、締切を守れる範囲で実時刻へシフトする。
+        # これにより 00:xx 起点の仮時刻を運用時刻帯に寄せる。
+        reorder_shift_candidates = []
+        for r in main_rows:
+            yama_no = int(r["山通番"])
+            deadline = mtn_deadline_map.get(yama_no)
+            start_secs = _time_to_seconds(r.get("実開始時間", ""))
+            if deadline is None or start_secs is None:
+                continue
+            work_dur = int(mtn_work_map.get(yama_no, 0))
+            end_secs = _calc_work_end_with_breaks(start_secs, work_dur)
+            reorder_shift_candidates.append(int(deadline) - int(end_secs))
+        reorder_t0 = max(0, min(reorder_shift_candidates)) if reorder_shift_candidates else 0
+        if reorder_t0 > 0:
+            for r in main_rows:
+                yama_no = int(r["山通番"])
+                work_dur = int(mtn_work_map.get(yama_no, 0))
+                start_secs = _time_to_seconds(r.get("実開始時間", ""))
+                if start_secs is None:
+                    continue
+                shifted = _adjust_start_for_breaks(int(start_secs) + int(reorder_t0), work_dur)
+                r["実開始時間"] = _seconds_to_hhmm(shifted)
+
+        late_after_reorder = []
+        for r in main_rows:
+            yama_no = int(r["山通番"])
+            deadline = mtn_deadline_map.get(yama_no)
+            if deadline is None:
+                continue
+            start_secs = _time_to_seconds(r.get("実開始時間", ""))
+            if start_secs is None:
+                continue
+            end_secs = _calc_work_end_with_breaks(start_secs, int(mtn_work_map.get(yama_no, 0)))
+            if end_secs > int(deadline):
+                late_after_reorder.append(yama_no)
+
+        if late_after_reorder:
+            late_set = set(late_after_reorder)
+            for r in results:
+                yama_no = int(r["山通番"])
+                if yama_no in late_set:
+                    r["山工程"] = PROC_RELIEF
+                    r["実開始時間"] = ""
+
+            _schedule_proc_rows([r for r in results if r["山工程"] == PROC_MAIN], PROC_MAIN)
+            _schedule_proc_rows(
+                [r for r in results if r["山工程"] == PROC_RELIEF],
+                PROC_RELIEF,
+                prefer_deadline_order=True,
+            )
+
+    # ── リリーフ最小化: メインへ戻せる山を再昇格 ──
+    def _collect_late_yamas(target_rows: List[dict], proc_label: str) -> List[int]:
+        late = []
+        for rr in target_rows:
+            if rr.get("山工程") != proc_label:
+                continue
+            yy = int(rr["山通番"])
+            ddl = mtn_deadline_map.get(yy)
+            if ddl is None:
+                continue
+            st = _time_to_seconds(rr.get("実開始時間", ""))
+            if st is None:
+                continue
+            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
+            if en > int(ddl):
+                late.append(yy)
+        return late
+
+    def _reschedule_rows(target_rows: List[dict]):
+        _schedule_proc_rows(
+            [r for r in target_rows if r["山工程"] == PROC_MAIN],
+            PROC_MAIN,
+            prefer_deadline_order=True,
+            respect_existing_start=False,
+        )
+        _schedule_proc_rows(
+            [r for r in target_rows if r["山工程"] == PROC_RELIEF],
+            PROC_RELIEF,
+            prefer_deadline_order=True,
+        )
+
+    def _late_score(target_rows: List[dict]) -> Tuple[int, int, int]:
+        late_main = _collect_late_yamas(target_rows, PROC_MAIN)
+        late_relief = _collect_late_yamas(target_rows, PROC_RELIEF)
+        return (len(set(late_main + late_relief)), len(late_relief), len(late_main))
+
+    def _state_score(target_rows: List[dict]) -> Tuple[int, int, int, int]:
+        late_total, late_relief, late_main = _late_score(target_rows)
+        relief_count = sum(1 for rr in target_rows if rr.get("山工程") == PROC_RELIEF)
+        return (late_total, late_main, late_relief, relief_count)
+
+    def _state_key(target_rows: List[dict]) -> Tuple[Tuple[int, str], ...]:
+        return tuple(sorted((int(rr["山通番"]), str(rr.get("山工程", PROC_MAIN))) for rr in target_rows))
+
+    def _prioritized_yamas(
+        target_rows: List[dict],
+        proc_label: str,
+        limit: int = 8,
+        late_only: bool = False,
+    ) -> List[int]:
+        late_set = set(_collect_late_yamas(target_rows, proc_label))
+        candidates = [int(rr["山通番"]) for rr in target_rows if rr.get("山工程") == proc_label]
+        if late_only:
+            candidates = [y for y in candidates if y in late_set]
+        ranked = sorted(
+            candidates,
+            key=lambda y: (
+                y not in late_set,
+                mtn_deadline_map.get(y) is None,
+                mtn_deadline_map.get(y) or float("inf"),
+                y,
+            ),
+        )
+        if len(ranked) <= limit:
+            return ranked
+        return ranked[:limit]
+
+    def _reset_row_after_lane_change(row: dict, new_label: str):
+        row["山工程"] = new_label
+        row["実開始時間"] = ""
+        row["前倒し"] = False
+        row["照合追加180秒"] = False
+        row["_is_anchored"] = False
+
+    # ── 最終最適化: 全割当パターン探索 ──
+    # 山数が閾値以下なら全 2^n レーン割当を列挙し、最良解を選択。
+    # 各レーン内の順序は締切優先ソート（実験で最適に近いことを確認済み）。
+    EXHAUSTIVE_THRESHOLD = 14  # 2^14 = 16384 パターン
+
+    all_yamas = sorted(set(int(r["山通番"]) for r in results))
+    n_yamas = len(all_yamas)
+
+    def _build_trial_from_assignment(assignment_bits: int) -> List[dict]:
+        """ビットマスクに基づきレーン割当を行いスケジュールした試行を返す。
+        bit i == 0 → メイン, bit i == 1 → リリーフ"""
+        trial = copy.deepcopy(results)
+        yama_to_proc = {}
+        for i, yama_no in enumerate(all_yamas):
+            proc = PROC_RELIEF if (assignment_bits >> i) & 1 else PROC_MAIN
+            yama_to_proc[yama_no] = proc
+        for r in trial:
+            yno = int(r["山通番"])
+            new_proc = yama_to_proc.get(yno, PROC_MAIN)
+            if r.get("山工程") != new_proc:
+                _reset_row_after_lane_change(r, new_proc)
+        _reschedule_rows(trial)
+        return trial
+
+    if n_yamas <= EXHAUSTIVE_THRESHOLD:
+        best_snapshot = copy.deepcopy(results)
+        _reschedule_rows(best_snapshot)
+        best_score = _state_score(best_snapshot)
+
+        total_patterns = 1 << n_yamas
+        for bits in range(total_patterns):
+            trial = _build_trial_from_assignment(bits)
+            trial_score = _state_score(trial)
+            if trial_score < best_score:
+                best_score = trial_score
+                best_snapshot = trial
+                # 遅延ゼロ＆リリーフゼロなら完全解 → 即終了
+                if best_score[0] == 0 and best_score[3] == 0:
+                    break
+    else:
+        # フォールバック: ビーム探索（山数が多い場合）
+        best_snapshot = copy.deepcopy(results)
+        best_score = _state_score(best_snapshot)
+        beam: List[List[dict]] = [best_snapshot]
+        seen_scores = {_state_key(best_snapshot): best_score}
+
+        beam_width = 6
+        max_rounds = 4
+        for _ in range(max_rounds):
+            candidate_snapshots: List[List[dict]] = []
+
+            for state in beam:
+                main_candidates = _prioritized_yamas(state, PROC_MAIN)
+                relief_candidates = _prioritized_yamas(state, PROC_RELIEF)
+                late_main_candidates = _prioritized_yamas(state, PROC_MAIN, late_only=True)
+
+                for rel_yama in relief_candidates:
+                    trial = copy.deepcopy(state)
+                    rel_row = next((r for r in trial if int(r["山通番"]) == rel_yama), None)
+                    if rel_row is None:
+                        continue
+                    _reset_row_after_lane_change(rel_row, PROC_MAIN)
+                    _reschedule_rows(trial)
+                    candidate_snapshots.append(trial)
+
+                for main_yama in late_main_candidates:
+                    trial = copy.deepcopy(state)
+                    main_row = next((r for r in trial if int(r["山通番"]) == main_yama), None)
+                    if main_row is None:
+                        continue
+                    _reset_row_after_lane_change(main_row, PROC_RELIEF)
+                    _reschedule_rows(trial)
+                    candidate_snapshots.append(trial)
+
+                for rel_yama in relief_candidates:
+                    for main_yama in main_candidates:
+                        trial = copy.deepcopy(state)
+                        rel_row = next((r for r in trial if int(r["山通番"]) == rel_yama), None)
+                        main_row = next((r for r in trial if int(r["山通番"]) == main_yama), None)
+                        if rel_row is None or main_row is None:
+                            continue
+                        _reset_row_after_lane_change(rel_row, PROC_MAIN)
+                        _reset_row_after_lane_change(main_row, PROC_RELIEF)
+                        _reschedule_rows(trial)
+                        candidate_snapshots.append(trial)
+
+            if not candidate_snapshots:
+                break
+
+            unique_next = {}
+            for trial in candidate_snapshots:
+                key = _state_key(trial)
+                trial_score = _state_score(trial)
+                prev_score = seen_scores.get(key)
+                if prev_score is not None and prev_score <= trial_score:
+                    continue
+                seen_scores[key] = trial_score
+                unique_next[key] = trial
+                if trial_score < best_score:
+                    best_score = trial_score
+                    best_snapshot = trial
+
+            if not unique_next:
+                break
+
+            beam = sorted(unique_next.values(), key=_state_score)[:beam_width]
+
+    results = best_snapshot
+
+    # ── あふれ判定: リリーフでも締切超過する山を「あふれ」工程に振り分け ──
+    # あふれ山の開始時間 = 対象便の前便入車+10分（mtn_start_floor_map）
+    def _can_relief_if_split(yama_no: int, target_rows: List[dict]) -> Tuple[bool, Optional[int]]:
+        units = yama_split_units_map.get(int(yama_no), [])
+        if len(units) <= 1:
+            return False, None
+
+        # 既存リリーフ（対象山を除く）の末尾完了時刻を基準に、分割単位を順次評価
+        base_relief = [r for r in target_rows if r.get("山工程") == PROC_RELIEF and int(r["山通番"]) != int(yama_no)]
+        base_relief.sort(
+            key=lambda r: (
+                mtn_deadline_map.get(int(r["山通番"])) is None,
+                mtn_deadline_map.get(int(r["山通番"])) or float("inf"),
+                int(r["山通番"]),
+            )
+        )
+        cur_end = 0
+        for br in base_relief:
+            y = int(br["山通番"])
+            w = int(mtn_work_map.get(y, 0))
+            st = _time_to_seconds(br.get("実開始時間", ""))
+            if st is None:
+                continue
+            cur_end = max(cur_end, _calc_work_end_with_breaks(int(st), w))
+
+        units_sorted = sorted(
+            units,
+            key=lambda u: (
+                u.get("deadline") is None,
+                u.get("deadline") or float("inf"),
+                u.get("start_floor") or 0,
+            )
+        )
+
+        first_start = None
+        for u in units_sorted:
+            candidate = max(int(cur_end), int(u.get("start_floor") or 0))
+            st = _adjust_start_for_breaks(candidate, int(u.get("work") or 0))
+            en = _calc_work_end_with_breaks(st, int(u.get("work") or 0))
+            ddl = u.get("deadline")
+            if ddl is not None and en > int(ddl):
+                return False, None
+            if first_start is None:
+                first_start = st
+            cur_end = en
+
+        return True, first_start
+
+    overflow_yama_set = set()
+    for r in results:
+        if r.get("山工程") != PROC_RELIEF:
+            continue
+        yama_no = int(r["山通番"])
+        ddl = mtn_deadline_map.get(yama_no)
+        if ddl is None:
+            continue
+        st = _time_to_seconds(r.get("実開始時間", ""))
+        if st is None:
+            continue
+        en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yama_no, 0)))
+        if en > int(ddl):
+            split_ok, split_first_start = _can_relief_if_split(yama_no, results)
+            if split_ok:
+                # 分割前提ならリリーフで完了可能なため、あふれ化せず救済する。
+                if split_first_start is not None:
+                    r["実開始時間"] = _seconds_to_hhmm(int(split_first_start))
+                continue
+            overflow_yama_set.add(yama_no)
+
+    if overflow_yama_set:
+        for r in results:
+            yama_no = int(r["山通番"])
+            if yama_no in overflow_yama_set:
+                r["山工程"] = PROC_OVERFLOW
+                # あふれ開始は「前便入車+10分」を優先（未算出時は既存start_floorへフォールバック）。
+                floor = mtn_prev_arrival_floor_map.get(yama_no) or (mtn_start_floor_map.get(yama_no) or 0)
+                if not overflow_started:
+                    floor = max(int(floor), prev_overflow_end)
+                    overflow_started = True
+                work_dur = int(mtn_work_map.get(yama_no, 0))
+                overflow_start = _adjust_start_for_breaks(floor, work_dur)
+                r["実開始時間"] = _seconds_to_hhmm(overflow_start)
+                r["_end_secs"] = int(_calc_work_end_with_breaks(overflow_start, work_dur))
+
+        # あふれを抜いた後のリリーフ工程を再スケジュール
+        remaining_relief = [r for r in results if r.get("山工程") == PROC_RELIEF]
+        if remaining_relief:
+            _schedule_proc_rows(remaining_relief, PROC_RELIEF, prefer_deadline_order=True)
+
+    # 最終結果で照合180秒フラグを再計算し、必要な山は実開始時刻にも
+    # 180秒待ちを反映して表示時刻とフラグの不整合を防ぐ。
+    def _finalize_inspection_delay_flags(target_rows: List[dict]):
+        for rr in target_rows:
+            rr["照合追加180秒"] = False
+
+        def _start_key(rr: dict):
+            st = _time_to_seconds(str(rr.get("実開始時間", "")))
+            return (st is None, st if st is not None else float("inf"), int(rr.get("山通番", 0)))
+
+        for proc_label in (PROC_MAIN, PROC_RELIEF):
+            lane_rows = [rr for rr in target_rows if rr.get("山工程") == proc_label]
+            lane_rows.sort(key=_start_key)
+            prev_end = 0
+            for idx, rr in enumerate(lane_rows):
+                yama_no = int(rr["山通番"])
+                work_dur = int(mtn_work_map.get(yama_no, 0))
+                inspection_delay = 180 if (idx >= 2 and idx % 2 == 0) else 0
+
+                # 既存開始時刻を尊重しつつ、必要な待ち時間だけ後ろへ押し出す。
+                current_start = _time_to_seconds(str(rr.get("実開始時間", "")))
+                start_floor = int(mtn_start_floor_map.get(yama_no) or 0)
+                candidate_floor = max(prev_end + inspection_delay, start_floor)
+                if current_start is not None:
+                    candidate_floor = max(candidate_floor, int(current_start))
+
+                new_start = _adjust_start_for_breaks(candidate_floor, work_dur)
+                rr["実開始時間"] = _seconds_to_hhmm(new_start)
+                rr["照合追加180秒"] = bool(inspection_delay)
+                prev_end = _calc_work_end_with_breaks(new_start, work_dur)
+                rr["_end_secs"] = int(prev_end)
+
+    def _reapply_overflow_for_relief(target_rows: List[dict]):
+        nonlocal overflow_started
+        overflow_set = set()
+        for rr in target_rows:
+            if rr.get("山工程") != PROC_RELIEF:
+                continue
+            yy = int(rr["山通番"])
+            ddl = mtn_deadline_map.get(yy)
+            if ddl is None:
+                continue
+            st = _time_to_seconds(rr.get("実開始時間", ""))
+            if st is None:
+                continue
+            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
+            if en > int(ddl):
+                split_ok, split_first_start = _can_relief_if_split(yy, target_rows)
+                if split_ok:
+                    if split_first_start is not None:
+                        rr["実開始時間"] = _seconds_to_hhmm(int(split_first_start))
+                    continue
+                overflow_set.add(yy)
+
+        if not overflow_set:
+            return
+
+        for rr in target_rows:
+            yy = int(rr["山通番"])
+            if yy in overflow_set:
+                rr["山工程"] = PROC_OVERFLOW
+                floor = mtn_prev_arrival_floor_map.get(yy) or (mtn_start_floor_map.get(yy) or 0)
+                if not overflow_started:
+                    floor = max(int(floor), prev_overflow_end)
+                    overflow_started = True
+                work_dur = int(mtn_work_map.get(yy, 0))
+                overflow_start = _adjust_start_for_breaks(floor, work_dur)
+                rr["実開始時間"] = _seconds_to_hhmm(overflow_start)
+                rr["_end_secs"] = int(_calc_work_end_with_breaks(overflow_start, work_dur))
+
+        remaining_relief = [rr for rr in target_rows if rr.get("山工程") == PROC_RELIEF]
+        if remaining_relief:
+            _schedule_proc_rows(remaining_relief, PROC_RELIEF, prefer_deadline_order=True)
+
+    def _enforce_main_deadline_strict(target_rows: List[dict]) -> bool:
+        late_main = []
+        for rr in target_rows:
+            if rr.get("山工程") != PROC_MAIN:
+                continue
+            yy = int(rr["山通番"])
+            ddl = mtn_deadline_map.get(yy)
+            if ddl is None:
+                continue
+            st = _time_to_seconds(rr.get("実開始時間", ""))
+            if st is None:
+                continue
+            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
+            if en > int(ddl):
+                late_main.append(yy)
+
+        if not late_main:
+            return False
+
+        late_set = set(late_main)
+        for rr in target_rows:
+            yy = int(rr["山通番"])
+            if yy in late_set and rr.get("山工程") == PROC_MAIN:
+                rr["山工程"] = PROC_RELIEF
+                rr["実開始時間"] = ""
+                rr["前倒し"] = False
+                rr["照合追加180秒"] = False
+                rr["_is_anchored"] = False
+
+        _schedule_proc_rows([rr for rr in target_rows if rr.get("山工程") == PROC_MAIN], PROC_MAIN)
+        _schedule_proc_rows(
+            [rr for rr in target_rows if rr.get("山工程") == PROC_RELIEF],
+            PROC_RELIEF,
+            prefer_deadline_order=True,
+        )
+        return True
+
+    for _ in range(3):
+        _finalize_inspection_delay_flags(results)
+        if not _enforce_main_deadline_strict(results):
+            break
+        _reapply_overflow_for_relief(results)
+
+    _finalize_inspection_delay_flags(results)
+
+    for r in results:
+        r.pop("_is_anchored", None)
+    lane_end_times = {PROC_MAIN: 0, PROC_RELIEF: 0, PROC_OVERFLOW: 0}
+    for r in results:
+        lab = str(r.get("山工程", ""))
+        end_secs = r.get("_end_secs")
+        if lab in lane_end_times and end_secs is not None:
+            lane_end_times[lab] = max(int(lane_end_times[lab]), int(end_secs))
+
+    out_df = pd.DataFrame(results).sort_values("山通番").reset_index(drop=True)
+    if "_end_secs" in out_df.columns:
+        out_df = out_df.drop(columns=["_end_secs"])
+
+    if return_lane_end_times:
+        return out_df, lane_end_times
+    return out_df
+
+
+def assign_processes_by_arrival_time(
+    proc_details: pd.DataFrame,
+    master_df: pd.DataFrame,
+    previous_lane_end_times: Optional[Dict[str, int]] = None,
+    return_lane_end_times: bool = False,
+) -> pd.DataFrame:
+    """公開エントリ。必要時に工程別終了時刻も返す。"""
+    out_df, lane_end_times = _legacy_assign_processes_by_arrival_time(
+        proc_details,
+        master_df,
+        previous_lane_end_times=previous_lane_end_times,
+        return_lane_end_times=True,
+    )
+    if return_lane_end_times:
+        return out_df, lane_end_times
+    return out_df
+
+
+def compute_proc_summary(proc_details: pd.DataFrame, mountain_proc_map: dict) -> pd.DataFrame:
+    """山別の工程サマリ（メイン/リリーフ/あふれ）"""
+    if proc_details is None or proc_details.empty:
+        return pd.DataFrame(columns=["山通番", "メイン工程", "リリーフ工程", "あふれ工程", "合計"])
+    out_rows = []
+    # 仮想山(-1)は表示用のため、工程サマリ台数の集計対象から除外する。
+    yama_nos = [int(y) for y in proc_details["山通番"].unique()]
+    for yama in sorted(y for y in yama_nos if not is_virtual_yama(y)):
+        lab = str(mountain_proc_map.get(int(yama), PROC_MAIN))
+        row = {"山通番": int(yama), "メイン工程": 0, "リリーフ工程": 0, "あふれ工程": 0}
+        if lab == PROC_MAIN:
+            row["メイン工程"] = 1
+        elif lab == PROC_OVERFLOW:
+            row["あふれ工程"] = 1
+        else:
+            row["リリーフ工程"] = 1
+        row["合計"] = 1
+        out_rows.append(row)
+    out = pd.DataFrame(out_rows)
+    return out[["山通番", "メイン工程", "リリーフ工程", "あふれ工程", "合計"]].sort_values("山通番").reset_index(drop=True)
