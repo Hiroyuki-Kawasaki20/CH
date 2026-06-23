@@ -420,21 +420,37 @@ def _legacy_assign_processes_by_arrival_time(
         v = str(vendor).strip()
         return v.startswith("日野")
 
-    def _get_prev_bin_for_vendor(vendor: str, current_bin: int, allow_wrap: bool = False) -> Optional[str]:
+    def _is_hino_2lane_target(vendor: str) -> bool:
+        """日野2レーン並列スケジューリングの対象判定。完全一致 '日野' のみ。日野EH は対象外。"""
+        v = str(vendor).strip()
+        return v == "日野"
+
+    def _get_prev_bin_for_vendor(vendor: str, current_bin: int, allow_wrap: bool = False, offset: int = 1) -> Optional[str]:
         if current_bin <= 0:
             return None
-        # 前便は基本「小さい便番号の最大値」。必要時のみ循環を許可する。
+        # offset 個前の便番号を返す。offset=1 で前便(従来)、offset=2 で2便前(日野2レーン用)。
         bins = vendor_bin_numbers.get(vendor, [])
         if not bins:
-            # マスタに便番号が無い場合は単純前便（循環なし）
-            if current_bin > 1:
-                return f"{current_bin - 1:02d}"
+            # マスタに便番号が無い場合は単純計算（循環なし）
+            target = current_bin - offset
+            if target > 0:
+                return f"{target:02d}"
+            if allow_wrap:
+                # 循環許可時は最終便を返す
+                return f"{max(1, current_bin):02d}"
             return None
-        lowers = [b for b in bins if b < current_bin]
-        if lowers:
-            return f"{int(max(lowers)):02d}"
-        if allow_wrap:
+        
+        # bins はソート済み（ascending）。offset 個前の便を探す。
+        lowers = sorted([b for b in bins if b < current_bin], reverse=True)
+        if len(lowers) >= offset:
+            # offset 個前の便が存在
+            return f"{int(lowers[offset - 1]):02d}"
+        
+        # offset 個前が存在しない場合
+        if allow_wrap and offset == 1:
+            # offset=1 でかつ循環許可の場合のみ、最終便を返す（従来との互換性）
             return f"{int(max(bins)):02d}"
+        
         return None
 
     def _get_prev_group_time(vendor: str, current_mins: int) -> Optional[int]:
@@ -504,12 +520,12 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False)
+                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False, offset=1)
                         if prev_bin is not None:
                             prev_pickup = master_map.get((vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                             if prev_secs is not None:
-                                st = prev_secs + 10 * 60
+                                st = prev_secs + ARRIVAL_BUFFER_SECS
                                 st_prev = st
                             else:
                                 st = 0
@@ -520,8 +536,37 @@ def _legacy_assign_processes_by_arrival_time(
                     except (ValueError, TypeError):
                         st = 0
                         st_prev = 0
+            elif _is_hino_2lane_target(vendor):
+                # 日野2レーン: N-2便 + 10分が基本。先頭便は特別対応。
+                try:
+                    current_bin = int(order2)
+                    is_first_trip_hino = (vendor_shift_first_bin.get((vendor, shift_idx), "") == order2)
+                    if is_first_trip_hino:
+                        # 先頭便（N-2が存在しない）→ 開始+15分（セットフラグ値に関わらず）
+                        # セットフラグ=true の場合は effective_deadline で SET_FLAG_MAIN_LIMIT_SECS が適用される
+                        st = _shift_start_secs(shift_idx) + 15 * 60
+                        st_prev = st
+                    else:
+                        # 先頭便でない → N-2便 + 10分
+                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True, offset=2)
+                        if prev_bin is not None:
+                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                            if prev_secs is not None:
+                                st = prev_secs + ARRIVAL_BUFFER_SECS
+                                st_prev = st
+                            else:
+                                st = 0
+                                st_prev = 0
+                        else:
+                            # 2便前がない場合（1便・2便で allow_wrap 未使用時）→ 開始+15分
+                            st = _shift_start_secs(shift_idx) + 15 * 60
+                            st_prev = st
+                except (ValueError, TypeError):
+                    st = 0
+                    st_prev = 0
             elif set_flag:
-                # セットあり便は従来ルールを適用（前便入車+10分）
+                # セットあり便は従来ルールを適用（前便入車+10分）。日野2レーンは前段で処理済み。
                 if vendor == "武部":
                     mins = pickup_secs // 60
                     prev_group_time = _get_prev_group_time(vendor, mins)
@@ -529,17 +574,17 @@ def _legacy_assign_processes_by_arrival_time(
                         st = (prev_group_time + 10) * 60
                         st_prev = st
                     else:
-                        st = pickup_secs + 10 * 60
+                        st = pickup_secs + ARRIVAL_BUFFER_SECS
                         st_prev = st
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True, offset=1)
                         if prev_bin is not None:
                             prev_pickup = master_map.get((vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                             if prev_secs is not None:
-                                st = prev_secs + 10 * 60
+                                st = prev_secs + ARRIVAL_BUFFER_SECS
                                 st_prev = st
                             else:
                                 st = 0
@@ -555,11 +600,11 @@ def _legacy_assign_processes_by_arrival_time(
                 st = _shift_start_secs(shift_idx) + 15 * 60
                 try:
                     current_bin = int(order2)
-                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False)
+                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False, offset=1)
                     if prev_bin is not None:
                         prev_pickup = master_map.get((vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
-                        st_prev = (prev_secs + 10 * 60) if prev_secs is not None else 0
+                        st_prev = (prev_secs + ARRIVAL_BUFFER_SECS) if prev_secs is not None else 0
                     else:
                         st_prev = 0
                 except (ValueError, TypeError):
@@ -571,18 +616,18 @@ def _legacy_assign_processes_by_arrival_time(
                     st = (prev_group_time + 10) * 60
                     st_prev = st
                 else:
-                    st = pickup_secs + 10 * 60
+                    st = pickup_secs + ARRIVAL_BUFFER_SECS
                     st_prev = st
             else:
                 try:
                     current_bin = int(order2)
-                    # 前便入車時刻 + 10分 を引取開始下限に設定
-                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                    # 前便入車時刻 + 10分 を引取開始下限に設定（日野以外は N-1 便）
+                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True, offset=1)
                     if prev_bin is not None:
                         prev_pickup = master_map.get((vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                         if prev_secs is not None:
-                            st = prev_secs + 10 * 60
+                            st = prev_secs + ARRIVAL_BUFFER_SECS
                             st_prev = st
                         else:
                             st = 0  # 前便マスタなし or 解析不可 → 開始制約なし
