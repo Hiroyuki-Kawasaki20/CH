@@ -1965,7 +1965,11 @@ class App(ctk.CTk):
 
 
 def main():
-    app = App()
+    try:
+        app = App()
+    except Exception as e:
+        messagebox.showerror("起動エラー", str(e))
+        return
     app.mainloop()
 
 

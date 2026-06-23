@@ -4,6 +4,8 @@
 # ===== 仕分け定数 =====
 DEFAULT_MIXING_KEY = "UKEIRE"           # 混載キーのデフォルト列名
 DEFAULT_HEIGHT_CAP = 2450               # 高さ上限（mm）
+SPECIAL_HINBAN = "631426010000"         # 種類1の特例対象品番
+SPECIAL_HEIGHT_CAP = 2165               # 特例高さ上限（mm）
 BASE_ONE_TIME = 187.64                  # 基礎一回工数
 MIDDLE_WORK = 3.247                     # 中間作業工数
 BASE_PER_PAL = 52                       # パレット単位工数

@@ -24,7 +24,10 @@ from src.services.process_assigner import (
     compute_proc_summary,
 )
 from src.services.exporter import build_spo_export_df, build_groupeddata_json_for_mountain
-from src.models.constants import PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, BASE_ONE_TIME, BASE_PER_PAL
+from src.models.constants import (
+    PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, BASE_ONE_TIME, BASE_PER_PAL,
+    DEFAULT_HEIGHT_CAP, SPECIAL_HINBAN, SPECIAL_HEIGHT_CAP,
+)
 from src.utils.normalizer import _normalize_hhmm, _normalize_dest_name
 
 
@@ -60,6 +63,17 @@ class TestGrouping:
         heights = pd.Series([2000, 500, 2000])
         result = assign_groups_sequential(heights, cap=2450)
         assert result == [1, 2, 3]
+
+    def test_sequential_special_hinban_uses_lower_cap_and_logs(self, caplog):
+        heights = pd.Series([1300, 900])
+        hinbans = pd.Series([SPECIAL_HINBAN, "999999999999"])
+        with caplog.at_level("DEBUG"):
+            result = assign_groups_sequential(heights, cap=DEFAULT_HEIGHT_CAP, hinbans=hinbans)
+        assert result == [1, 2]
+        assert any(
+            SPECIAL_HINBAN in record.message and str(SPECIAL_HEIGHT_CAP) in record.message
+            for record in caplog.records
+        )
 
     def test_size1_same_bin_only_is_single_mountain(self):
         """同じNONYUHIBINのみの場合は通常積みで1山になる。"""

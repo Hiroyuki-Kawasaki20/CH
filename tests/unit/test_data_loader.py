@@ -9,6 +9,19 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.services.data_loader import parse_ukeire_ch_excel
+from src.utils.csv_utils import read_csv_ja
+
+
+def test_read_csv_ja_raises_clear_error_for_empty_file(tmp_path):
+    path = tmp_path / "empty.csv"
+    path.write_text("", encoding="utf-8")
+
+    try:
+        read_csv_ja(path)
+        assert False, "empty csv should raise ValueError"
+    except ValueError as e:
+        assert "CSVが空です" in str(e)
+        assert str(path) in str(e)
 
 
 def test_parse_ukeire_ch_excel_filters_only_ch_and_formats_bin(tmp_path):

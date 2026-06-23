@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
 """CHかんばんセット — 仕分けロジック（グループ化・混載・山統合）"""
 
+import logging
 from typing import Optional, Dict
 import pandas as pd
 import numpy as np
 
 from ..models.constants import (
     DEFAULT_HEIGHT_CAP, DEFAULT_MIXING_KEY,
+    SPECIAL_HINBAN, SPECIAL_HEIGHT_CAP,
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 # ===== 入車時間列の付与 =====
@@ -36,17 +41,65 @@ def _add_arrival_time_column(df: pd.DataFrame, master_df: pd.DataFrame) -> pd.Da
 
 
 # ===== グループ分け（上から順に積む: ファーストフィット） =====
-def assign_groups_sequential(heights: pd.Series, cap: float) -> list:
+def _normalize_hinban_text(value) -> str:
+    return str(value).strip()
+
+
+def _effective_height_cap_for_hinbans(hinbans, cap: float) -> float:
+    if hinbans is None:
+        iterable = []
+    else:
+        iterable = list(hinbans)
+    normalized = [_normalize_hinban_text(v) for v in iterable]
+    if SPECIAL_HINBAN in normalized:
+        return min(float(cap), float(SPECIAL_HEIGHT_CAP))
+    return float(cap)
+
+
+def assign_groups_sequential(heights: pd.Series, cap: float, hinbans=None) -> list:
     cur_g, cur_h = 1, 0.0
+    cur_hinbans = []
+    current_mountain_logged_special = False
     out = []
-    for h in heights.astype(float).to_list():
-        if cur_h + h <= cap:
+    heights_list = heights.astype(float).to_list()
+    if hinbans is None:
+        hinban_list = [""] * len(heights_list)
+    else:
+        hinban_list = [_normalize_hinban_text(v) for v in list(hinbans)]
+        if len(hinban_list) < len(heights_list):
+            hinban_list.extend([""] * (len(heights_list) - len(hinban_list)))
+        elif len(hinban_list) > len(heights_list):
+            hinban_list = hinban_list[:len(heights_list)]
+
+    for h, hinban in zip(heights_list, hinban_list):
+        next_cap = _effective_height_cap_for_hinbans(cur_hinbans + [hinban], cap)
+        if cur_h + h <= next_cap:
             out.append(cur_g)
             cur_h += h
+            cur_hinbans.append(hinban)
+            if not current_mountain_logged_special and next_cap < float(cap):
+                logger.debug(
+                    "種類1通常積み: 山%dに特例品番%sを含むため高さ上限を%dに設定",
+                    cur_g,
+                    SPECIAL_HINBAN,
+                    int(next_cap),
+                )
+                current_mountain_logged_special = True
         else:
             cur_g += 1
             cur_h = h
+            cur_hinbans = [hinban]
+            current_mountain_logged_special = False
             out.append(cur_g)
+            next_cap = _effective_height_cap_for_hinbans(cur_hinbans, cap)
+            if next_cap < float(cap) and not current_mountain_logged_special:
+                logger.debug(
+                    "種類1通常積み: 山%dに特例品番%sを含むため高さ上限を%dに設定",
+                    cur_g,
+                    SPECIAL_HINBAN,
+                    int(next_cap),
+                )
+                current_mountain_logged_special = True
     return out
 
 
@@ -189,13 +242,23 @@ def run_pipeline(
                 group_numbers = pd.Series(0, index=df_sorted.index, dtype=int)
                 base_group = 0
                 for _, part in df_sorted.groupby("入車時間", sort=True):
-                    part_groups = assign_groups_sequential(part["高さ"], cap=height_cap)
+                    if str(size_type) == "1":
+                        part_hinbans = part["HINBAN"] if "HINBAN" in part.columns else None
+                        part_groups = assign_groups_sequential(part["高さ"], cap=height_cap, hinbans=part_hinbans)
+                    else:
+                        part_groups = assign_groups_sequential(part["高さ"], cap=height_cap)
                     group_numbers.loc[part.index] = [g + base_group for g in part_groups]
                     if part_groups:
                         base_group += max(part_groups)
                 df_sorted["グループ番号"] = group_numbers.astype(int)
             else:
-                df_sorted["グループ番号"] = assign_groups_sequential(df_sorted["高さ"], cap=height_cap)
+                if str(size_type) == "1":
+                    hinbans = df_sorted["HINBAN"] if "HINBAN" in df_sorted.columns else None
+                    df_sorted["グループ番号"] = assign_groups_sequential(
+                        df_sorted["高さ"], cap=height_cap, hinbans=hinbans
+                    )
+                else:
+                    df_sorted["グループ番号"] = assign_groups_sequential(df_sorted["高さ"], cap=height_cap)
 
             grp = df_sorted.groupby("グループ番号").agg(
                 パレット数=("グループ番号", "count"),
