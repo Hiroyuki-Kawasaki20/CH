@@ -19,7 +19,8 @@ from src.services.sorter import (
 from src.services.scheduler import cluster_by_store
 from src.services.process_assigner import (
     _time_to_seconds, _seconds_to_hhmm, _adjust_start_for_breaks,
-    _calc_work_end_with_breaks,
+    _calc_work_end_with_breaks, _to_operational_timeline_secs,
+    DAY_SECS, ARRIVAL_BUFFER_SECS,
     compute_proc_details, assign_processes_by_arrival_time,
     compute_proc_summary,
 )
@@ -599,8 +600,8 @@ class TestProcessAssigner:
         result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
         assert result.loc[result["山通番"] == 1, "山工程"].iloc[0] == PROC_MAIN
 
-    def test_set_flag_overnight_hino01_uses_shift2_limit_not_shift1_limit(self):
-        """日付またぎ日野01(セットあり)は前便由来の深夜帯を基準に2直上限を使う。"""
+    def test_set_flag_overnight_hino01_uses_24h_continuous_floor(self):
+        """日付またぎ日野01(セットあり)は24h連続表記の開始下限を使い、メインで成立する。"""
         df = pd.DataFrame({
             "山通番": [1],
             "移動工数": [0],
@@ -618,6 +619,66 @@ class TestProcessAssigner:
         result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
         row = result.loc[result["山通番"] == 1].iloc[0]
         assert row["山工程"] == PROC_MAIN
+
+    def test_deadline_normalization_is_noop_for_same_day_start(self):
+        """開始が当日基準の通常便では締切正規化が据え置きになる。"""
+        pickup_secs = _to_operational_timeline_secs(_time_to_seconds("07:00"))
+        raw_deadline = int(pickup_secs) - ARRIVAL_BUFFER_SECS
+        start_secs = _time_to_seconds("06:50")
+        eval_deadline = raw_deadline + DAY_SECS if (int(start_secs) >= DAY_SECS and raw_deadline < DAY_SECS) else raw_deadline
+
+        assert eval_deadline == raw_deadline
+        assert _seconds_to_hhmm(raw_deadline) == "06:50"
+
+        # 代表通常便（非巻き戻り）でも工程・開始は従来どおり
+        df = pd.DataFrame({
+            "山通番": [1],
+            "移動工数": [0],
+            "納入先": ["日野"],
+            "NONYUHIBIN": ["2026060101"],
+            "高さ": [300],
+        })
+        master_df = pd.DataFrame({
+            "OData_納入先": ["日野", "日野", "日野", "日野", "日野", "日野", "日野", "日野"],
+            "NONYUHIBIN": ["01", "03", "05", "07", "09", "11", "13", "15"],
+            "入車時間": ["06:50", "07:20", "07:50", "13:52", "17:30", "18:00", "22:00", "00:24"],
+            "セットありフラグ": ["0", "0", "0", "0", "0", "0", "0", "0"],
+        })
+
+        result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
+        row = result.loc[result["山通番"] == 1].iloc[0]
+        assert row["山工程"] == PROC_OVERFLOW
+        assert str(row["実開始時間"]) == "06:40"
+
+    def test_deadline_normalization_does_not_double_add_when_both_next_day_axis(self):
+        """開始・締切とも翌日基準のとき締切を二重加算しない。"""
+        deadline = _to_operational_timeline_secs(_time_to_seconds("24:20")) - ARRIVAL_BUFFER_SECS  # 24:10
+        start = _to_operational_timeline_secs(_time_to_seconds("24:24")) + ARRIVAL_BUFFER_SECS      # 24:34
+        eval_deadline = deadline + DAY_SECS if (int(start) >= DAY_SECS and int(deadline) < DAY_SECS) else int(deadline)
+
+        assert int(start) >= DAY_SECS
+        assert int(deadline) >= DAY_SECS
+        assert eval_deadline == int(deadline)
+        assert _seconds_to_hhmm(eval_deadline) == "24:10"
+
+        df = pd.DataFrame({
+            "山通番": [1],
+            "移動工数": [0],
+            "納入先": ["日野"],
+            "NONYUHIBIN": ["2026052801"],
+            "高さ": [300],
+        })
+        master_df = pd.DataFrame({
+            "OData_納入先": ["日野", "日野"],
+            "NONYUHIBIN": ["11", "01"],
+            "入車時間": ["24:20", "06:50"],
+            "セットありフラグ": ["0", "1"],
+        })
+
+        result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
+        row = result.loc[result["山通番"] == 1].iloc[0]
+        assert row["山工程"] == PROC_MAIN
+        assert str(row["実開始時間"]) == "24:30"
 
     def test_set_flag_shift2_first_trip_uses_shift2_limit_not_shift1(self):
         """2直1便目(セットあり)は前便が1直でも2直上限(01:35)を使う。"""

@@ -26,6 +26,7 @@ from ..utils.normalizer import (
 SHIFT_START_SECS = [6 * 3600 + 25 * 60, 16 * 3600 + 40 * 60]
 ARRIVAL_BUFFER_SECS = 10 * 60  # 入車時間の10分前完了を締切とする
 DAY_SECS = 24 * 3600
+TIMELINE_WRAP_BOUNDARY_SECS = 3 * 3600  # 時刻補正境界: 03:00 未満のみ +24h
 # セットあり便のメイン工程許容上限（1直:15:20, 2直:01:35(=25:35)）
 SET_FLAG_MAIN_LIMIT_SECS = [15 * 3600 + 20 * 60, DAY_SECS + 1 * 3600 + 35 * 60]
 
@@ -74,14 +75,13 @@ def _set_flag_main_limit_secs(shift_idx: int) -> int:
 def _to_operational_timeline_secs(secs: Optional[int]) -> Optional[int]:
     """業務日タイムラインへ正規化する。
 
-    00:00〜1直開始前は「前日2直の続き」とみなし +24h へ寄せる。
+    00:00〜02:59 は「前日2直の続き」とみなし +24h へ寄せる。
     これにより 23:xx と 00:xx を同一日の連続時刻として扱える。
     """
     if secs is None:
         return None
     day_secs = int(secs)
-    first_shift_start = min(SHIFT_START_SECS)
-    if day_secs < first_shift_start:
+    if day_secs < TIMELINE_WRAP_BOUNDARY_SECS:
         return day_secs + DAY_SECS
     return day_secs
 
@@ -425,7 +425,13 @@ def _legacy_assign_processes_by_arrival_time(
         v = str(vendor).strip()
         return v == "日野"
 
-    def _get_prev_bin_for_vendor(vendor: str, current_bin: int, allow_wrap: bool = False, offset: int = 1) -> Optional[str]:
+    def _get_prev_bin_for_vendor(
+        vendor: str,
+        current_bin: int,
+        allow_wrap: bool = False,
+        offset: int = 1,
+        lane_parity: Optional[int] = None,
+    ) -> Optional[str]:
         if current_bin <= 0:
             return None
         # offset 個前の便番号を返す。offset=1 で前便(従来)、offset=2 で2便前(日野2レーン用)。
@@ -450,6 +456,12 @@ def _legacy_assign_processes_by_arrival_time(
         if allow_wrap and offset == 1:
             # offset=1 でかつ循環許可の場合のみ、最終便を返す（従来との互換性）
             return f"{int(max(bins)):02d}"
+
+        if allow_wrap and offset == 2 and lane_parity in (0, 1):
+            # 日野2レーン向け: 同レーン(同奇偶)内で巻き戻り、当月最終便を返す。
+            parity_bins = [b for b in bins if (b % 2) == lane_parity and b != current_bin]
+            if parity_bins:
+                return f"{int(max(parity_bins)):02d}"
         
         return None
 
@@ -537,21 +549,28 @@ def _legacy_assign_processes_by_arrival_time(
                         st = 0
                         st_prev = 0
             elif _is_hino_2lane_target(vendor):
-                # 日野2レーン: N-2便 + 10分が基本。先頭便は特別対応。
+                # 日野2レーン: 同レーン直前便（=N-2相当）の入車時刻 + 10分。
+                # 先頭便は同レーン最終便へ巻き戻って参照する。
                 try:
                     current_bin = int(order2)
                     is_first_trip_hino = (vendor_shift_first_bin.get((vendor, shift_idx), "") == order2)
-                    if is_first_trip_hino:
-                        # 先頭便（N-2が存在しない）→ 開始+15分（セットフラグ値に関わらず）
-                        # セットフラグ=true の場合は effective_deadline で SET_FLAG_MAIN_LIMIT_SECS が適用される
+                    if not set_flag and is_first_trip_hino:
+                        # セットなし先頭便は従来どおり各直開始+15分。
                         st = _shift_start_secs(shift_idx) + 15 * 60
                         st_prev = st
                     else:
-                        # 先頭便でない → N-2便 + 10分
-                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True, offset=2)
+                        prev_bin = _get_prev_bin_for_vendor(
+                            vendor,
+                            current_bin,
+                            allow_wrap=bool(set_flag),
+                            offset=2,
+                            lane_parity=(current_bin % 2),
+                        )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((vendor, prev_bin), "")
-                            prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                            # 日野巻き戻り便も業務日タイムラインへ寄せ、24時超え表記に統一する。
+                            prev_secs_raw = _time_to_seconds(prev_pickup) if prev_pickup else None
+                            prev_secs = _to_operational_timeline_secs(prev_secs_raw)
                             if prev_secs is not None:
                                 st = prev_secs + ARRIVAL_BUFFER_SECS
                                 st_prev = st
@@ -559,7 +578,7 @@ def _legacy_assign_processes_by_arrival_time(
                                 st = 0
                                 st_prev = 0
                         else:
-                            # 2便前がない場合（1便・2便で allow_wrap 未使用時）→ 開始+15分
+                            # 巻き戻りでも同レーン前便が取れない場合のみ、開始+15分へフォールバック。
                             st = _shift_start_secs(shift_idx) + 15 * 60
                             st_prev = st
                 except (ValueError, TypeError):
@@ -640,13 +659,8 @@ def _legacy_assign_processes_by_arrival_time(
                     st_prev = 0
 
             effective_deadline = strict_deadline
-            if has_set_flag_col and set_flag:
-                # セットあり便の直判定は st / pickup の両方から上限を求め、
-                # より緩い（大きい）方を採用する。
-                # - 日付またぎ便（例: 日野01）: pickup=06:50→1直, st=24:30→2直
-                #   → st基準で2直上限(01:35)を適用
-                # - 2直1便目（前便が1直）: pickup=17:30→2直, st=15:10→1直
-                #   → pickup基準で2直上限(01:35)を適用
+            if has_set_flag_col and set_flag and not _is_hino_2lane_target(vendor):
+                # 既存仕様維持: 日野以外はセットあり上限を適用。
                 limit_from_st = (
                     _set_flag_main_limit_secs(_shift_index_for_secs(int(st)))
                     if (st is not None and st > 0) else 0
@@ -768,7 +782,7 @@ def _legacy_assign_processes_by_arrival_time(
                     st = 0
 
             effective_deadline = strict_deadline
-            if has_set_flag_col and set_flag:
+            if has_set_flag_col and set_flag and not _is_hino_2lane_target(vendor):
                 limit_from_st = _set_flag_main_limit_secs(_shift_index_for_secs(int(st))) if (st is not None and st > 0) else 0
                 limit_from_pickup = _set_flag_main_limit_secs(shift_idx)
                 effective_deadline = max(effective_deadline, limit_from_st, limit_from_pickup)
@@ -801,6 +815,16 @@ def _legacy_assign_processes_by_arrival_time(
     main_schedule_anchored = False  # start_floorで実時刻に固定されたらTrue
     results = []
 
+    def _deadline_for_eval(deadline_val: Optional[int], start_or_end_secs: Optional[int]) -> Optional[int]:
+        if deadline_val is None:
+            return None
+        ddl = int(deadline_val)
+        if start_or_end_secs is None:
+            return ddl
+        if int(start_or_end_secs) >= DAY_SECS and ddl < DAY_SECS:
+            return ddl + DAY_SECS
+        return ddl
+
     unscheduled = [dict(m) for m in mountain_info]
     while unscheduled:
         m, is_prefetch = _pick_next_main_mountain(
@@ -829,7 +853,9 @@ def _legacy_assign_processes_by_arrival_time(
             floor_time = max(sequential_time, start_time or 0)
         actual_start = _adjust_start_for_breaks(floor_time, work_duration)
         work_end = _calc_work_end_with_breaks(actual_start, work_duration)
-        can_main = deadline is None or work_end <= deadline
+        # 巻き戻り等で開始が翌日基準(24h超)の便は、締切も同軸へそろえて比較する。
+        deadline_for_eval = _deadline_for_eval(deadline, actual_start)
+        can_main = deadline_for_eval is None or work_end <= int(deadline_for_eval)
 
         if can_main:
             main_mountain_count += 1
@@ -1042,7 +1068,8 @@ def _legacy_assign_processes_by_arrival_time(
         if start_secs is None:
             continue
         end_secs = _calc_work_end_with_breaks(start_secs, int(mtn_work_map.get(yama_no, 0)))
-        if end_secs > int(deadline):
+        deadline_for_eval = _deadline_for_eval(deadline, start_secs)
+        if deadline_for_eval is not None and end_secs > int(deadline_for_eval):
             late_main_yamas.append(yama_no)
 
     if late_main_yamas:
@@ -1067,7 +1094,9 @@ def _legacy_assign_processes_by_arrival_time(
                 continue
             work_dur = int(mtn_work_map.get(yama_no, 0))
             end_secs = _calc_work_end_with_breaks(start_secs, work_dur)
-            reorder_shift_candidates.append(int(deadline) - int(end_secs))
+            deadline_for_eval = _deadline_for_eval(deadline, start_secs)
+            if deadline_for_eval is not None:
+                reorder_shift_candidates.append(int(deadline_for_eval) - int(end_secs))
         reorder_t0 = max(0, min(reorder_shift_candidates)) if reorder_shift_candidates else 0
         if reorder_t0 > 0:
             for r in main_rows:
@@ -1089,7 +1118,8 @@ def _legacy_assign_processes_by_arrival_time(
             if start_secs is None:
                 continue
             end_secs = _calc_work_end_with_breaks(start_secs, int(mtn_work_map.get(yama_no, 0)))
-            if end_secs > int(deadline):
+            deadline_for_eval = _deadline_for_eval(deadline, start_secs)
+            if deadline_for_eval is not None and end_secs > int(deadline_for_eval):
                 late_after_reorder.append(yama_no)
 
         if late_after_reorder:
@@ -1121,7 +1151,8 @@ def _legacy_assign_processes_by_arrival_time(
             if st is None:
                 continue
             en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
-            if en > int(ddl):
+            ddl_for_eval = _deadline_for_eval(ddl, st)
+            if ddl_for_eval is not None and en > int(ddl_for_eval):
                 late.append(yy)
         return late
 
@@ -1330,7 +1361,8 @@ def _legacy_assign_processes_by_arrival_time(
             st = _adjust_start_for_breaks(candidate, int(u.get("work") or 0))
             en = _calc_work_end_with_breaks(st, int(u.get("work") or 0))
             ddl = u.get("deadline")
-            if ddl is not None and en > int(ddl):
+            ddl_for_eval = _deadline_for_eval(ddl, st)
+            if ddl_for_eval is not None and en > int(ddl_for_eval):
                 return False, None
             if first_start is None:
                 first_start = st
@@ -1350,7 +1382,8 @@ def _legacy_assign_processes_by_arrival_time(
         if st is None:
             continue
         en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yama_no, 0)))
-        if en > int(ddl):
+        ddl_for_eval = _deadline_for_eval(ddl, st)
+        if ddl_for_eval is not None and en > int(ddl_for_eval):
             split_ok, split_first_start = _can_relief_if_split(yama_no, results)
             if split_ok:
                 # 分割前提ならリリーフで完了可能なため、あふれ化せず救済する。
@@ -1425,7 +1458,8 @@ def _legacy_assign_processes_by_arrival_time(
             if st is None:
                 continue
             en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
-            if en > int(ddl):
+            ddl_for_eval = _deadline_for_eval(ddl, st)
+            if ddl_for_eval is not None and en > int(ddl_for_eval):
                 split_ok, split_first_start = _can_relief_if_split(yy, target_rows)
                 if split_ok:
                     if split_first_start is not None:
@@ -1466,7 +1500,8 @@ def _legacy_assign_processes_by_arrival_time(
             if st is None:
                 continue
             en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
-            if en > int(ddl):
+            ddl_for_eval = _deadline_for_eval(ddl, st)
+            if ddl_for_eval is not None and en > int(ddl_for_eval):
                 late_main.append(yy)
 
         if not late_main:
