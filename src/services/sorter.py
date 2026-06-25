@@ -32,6 +32,11 @@ def _add_arrival_time_column(df: pd.DataFrame, master_df: pd.DataFrame) -> pd.Da
 
     def _lookup(row):
         vendor = _normalize_dest_name(str(row.get("納入先", row.get("SYUKKASAKI", ""))))
+        # KVCのみ: UKEIRE値でマスタキーの納入先部分を分割 (KVC-B7 / KVC-B3)
+        if vendor == "KVC":
+            ukeire = str(row.get("UKEIRE", "")).strip()
+            if ukeire:
+                vendor = f"KVC-{ukeire}"
         nony = str(row.get("NONYUHIBIN", "")).strip().translate(_ZEN2HAN_DIGIT_COLON)
         order2 = nony[-2:] if len(nony) >= 2 else ""
         return master_map.get((vendor, order2), "")
