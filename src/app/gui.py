@@ -1712,8 +1712,9 @@ class App(ctk.CTk):
                 by=["_store_key", "_order_key", "工程内No", "移動工数"],
                 ascending=[False, True, True, False]
             )
+            display_rows = list(sub2.iterrows())
             prev_key = None
-            for idx, (_, row) in enumerate(sub2.iterrows(), start=1):
+            for idx, (_, row) in enumerate(reversed(display_rows), start=1):
                 store_text = str(row.get("ストア", row.get("SYUKKASAKI", ""))).strip()
                 order_text = str(row.get("NONYUHIBIN", "")).strip()
                 base_detail_tag = detail_tag if (idx % 2 == 1) else f"mtn_{parity}_detail_alt"
