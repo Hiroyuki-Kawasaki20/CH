@@ -18,6 +18,8 @@ from typing import Optional, Tuple
 
 import pandas as pd
 
+from ..utils.excel_utils import _add_table_exact
+
 
 # 層1: 同一プロセス内の同時書込を防ぐための排他ロック
 _export_lock = threading.Lock()
@@ -46,6 +48,7 @@ def _write_via_temp_then_copy(df: pd.DataFrame, output_path: str) -> str:
     os.close(fd)
     try:
         df.to_excel(tmp_path, index=False)
+        _add_table_exact(tmp_path, "SPOExport")
         shutil.copy2(tmp_path, output_path)
     finally:
         try:
