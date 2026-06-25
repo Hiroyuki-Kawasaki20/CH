@@ -19,6 +19,37 @@ from ..utils.normalizer import (
 logger = logging.getLogger(__name__)
 
 
+DEBUG_TARGET_VENDOR = "高岡"
+DEBUG_TARGET_NONYUHIBIN = "2026062503"
+TAKAOKA_TARGET_UKEIRE = "K5"
+# サイズ種類17は全出荷先で高さ2500まで積載可（最大3パレット）。
+# 通常の高さ上限DEFAULT_HEIGHT_CAP(2450)に対する特例。
+# 複数出荷先が共通でサイズ17パレットを引き取るため。2026/06 Kawasaki氏確認。
+SIZE17_MERGE_HEIGHT_CAP = 2500.0
+SIZE17_TYPE = "17"
+
+
+def _target_takaoka_mask(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=bool)
+    idx = df.index
+    vendor_src = (
+        df["納入先"] if "納入先" in df.columns
+        else (df["SYUKKASAKI"] if "SYUKKASAKI" in df.columns else pd.Series("", index=idx))
+    )
+    vendor_norm = vendor_src.astype(str).map(_normalize_dest_name)
+    nony = (
+        df["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
+        if "NONYUHIBIN" in df.columns else pd.Series("", index=idx)
+    )
+    ukeire = df["UKEIRE"].astype(str).str.strip() if "UKEIRE" in df.columns else pd.Series("", index=idx)
+    return (
+        vendor_norm.eq(DEBUG_TARGET_VENDOR)
+        & nony.eq(DEBUG_TARGET_NONYUHIBIN)
+        & ukeire.eq(TAKAOKA_TARGET_UKEIRE)
+    )
+
+
 # ===== 入車時間列の付与 =====
 def _add_arrival_time_column(df: pd.DataFrame, master_df: pd.DataFrame) -> pd.DataFrame:
     if master_df is None or master_df.empty:
@@ -230,6 +261,16 @@ def run_pipeline(
 
     # 入車時間列を付与
     expanded = _add_arrival_time_column(expanded, master_df)
+    target_mask_expanded = _target_takaoka_mask(expanded)
+    if target_mask_expanded.any():
+        arrivals = sorted(expanded.loc[target_mask_expanded, "入車時間"].astype(str).unique().tolist()) if "入車時間" in expanded.columns else []
+        sizes = sorted(expanded.loc[target_mask_expanded, "サイズ種類"].astype(str).unique().tolist()) if "サイズ種類" in expanded.columns else []
+        logger.debug(
+            "DEBUG 高岡2026062503/K5: _add_arrival_time_column後 入車時間=%s サイズ種類=%s 件数=%d",
+            arrivals,
+            sizes,
+            int(target_mask_expanded.sum()),
+        )
 
     # 基本グループ（全サイズ種類）
     group_results, group_details = {}, {}
@@ -247,6 +288,17 @@ def run_pipeline(
                 group_numbers = pd.Series(0, index=df_sorted.index, dtype=int)
                 base_group = 0
                 for _, part in df_sorted.groupby("入車時間", sort=True):
+                    target_mask_part = _target_takaoka_mask(part)
+                    if target_mask_part.any():
+                        hsum = pd.to_numeric(part.loc[target_mask_part, "高さ"], errors="coerce").fillna(0).sum() if "高さ" in part.columns else 0.0
+                        logger.debug(
+                            "DEBUG 高岡2026062503/K5: run_pipeline groupby(入車時間) key=%s 件数=%d 高さ合計=%.1f cap=%.1f 超過=%s",
+                            str(part.iloc[0].get("入車時間", "")),
+                            int(target_mask_part.sum()),
+                            float(hsum),
+                            float(height_cap),
+                            bool(hsum > float(height_cap)),
+                        )
                     if str(size_type) == "1":
                         part_hinbans = part["HINBAN"] if "HINBAN" in part.columns else None
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap, hinbans=part_hinbans)
@@ -486,6 +538,77 @@ def _build_size1_mixed(expanded, height_cap, mixing_key):
     return size1_mixed_summary, size1_mixed_details
 
 
+def _merge_adjacent_size17_mountains(all_df: pd.DataFrame) -> pd.DataFrame:
+    if all_df is None or all_df.empty:
+        return all_df
+    needed = {"山通番", "NONYUHIBIN", "サイズ種類", "高さ", "入車時間"}
+    if not needed.issubset(set(all_df.columns)):
+        return all_df
+
+    work = all_df.copy()
+    work["山通番"] = pd.to_numeric(work["山通番"], errors="coerce").fillna(0).astype(int)
+    work["_nony"] = work["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
+    work["_stype"] = work["サイズ種類"].astype(str).str.strip()
+    work["_arrival"] = work["入車時間"].astype(str).str.strip()
+    work["高さ"] = pd.to_numeric(work["高さ"], errors="coerce").fillna(0.0)
+
+    stats = {}
+    for yama, sub in work.groupby("山通番", sort=True):
+        nony_set = {str(v).strip() for v in sub["_nony"].tolist() if str(v).strip()}
+        arrival_set = {str(v).strip() for v in sub["_arrival"].tolist() if str(v).strip()}
+        stype_set = {str(v).strip() for v in sub["_stype"].tolist() if str(v).strip()}
+        stats[int(yama)] = {
+            "height": float(sub["高さ"].sum()),
+            "nony": (next(iter(nony_set)) if len(nony_set) == 1 else ""),
+            "arrival": (next(iter(arrival_set)) if len(arrival_set) == 1 else ""),
+            "stype": (next(iter(stype_set)) if len(stype_set) == 1 else ""),
+            "eligible": (
+                len(stype_set) == 1
+                and next(iter(stype_set), "") == SIZE17_TYPE
+                and len(nony_set) == 1
+                and len(arrival_set) == 1
+            ),
+        }
+
+    merge_map = {}
+    yamas = sorted(stats.keys())
+    i = 0
+    while i < len(yamas) - 1:
+        cur = int(yamas[i])
+        nxt = int(yamas[i + 1])
+        cs = stats[cur]
+        ns = stats[nxt]
+        can_merge = (
+            cs["eligible"]
+            and ns["eligible"]
+            and cs["nony"]
+            and cs["nony"] == ns["nony"]
+            and cs["arrival"]
+            and cs["arrival"] == ns["arrival"]
+            and (cs["height"] + ns["height"]) <= float(SIZE17_MERGE_HEIGHT_CAP)
+        )
+        if can_merge:
+            merge_map[nxt] = cur
+            cs["height"] += ns["height"]
+            stats[cur] = cs
+        i += 1
+
+    if not merge_map:
+        return all_df
+
+    logger.debug(
+        "DEBUG サイズ17隣接山統合: merge_map=%s cap=%.1f",
+        merge_map,
+        float(SIZE17_MERGE_HEIGHT_CAP),
+    )
+    work["山通番"] = work["山通番"].map(lambda y: int(merge_map.get(int(y), int(y))))
+    new_order = sorted(work["山通番"].unique().tolist())
+    renum_map = {int(old): i + 1 for i, old in enumerate(new_order)}
+    work["山通番"] = work["山通番"].map(renum_map).astype(int)
+
+    return work.drop(columns=["_nony", "_stype", "_arrival"], errors="ignore")
+
+
 # ===== 全サイズの山を統合 =====
 def build_all_mountain_details(group_details: dict, size1_mixed_details: pd.DataFrame) -> pd.DataFrame:
     frames = []
@@ -581,6 +704,7 @@ def build_all_mountain_details(group_details: dict, size1_mixed_details: pd.Data
                 all_df[c] = ""
     all_df["納入先"] = all_df["納入先"].astype(str).str.strip()
     all_df["サイズ種類"] = all_df["サイズ種類"].astype(str).str.strip()
+    all_df = _merge_adjacent_size17_mountains(all_df)
     if {"山通番", "移動工数"}.issubset(all_df.columns):
         all_df["移動工数"] = pd.to_numeric(all_df["移動工数"], errors="coerce")
         all_df = all_df.sort_values(["山通番", "移動工数"], ascending=[True, False]).reset_index(drop=True)

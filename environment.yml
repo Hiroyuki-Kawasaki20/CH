@@ -1,0 +1,12 @@
+name: DIG_new  
+channels:  
+  - defaults  
+dependencies:  
+  - python=3.11.14  
+  - pandas=2.3.3  
+  - numpy-base=2.3.5  
+  - openpyxl=3.1.5  
+  - pytest=9.0.3  
+  - pip=25.3  
+  - pip:  
+      - customtkinter==5.2.2  

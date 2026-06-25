@@ -1830,6 +1830,7 @@ class App(ctk.CTk):
             master_path = get_master_path()
             self.master_data = load_pickup_time_master_xlsx(master_path)
             self.refresh_master_tree()
+            self.refresh_routes()
         except Exception as e:
             print(f"入車時間マスタ読込エラー: {e}")
 

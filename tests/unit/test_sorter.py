@@ -137,6 +137,58 @@ class TestGrouping:
         assert not kvc.empty and not hino02.empty
         assert int(kvc["山通番"].iloc[0]) != int(hino02["山通番"].iloc[0])
 
+    def test_takaoka_size17_adjacent_mountains_are_merged(self):
+        """高岡(K5)サイズ17で同一便・同一入車時間の隣接山は統合される。"""
+        det17 = pd.DataFrame([
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-5", "SEBANGO": "716", "サイズ種類": "17", "移動工数": 16.6501, "高さ": 830},
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+            {"グループ番号": 2, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+        ])
+
+        out = build_all_mountain_details({"17": det17}, pd.DataFrame())
+        assert out["山通番"].nunique() == 1
+        assert len(out) == 3
+        summary = out.groupby("山通番").agg(
+            パレット数=("山通番", "size"),
+            Max移動工数=("移動工数", "max"),
+        ).reset_index()
+        assert int(summary.loc[0, "パレット数"]) == 3
+        assert float(summary.loc[0, "Max移動工数"]) == pytest.approx(16.6501, abs=1e-4)
+
+    def test_non_takaoka_size17_adjacent_mountains_are_merged(self):
+        """サイズ17統合は全出荷先対象のため、高岡以外でも同条件なら統合される。"""
+        det17 = pd.DataFrame([
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-5", "SEBANGO": "716", "サイズ種類": "17", "移動工数": 16.6501, "高さ": 830},
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+            {"グループ番号": 2, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+        ])
+
+        out = build_all_mountain_details({"17": det17}, pd.DataFrame())
+        assert out["山通番"].nunique() == 1
+        assert len(out) == 3
+
+    def test_non_size17_mountains_remain_split_regression(self):
+        """サイズ17以外は統合後処理の対象外で、従来どおり分割を維持する。"""
+        det18 = pd.DataFrame([
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-5", "SEBANGO": "716", "サイズ種類": "18", "移動工数": 16.6501, "高さ": 830},
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "18", "移動工数": 16.6500, "高さ": 830},
+            {"グループ番号": 2, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "18", "移動工数": 16.6500, "高さ": 830},
+        ])
+
+        out = build_all_mountain_details({"18": det18}, pd.DataFrame())
+        assert out["山通番"].nunique() == 2
+
+    def test_size17_mountains_with_different_arrival_are_not_merged(self):
+        """サイズ17でも入車時間が異なる山は統合しない。"""
+        det17 = pd.DataFrame([
+            {"グループ番号": 1, "入車時間": "07:55", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-5", "SEBANGO": "716", "サイズ種類": "17", "移動工数": 16.6501, "高さ": 830},
+            {"グループ番号": 1, "入車時間": "07:55", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+            {"グループ番号": 2, "入車時間": "08:03", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+        ])
+
+        out = build_all_mountain_details({"17": det17}, pd.DataFrame())
+        assert out["山通番"].nunique() == 2
+
 
 class TestProcessAssigner:
     def test_time_conversion(self):
