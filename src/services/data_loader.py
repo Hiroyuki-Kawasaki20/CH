@@ -536,6 +536,9 @@ def _expand_ch_master_vendors(raw_vendor: str, vendor_map: Optional[dict]) -> Li
     # 現場指定の固定変換
     if normalized.endswith("-TP") or normalized == "TP":
         return ["日野"]
+    # KVC-B7 / KVC-B3 のようなハイフン区切りKVC受入分割名はそのまま保持する
+    if normalized.startswith("KVC-") and normalized not in ("KVC-"):
+        return [base]
     if normalized.endswith("-KVC") or normalized == "KVC":
         return ["KVC"]
     if normalized.endswith("-RH") or normalized == "RH":

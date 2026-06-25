@@ -506,17 +506,23 @@ def _legacy_assign_processes_by_arrival_time(
             order2 = nony[-2:] if len(nony) >= 2 else ""
             if not vendor or not order2:
                 continue
-            pickup = master_map.get((vendor, order2), "")
+            # KVCのみ: UKEIRE値でマスタキーの納入先部分を分割 (KVC-B7 / KVC-B3)
+            if vendor == "KVC":
+                _ukeire = str(row.get("UKEIRE", "")).strip()
+                lookup_vendor = f"KVC-{_ukeire}" if _ukeire else vendor
+            else:
+                lookup_vendor = vendor
+            pickup = master_map.get((lookup_vendor, order2), "")
             if not pickup:
                 continue
             pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup))
             if pickup_secs is None:
                 continue
-            set_flag = bool(set_flag_map.get((vendor, order2), False))
+            set_flag = bool(set_flag_map.get((lookup_vendor, order2), False))
             shift_idx = _shift_index_for_secs(pickup_secs)
             strict_deadline = max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS)
             # 引取開始時間を計算
-            is_first_trip_in_shift = (vendor_shift_first_bin.get((vendor, shift_idx), "") == order2)
+            is_first_trip_in_shift = (vendor_shift_first_bin.get((lookup_vendor, shift_idx), "") == order2)
 
             if not has_set_flag_col:
                 # 旧マスタ（セットありフラグ列なし）は従来ルールを維持
@@ -532,9 +538,9 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False, offset=1)
+                        prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False, offset=1)
                         if prev_bin is not None:
-                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                             if prev_secs is not None:
                                 st = prev_secs + ARRIVAL_BUFFER_SECS
@@ -560,14 +566,14 @@ def _legacy_assign_processes_by_arrival_time(
                         st_prev = st
                     else:
                         prev_bin = _get_prev_bin_for_vendor(
-                            vendor,
+                            lookup_vendor,
                             current_bin,
                             allow_wrap=bool(set_flag),
                             offset=2,
                             lane_parity=(current_bin % 2),
                         )
                         if prev_bin is not None:
-                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             # 日野巻き戻り便も業務日タイムラインへ寄せ、24時超え表記に統一する。
                             prev_secs_raw = _time_to_seconds(prev_pickup) if prev_pickup else None
                             prev_secs = _to_operational_timeline_secs(prev_secs_raw)
@@ -598,9 +604,9 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True, offset=1)
+                        prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=True, offset=1)
                         if prev_bin is not None:
-                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                             if prev_secs is not None:
                                 st = prev_secs + ARRIVAL_BUFFER_SECS
@@ -619,9 +625,9 @@ def _legacy_assign_processes_by_arrival_time(
                 st = _shift_start_secs(shift_idx) + 15 * 60
                 try:
                     current_bin = int(order2)
-                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False, offset=1)
+                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False, offset=1)
                     if prev_bin is not None:
-                        prev_pickup = master_map.get((vendor, prev_bin), "")
+                        prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                         st_prev = (prev_secs + ARRIVAL_BUFFER_SECS) if prev_secs is not None else 0
                     else:
@@ -641,9 +647,9 @@ def _legacy_assign_processes_by_arrival_time(
                 try:
                     current_bin = int(order2)
                     # 前便入車時刻 + 10分 を引取開始下限に設定（日野以外は N-1 便）
-                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True, offset=1)
+                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=True, offset=1)
                     if prev_bin is not None:
-                        prev_pickup = master_map.get((vendor, prev_bin), "")
+                        prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                         if prev_secs is not None:
                             st = prev_secs + ARRIVAL_BUFFER_SECS
@@ -718,15 +724,21 @@ def _legacy_assign_processes_by_arrival_time(
                 }
             units[key]["rows"].append(row)
 
-            pickup = master_map.get((vendor, order2), "")
+            # KVCのみ: UKEIRE値でマスタキーの納入先部分を分割 (KVC-B7 / KVC-B3)
+            if vendor == "KVC":
+                _ukeire = str(row.get("UKEIRE", "")).strip()
+                lookup_vendor = f"KVC-{_ukeire}" if _ukeire else vendor
+            else:
+                lookup_vendor = vendor
+            pickup = master_map.get((lookup_vendor, order2), "")
             pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup)) if pickup else None
             if pickup_secs is None:
                 continue
             strict_deadline = max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS)
 
-            set_flag = bool(set_flag_map.get((vendor, order2), False))
+            set_flag = bool(set_flag_map.get((lookup_vendor, order2), False))
             shift_idx = _shift_index_for_secs(pickup_secs)
-            is_first_trip_in_shift = (vendor_shift_first_bin.get((vendor, shift_idx), "") == order2)
+            is_first_trip_in_shift = (vendor_shift_first_bin.get((lookup_vendor, shift_idx), "") == order2)
 
             if not has_set_flag_col:
                 if vendor == "武部":
@@ -736,9 +748,9 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False)
+                        prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False)
                         if prev_bin is not None:
-                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                             st = (prev_secs + 10 * 60) if prev_secs is not None else 0
                         else:
@@ -753,9 +765,9 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                        prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=True)
                         if prev_bin is not None:
-                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                             st = (prev_secs + 10 * 60) if prev_secs is not None else 0
                         else:
@@ -771,9 +783,9 @@ def _legacy_assign_processes_by_arrival_time(
             else:
                 try:
                     current_bin = int(order2)
-                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=True)
                     if prev_bin is not None:
-                        prev_pickup = master_map.get((vendor, prev_bin), "")
+                        prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                         st = (prev_secs + 10 * 60) if prev_secs is not None else 0
                     else:
