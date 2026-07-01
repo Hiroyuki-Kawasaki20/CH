@@ -1,0 +1,55 @@
+================================================================================
+【STEP4詳細】既存テストへの影響分析
+================================================================================
+
+【中リスク】PROC_MAIN(メイン工程)の割当結果をassertするテスト
+--------------------------------------------------------------------------------
+  test_hino_2lane.py:47
+    > assert row["山工程"] == PROC_MAIN
+  test_hino_2lane.py:69
+    > assert row["山工程"] == PROC_MAIN
+  test_hino_2lane.py:92
+    > assert row["山工程"] == PROC_MAIN
+  test_hino_2lane.py:118
+    > assert row["山工程"] == PROC_MAIN
+  test_hino_2lane.py:138
+    > assert row["山工程"] == PROC_MAIN
+  ... + 15 more
+
+  ⚠️  対策: 実装後に pytest を実行して、
+           落ちるテストのassert値を「正しい修正」か確認してから修正
+
+【中リスク】PROC_RELIEF(リリーフ工程)の割当結果をassertするテスト
+--------------------------------------------------------------------------------
+  test_sorter.py:797
+    > relief = result[result["山工程"] == PROC_RELIEF].sort_values("山通番")
+
+【中リスク】選択順(sequence)に依存するテスト
+--------------------------------------------------------------------------------
+  test_data_manager_display_path_ukeire.py:91
+    > assert set(b7_orders) == {"01", "07"}
+  test_data_manager_display_path_ukeire.py:92
+    > assert set(b3_orders) == {"01", "03"}
+  test_data_manager_display_path_ukeire.py:93
+    > assert "03" not in b7_orders
+  test_data_manager_display_path_ukeire.py:94
+    > assert "07" not in b3_orders
+  test_data_manager_display_path_ukeire.py:103
+    > assert set(b7_orders) == {"01", "07"}
+  ... + 11 more
+
+
+【実装後の対応フロー】
+--------------------------------------------------------------------------------
+1. 本実装完了後、以下を実行:
+   $ pytest tests/ -v --tb=short
+
+2. テスト失敗が出た場合:
+   a) 失敗内容を確認
+   b) eval締切キー適用で「正しく選択順が変わった」ことか確認
+   c) 「正しい修正」であればassert値を更新
+   d) 「想定外の副作用」であれば実装を再検討
+
+3. ★重要★ assert削除・緩和は禁止
+   - 落ちたテストのassert値は修正のみ
+   - 複数の便に副作用が出た場合は実装前に要再検証
