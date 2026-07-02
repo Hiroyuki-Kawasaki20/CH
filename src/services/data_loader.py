@@ -23,6 +23,24 @@ from ..utils.normalizer import (
 from ..utils.csv_utils import read_csv_ja
 
 
+_SET_FLAG_TRUTHY_VALUES = {"1", "true", "t", "yes", "y", "on", "〇", "○", "有", "あり", "☑"}
+
+
+def _is_truthy_set_flag(value) -> bool:
+    s = str(value).strip().lower()
+    return s in _SET_FLAG_TRUTHY_VALUES
+
+
+def set_flag_value_to_checkbox_mark(value) -> str:
+    """セットありフラグの保存値をTreeview表示用の記号へ変換する。"""
+    return "☑" if _is_truthy_set_flag(value) else "☐"
+
+
+def checkbox_mark_to_set_flag_value(value) -> str:
+    """Treeview表示値を保存用セットありフラグへ変換する。"""
+    return "1" if _is_truthy_set_flag(value) else ""
+
+
 # ===== 設定ファイル管理 =====
 def get_config_path() -> Path:
     if getattr(sys, 'frozen', False):

@@ -8,7 +8,13 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.services.data_loader import parse_ukeire_ch_excel
+from src.services.data_loader import (
+    parse_ukeire_ch_excel,
+    set_flag_value_to_checkbox_mark,
+    checkbox_mark_to_set_flag_value,
+    load_pickup_time_master_xlsx,
+    save_pickup_time_master_xlsx,
+)
 from src.utils.csv_utils import read_csv_ja
 
 
@@ -143,3 +149,58 @@ def test_parse_ukeire_ch_excel_converts_requested_vendor_rules(tmp_path):
     assert ("高岡", "03", "09:00") in recs
     assert ("三栄", "04", "10:00") in recs
     assert ("織機", "05", "11:00") in recs
+
+
+def test_set_flag_checkbox_roundtrip_matches_storage_value():
+    # 読込値 -> 表示記号 -> 保存値 -> 再表示の往復整合を確認
+    truthy_values = ["1", "true", "on", "あり", "○", "☑"]
+    for value in truthy_values:
+        mark = set_flag_value_to_checkbox_mark(value)
+        assert mark == "☑"
+        stored = checkbox_mark_to_set_flag_value(mark)
+        assert stored == "1"
+        mark2 = set_flag_value_to_checkbox_mark(stored)
+        assert mark2 == "☑"
+
+    falsy_values = ["", "0", "false", "off", "nan", "☐"]
+    for value in falsy_values:
+        mark = set_flag_value_to_checkbox_mark(value)
+        assert mark == "☐"
+        stored = checkbox_mark_to_set_flag_value(mark)
+        assert stored == ""
+        mark2 = set_flag_value_to_checkbox_mark(stored)
+        assert mark2 == "☐"
+
+
+def test_existing_zero_flag_is_off_display_and_normalized_to_empty_on_save(tmp_path):
+    master_path = tmp_path / "入車時間マスタ.xlsx"
+
+    # 既存データを想定: 0/空が混在
+    src_df = pd.DataFrame(
+        [
+            {"OData_納入先": "A", "NONYUHIBIN": "01", "入車時間": "08:00", "セットありフラグ": "0"},
+            {"OData_納入先": "B", "NONYUHIBIN": "02", "入車時間": "09:00", "セットありフラグ": ""},
+        ]
+    )
+    save_pickup_time_master_xlsx(src_df, master_path)
+
+    loaded = load_pickup_time_master_xlsx(master_path)
+    loaded_flags = loaded["セットありフラグ"].astype(str).tolist()
+    assert loaded_flags[0] == "0"
+    assert [set_flag_value_to_checkbox_mark(v) for v in loaded_flags] == ["☐", "☐"]
+
+    # 画面の☐をcollectした結果を模擬: OFFは空文字へ統一
+    normalized_for_save = loaded.copy()
+    normalized_for_save["セットありフラグ"] = [
+        checkbox_mark_to_set_flag_value(set_flag_value_to_checkbox_mark(v))
+        for v in loaded["セットありフラグ"].tolist()
+    ]
+    assert list(normalized_for_save["セットありフラグ"].astype(str)) == ["", ""]
+
+    save_pickup_time_master_xlsx(normalized_for_save, master_path)
+    # ファイル上の保存値は空へ統一されること
+    raw_after_save = pd.read_excel(master_path, dtype=str, sheet_name=0).fillna("")
+    assert list(raw_after_save["セットありフラグ"].astype(str)) == ["", ""]
+
+    reloaded = load_pickup_time_master_xlsx(master_path)
+    assert [set_flag_value_to_checkbox_mark(v) for v in reloaded["セットありフラグ"].astype(str).tolist()] == ["☐", "☐"]
