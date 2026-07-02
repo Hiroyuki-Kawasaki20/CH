@@ -1703,18 +1703,32 @@ class App(ctk.CTk):
             # 山配下の各パレット明細を同時表示
             sub2 = sub.copy()
             sub2["工程内No"] = pd.to_numeric(sub2.get("工程内No", 0), errors="coerce").fillna(0).astype(int)
-            sub2["移動工数"] = pd.to_numeric(sub2.get("移動工数", np.nan), errors="coerce")
+            # 移動工数列が存在しない山でも KeyError にならないようガード
+            if "移動工数" in sub2.columns:
+                sub2["移動工数"] = pd.to_numeric(sub2["移動工数"], errors="coerce")
+            else:
+                sub2["移動工数"] = float("nan")
             sub2["高さ"] = pd.to_numeric(sub2.get("高さ", np.nan), errors="coerce")
             sub2["_store_key"] = sub2.get("ストア", sub2.get("SYUKKASAKI", "")).astype(str).str.strip()
             sub2["_order_key"] = sub2.get("NONYUHIBIN", "").astype(str).str.strip()
-            # GUI表示はストア単位にまとまるように並べる（I12-B-5 -> I12-B-3 など）。
+            # build_groupeddata_json_for_mountain() の採番ルールと同一キーで並べる:
+            # 第1キー: 移動工数 昇順（na は末尾）、第2キー: SEBANGO 昇順（なければ工程内No 昇順）
+            _detail_sort_by = ["移動工数"]
+            _detail_asc = [True]
+            if "SEBANGO" in sub2.columns:
+                _detail_sort_by.append("SEBANGO")
+                _detail_asc.append(True)
+            else:
+                _detail_sort_by.append("工程内No")
+                _detail_asc.append(True)
             sub2 = sub2.sort_values(
-                by=["_store_key", "_order_key", "工程内No", "移動工数"],
-                ascending=[False, True, True, False]
+                by=_detail_sort_by,
+                ascending=_detail_asc,
+                na_position="last",
             )
             display_rows = list(sub2.iterrows())
             prev_key = None
-            for idx, (_, row) in enumerate(reversed(display_rows), start=1):
+            for idx, (_, row) in enumerate(display_rows, start=1):
                 store_text = str(row.get("ストア", row.get("SYUKKASAKI", ""))).strip()
                 order_text = str(row.get("NONYUHIBIN", "")).strip()
                 base_detail_tag = detail_tag if (idx % 2 == 1) else f"mtn_{parity}_detail_alt"

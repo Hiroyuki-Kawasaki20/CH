@@ -216,21 +216,25 @@ def build_groupeddata_json_for_mountain(sub_rows: pd.DataFrame) -> str:
         df["OData__x7d0d__x5165__x5148_"] = df.get("納入先", "").astype(str)
     if "引取済" not in df.columns:
         df["引取済"] = ""
-    sort_plan = [
-        ("OData__x7d0d__x5165__x5148_", True),
-        ("OData__x30b9__x30c8__x30a2_", True),
-        ("工程内No", True),
-        ("移動工数", False),
-    ]
-    by, asc = [], []
-    for c, a in sort_plan:
-        if c in df.columns:
-            by.append(c)
-            asc.append(a)
-    if by:
-        if "移動工数" in by:
-            df["移動工数"] = pd.to_numeric(df["移動工数"], errors="coerce")
-        df = df.sort_values(by=by, ascending=asc)
+
+    # 移動工数を数値化（ソート前に実施）。列が存在しない場合は NaN で補完する。
+    if "移動工数" in df.columns:
+        df["移動工数"] = pd.to_numeric(df["移動工数"], errors="coerce")
+    else:
+        df["移動工数"] = float("nan")
+
+    # 番号採番ルール: 移動工数の昇順を最優先キーとする。
+    # 同値の場合は SEBANGO 昇順（存在すれば）、なければ 工程内No 昇順 で安定化。
+    sort_by = ["移動工数"]
+    sort_asc = [True]
+    if "SEBANGO" in df.columns:
+        sort_by.append("SEBANGO")
+        sort_asc.append(True)
+    elif "工程内No" in df.columns:
+        sort_by.append("工程内No")
+        sort_asc.append(True)
+
+    df = df.sort_values(by=sort_by, ascending=sort_asc, na_position="last")
     df = df.reset_index(drop=True)
     df["番号"] = np.arange(1, len(df) + 1)
     cols = ["OData__x30b9__x30c8__x30a2_", "NONYUHIBIN", "UKEIRE",
@@ -492,7 +496,7 @@ def attach_pickup_start_time(
             return None
         try:
             hh, mm = s.split(":", 1)
-            return int(hh) * 60 + int(mm)
+            return int(hh) * 66 + int(mm)
         except Exception:
             return None
 
