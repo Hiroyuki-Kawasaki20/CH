@@ -35,6 +35,7 @@ from src.services.data_loader import (
     load_data, DataManager,
     get_master_path, load_pickup_time_master_xlsx, save_pickup_time_master_xlsx,
     parse_ukeire_ch_excel, load_config, save_config, get_export_dir,
+    set_flag_value_to_checkbox_mark, checkbox_mark_to_set_flag_value,
 )
 from src.services.sorter import (
     run_pipeline, build_all_mountain_details, create_battery_change_mountain,
@@ -504,15 +505,11 @@ class App(ctk.CTk):
 
     def _build_setboard_tab(self, tab):
         """セットボード: メイン/リリーフ/あふれの3レーン表示"""
-        C_ACCENT = "#4361EE"
         header_frame = ctk.CTkFrame(tab, fg_color="transparent")
         header_frame.pack(fill="x", padx=10, pady=(10, 5))
         ctk.CTkLabel(header_frame, text="📋 セットボード（メイン / リリーフ / あふれ）",
                      font=ctk.CTkFont(family="Meiryo UI", size=14, weight="bold"),
                      anchor="w").pack(side="left")
-        ctk.CTkButton(header_frame, text="山を移動", command=self._move_mountain_dialog, width=100,
-                      fg_color=C_ACCENT, font=ctk.CTkFont(family="Meiryo UI", size=12),
-                      corner_radius=8).pack(side="right", padx=4)
 
         lanes_frame = ctk.CTkFrame(tab, fg_color="transparent")
         lanes_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -676,6 +673,9 @@ class App(ctk.CTk):
         ctk.CTkButton(master_btn_frame, text="全受入CHからインポート", command=self.import_from_ukeire_sheet,
                   fg_color="#2A9D8F", hover_color="#238478", text_color="white", width=190,
                   font=self._btn_font, corner_radius=8).pack(side="left", padx=2)
+        ctk.CTkButton(master_btn_frame, text="入車時間マスタ.xlsx から直接取込", command=self.import_from_master_xlsx,
+              fg_color="#1D6F42", hover_color="#165C37", text_color="white", width=250,
+              font=self._btn_font, corner_radius=8).pack(side="left", padx=2)
 
         self.master_tree = ttk.Treeview(
             tab, columns=("OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"), show="headings", height=20)
@@ -689,6 +689,7 @@ class App(ctk.CTk):
                 w = 120
             self.master_tree.column(c, width=w, anchor="w")
         self.master_tree.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        self.master_tree.bind("<Button-1>", self.on_master_tree_click)
         self.master_tree.bind("<Double-1>", self.edit_master_row)
 
     def _build_selection_tab(self, tab):
@@ -749,7 +750,7 @@ class App(ctk.CTk):
         self._route_display_to_internal.clear()
         routes = self.data_mgr.get_routes()
         display_routes = []
-        
+
         for r in routes:
             if r == "KVC" and self.master_data is not None and not self.master_data.empty:
                 # KVCの場合、master_data から "KVC-B7", "KVC-B3" を抽出
@@ -764,10 +765,11 @@ class App(ctk.CTk):
             else:
                 display_routes.append(r)
                 self._route_display_to_internal[r] = {"route": r, "ukeire": None}  # 辞書化
-        
+
         for r in display_routes:
             self.route_list.insert("end", r)
         self.refresh_candidates()
+
 
     def _selection_exists_in_data(self, sel: dict) -> bool:
         """選択済みレコードが再読込後データにも存在するか判定。"""
@@ -1763,82 +1765,6 @@ class App(ctk.CTk):
         # 同時表示レイアウトのため、選択で他ビュー更新は行わない
         return
 
-    def _extract_selected_yama(self) -> int | None:
-        selected = self.sb_main_tree.selection() or self.sb_relief_tree.selection() or self.sb_overflow_tree.selection()
-        if not selected:
-            return None
-        iid = selected[0]
-        try:
-            if isinstance(iid, str) and iid.startswith("sb:"):
-                # sb:<工程>:<山通番>
-                return int(iid.split(":")[-1])
-            if isinstance(iid, str) and iid.startswith("sbd:"):
-                # sbd:<工程>:<山通番>:<行番号>
-                parts = iid.split(":")
-                return int(parts[2])
-        except Exception:
-            pass
-
-        # iid解釈に失敗した場合は表示値から山通番を取得
-        tree = self.sb_main_tree if self.sb_main_tree.selection() else (
-            self.sb_relief_tree if self.sb_relief_tree.selection() else self.sb_overflow_tree
-        )
-        vals = tree.item(iid, "values")
-        if vals and len(vals) >= 2:
-            try:
-                return int(vals[1])
-            except Exception:
-                return None
-        return None
-
-    def _move_mountain_dialog(self):
-        """山を手動でメイン⇔リリーフ間移動"""
-        yama = self._extract_selected_yama()
-        if yama is None:
-            messagebox.showinfo("山移動", "移動する山をセットボードで選択してください。")
-            return
-        current_proc = self.mountain_proc_map.get(yama, PROC_MAIN)
-        new_proc = PROC_RELIEF if current_proc == PROC_MAIN else PROC_MAIN
-        new_label = PROC_RELIEF_LABEL if new_proc == PROC_RELIEF else PROC_MAIN_LABEL
-        if not messagebox.askyesno("山移動確認", f"山{yama} を「{new_label}」に移動しますか？"):
-            return
-        self.mountain_proc_map[yama] = new_proc
-        if self.mountain_proc is not None and not self.mountain_proc.empty:
-            try:
-                self.mountain_proc.loc[
-                    pd.to_numeric(self.mountain_proc.get("山通番", 0), errors="coerce").fillna(0).astype(int) == int(yama),
-                    "山工程"
-                ] = new_proc
-            except Exception:
-                pass
-        if not self.proc_details.empty:
-            self.proc_details.loc[self.proc_details["山通番"] == yama, "工程"] = new_proc
-
-        # 手動移動後に遅延警告を更新し、古い「あふれ」表示を残さない。
-        try:
-            live_master_df = self._collect_master_from_tree()
-            self.late_relief_warnings = self._collect_late_relief_warnings(live_master_df)
-        except Exception:
-            pass
-
-        self.proc_summary = compute_proc_summary(self.proc_details, self.mountain_proc_map)
-        self.update_kb_views()
-        self.update_setboard_views()
-        self._update_status()
-        # 操作ログ
-        try:
-            log_path = Path(self.export_dir) / "reassign_log.csv"
-            log_entry = pd.DataFrame([{
-                "日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "山通番": yama, "変更前": current_proc, "変更後": new_proc,
-            }])
-            if log_path.exists():
-                existing = pd.read_csv(log_path)
-                log_entry = pd.concat([existing, log_entry], ignore_index=True)
-            log_entry.to_csv(log_path, index=False, encoding="utf-8-sig")
-        except Exception:
-            pass
-
     # ===== 入車時間マスタ管理 =====
     def _initial_load_master(self):
         try:
@@ -1851,18 +1777,11 @@ class App(ctk.CTk):
 
     def save_master(self):
         try:
-            rows = []
-            for iid in self.master_tree.get_children():
-                values = self.master_tree.item(iid, "values")
-                if len(values) >= 3:
-                    rows.append({"OData_納入先": str(values[0]).strip(),
-                                 "NONYUHIBIN": str(values[1]).strip(),
-                                 "入車時間": str(values[2]).strip(),
-                                 "セットありフラグ": str(values[3]).strip() if len(values) >= 4 else ""})
-            if not rows:
+            master_df = self._collect_master_from_tree()
+            if master_df.empty:
                 messagebox.showwarning("マスタ保存", "保存するデータがありません。")
                 return
-            self.master_data = pd.DataFrame(rows)
+            self.master_data = master_df.copy()
             save_pickup_time_master_xlsx(self.master_data, get_master_path())
             messagebox.showinfo("マスタ保存", f"保存しました。件数: {len(self.master_data)}件")
         except Exception as e:
@@ -1870,19 +1789,10 @@ class App(ctk.CTk):
 
     def _save_master_silent(self):
         """ダイアログなしで入車時間マスタを保存（終了時オートセーブ用）。"""
-        rows = []
-        for iid in self.master_tree.get_children():
-            values = self.master_tree.item(iid, "values")
-            if len(values) >= 3:
-                rows.append({
-                    "OData_納入先": str(values[0]).strip(),
-                    "NONYUHIBIN": str(values[1]).strip(),
-                    "入車時間": str(values[2]).strip(),
-                    "セットありフラグ": str(values[3]).strip() if len(values) >= 4 else "",
-                })
-        if not rows:
+        master_df = self._collect_master_from_tree()
+        if master_df.empty:
             return
-        self.master_data = pd.DataFrame(rows)
+        self.master_data = master_df.copy()
         save_pickup_time_master_xlsx(self.master_data, get_master_path())
 
     def refresh_master_tree(self):
@@ -1895,7 +1805,22 @@ class App(ctk.CTk):
                                     values=(str(row.get("OData_納入先", "")),
                                             str(row.get("NONYUHIBIN", "")),
                                             str(row.get("入車時間", "")),
-                                            str(row.get("セットありフラグ", ""))))
+                                            set_flag_value_to_checkbox_mark(row.get("セットありフラグ", ""))))
+
+    def on_master_tree_click(self, event):
+        """セットありフラグ列（4列目）のクリック時のみ☑/☐をトグルする。"""
+        row_id = self.master_tree.identify_row(event.y)
+        col_id = self.master_tree.identify_column(event.x)
+        if not row_id or col_id != "#4":
+            return None
+
+        values = list(self.master_tree.item(row_id, "values"))
+        if len(values) < 4:
+            return "break"
+        current_mark = str(values[3]).strip()
+        values[3] = "☑" if current_mark != "☑" else "☐"
+        self.master_tree.item(row_id, values=tuple(values))
+        return "break"
 
     def _collect_master_from_tree(self) -> pd.DataFrame:
         """画面上の入車時間マスタ（未保存編集を含む）をDataFrame化する。"""
@@ -1909,7 +1834,7 @@ class App(ctk.CTk):
                     "OData_納入先": str(values[0]).strip(),
                     "NONYUHIBIN": str(values[1]).strip(),
                     "入車時間": str(values[2]).strip(),
-                    "セットありフラグ": str(values[3]).strip() if len(values) >= 4 else "",
+                    "セットありフラグ": checkbox_mark_to_set_flag_value(values[3]) if len(values) >= 4 else "",
                 })
         except Exception:
             return pd.DataFrame(columns=["OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"])
@@ -1947,7 +1872,10 @@ class App(ctk.CTk):
             except Exception:
                 pass
             new_id = f"m:new_{len(self.master_tree.get_children())}"
-            self.master_tree.insert("", "end", iid=new_id, values=(d, b, t, f))
+            self.master_tree.insert(
+                "", "end", iid=new_id,
+                values=(d, b, t, set_flag_value_to_checkbox_mark(f))
+            )
             dialog.destroy()
 
         ctk.CTkButton(dialog, text="追加", command=do_add, fg_color="#28a745").grid(row=4, column=0, columnspan=2, pady=16)
@@ -1992,7 +1920,7 @@ class App(ctk.CTk):
         time_var = tk.StringVar(value=values[2])
         ctk.CTkEntry(dialog, textvariable=time_var, width=240).grid(row=2, column=1, padx=10, pady=10)
         ctk.CTkLabel(dialog, text="セットありフラグ(1/0):").grid(row=3, column=0, padx=14, pady=10, sticky="w")
-        set_var = tk.StringVar(value=values[3] if len(values) >= 4 else "")
+        set_var = tk.StringVar(value=checkbox_mark_to_set_flag_value(values[3]) if len(values) >= 4 else "")
         ctk.CTkEntry(dialog, textvariable=set_var, width=240).grid(row=3, column=1, padx=10, pady=10)
 
         def do_update():
@@ -2005,7 +1933,7 @@ class App(ctk.CTk):
                 b = f"{int(b):02d}"
             except Exception:
                 pass
-            self.master_tree.item(iid, values=(d, b, t, f))
+            self.master_tree.item(iid, values=(d, b, t, set_flag_value_to_checkbox_mark(f)))
             dialog.destroy()
 
         ctk.CTkButton(dialog, text="更新", command=do_update, fg_color="#0d6efd").grid(row=4, column=0, columnspan=2, pady=16)
@@ -2035,15 +1963,34 @@ class App(ctk.CTk):
         if not messagebox.askyesno("インポート確認", msg):
             return
 
-        for iid in self.master_tree.get_children():
-            self.master_tree.delete(iid)
-        for i, row in df.iterrows():
-            self.master_tree.insert(
-                "", "end", iid=f"m:{i}",
-                values=(str(row["OData_納入先"]), str(row["NONYUHIBIN"]), str(row["入車時間"]), "")
-            )
-        self.master_data = df
+        df_for_view = df.copy()
+        if "セットありフラグ" not in df_for_view.columns:
+            df_for_view["セットありフラグ"] = ""
+        df_for_view = df_for_view[["OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"]]
+        self.master_data = df_for_view.copy()
+        self.refresh_master_tree()
         messagebox.showinfo("インポート完了", f"受入=CH の {len(df)} 件をインポートしました。")
+
+    def import_from_master_xlsx(self):
+        """入車時間マスタ.xlsx を直接読込して画面のマスタ表示を全置換する。"""
+        master_path = get_master_path()
+        try:
+            df = load_pickup_time_master_xlsx(master_path)
+        except Exception as e:
+            messagebox.showerror("取込エラー", str(e))
+            return
+
+        if df.empty:
+            if not messagebox.askyesno("取込確認", "マスタが空です。取込を続けますか？"):
+                return
+
+        if not messagebox.askyesno("取込確認", "既存の表示内容を取込内容で全置換します。よろしいですか？"):
+            return
+
+        self.master_data = df[["OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"]].copy()
+        self.refresh_master_tree()
+
+        messagebox.showinfo("取込完了", f"{master_path.name} から {len(df)} 件を取込しました。")
 
 
 def main():
