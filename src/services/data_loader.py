@@ -307,14 +307,28 @@ class DataManager:
         routes = [r for r in routes if r and r not in {"日野EH", "武部"}]
         return sorted(routes)
 
-    def get_receipts_for_route(self, route_name: str) -> list:
-        receipts = self.df_places.loc[self.df_places["便名"] == route_name, "受入"].unique().tolist()
-        return sorted(receipts)
+    def get_receipts_for_route(self, route_name: str, ukeire: Optional[str] = None) -> list:
+        ps = self.df_places[self.df_places["便名"] == route_name]
+        receipts = ps["受入"].unique().tolist()
+        if not (ukeire and "UKEIRE" in self.df_shipments.columns):
+            return sorted(receipts)
 
-    def get_orders_for_route(self, route_name: str) -> list:
+        ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
+        filtered_receipts = set()
+        for _, row in ps.iterrows():
+            m = self._mask_for_place_row(row) & ukeire_mask
+            if m.sum() > 0:
+                filtered_receipts.add(row["受入"])
+        return sorted(filtered_receipts)
+
+    def get_orders_for_route(self, route_name: str, ukeire: Optional[str] = None) -> list:
         ps = self.df_places[self.df_places["便名"] == route_name]
         if ps.empty:
             m = self._fallback_mask(route_name)
+            # UKEIRE 絞り込み
+            if ukeire and "UKEIRE" in self.df_shipments.columns:
+                ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
+                m = m & ukeire_mask
             if m.sum() == 0:
                 return []
             return sorted(self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
@@ -322,47 +336,76 @@ class DataManager:
         for _, row in ps.iterrows():
             m = self._mask_for_place_row(row)
             mask_total = m if mask_total is None else (mask_total | m)
+        # UKEIRE 絞り込み
+        if ukeire and "UKEIRE" in self.df_shipments.columns:
+            ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
+            mask_total = mask_total & ukeire_mask
         out = sorted(self.df_shipments.loc[mask_total, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
         if out:
             return out
         m = self._fallback_mask(route_name)
+        # UKEIRE 絞り込み（fallback）
+        if ukeire and "UKEIRE" in self.df_shipments.columns:
+            ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
+            m = m & ukeire_mask
         return sorted(self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
 
-    def get_orders_for_route_receipt(self, route_name: str, receipt: str) -> list:
+    def get_orders_for_route_receipt(self, route_name: str, receipt: str, ukeire: Optional[str] = None) -> list:
         ps = self.df_places[(self.df_places["便名"] == route_name) & (self.df_places["受入"] == receipt)]
         if ps.empty:
             m = self._fallback_mask(route_name, receipt=receipt)
+            if ukeire and "UKEIRE" in self.df_shipments.columns:
+                ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
+                m = m & ukeire_mask
             if m.sum() == 0:
                 return []
             return sorted(self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
-        orders = set()
+
+        mask_total = None
+        ukeire_mask = None
+        if ukeire and "UKEIRE" in self.df_shipments.columns:
+            ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
+
         for _, row in ps.iterrows():
             m = self._mask_for_place_row(row)
-            matched_orders = self.df_shipments.loc[m, "NONYUHIBIN"].unique().tolist()
-            orders.update(matched_orders)
-        out = sorted([str(o) for o in orders], reverse=True)
-        if out:
-            return out
-        m = self._fallback_mask(route_name, receipt=receipt)
-        return sorted(self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
+            if ukeire_mask is not None:
+                m = m & ukeire_mask
+            mask_total = m if mask_total is None else (mask_total | m)
 
-    def get_receipts_for_route_order(self, route_name: str, order: str) -> list:
+        if mask_total is None or mask_total.sum() == 0:
+            m = self._fallback_mask(route_name, receipt=receipt)
+            if ukeire_mask is not None:
+                m = m & ukeire_mask
+            return sorted(self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
+
+        return sorted(self.df_shipments.loc[mask_total, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
+
+    def get_receipts_for_route_order(self, route_name: str, order: str, ukeire: Optional[str] = None) -> list:
         ps = self.df_places[self.df_places["便名"] == route_name]
         receipts = set()
         for _, row in ps.iterrows():
             m = self._mask_for_place_row(row) & (self.df_shipments["NONYUHIBIN"] == str(order))
+            # UKEIRE 絞り込み
+            if ukeire and "UKEIRE" in self.df_shipments.columns:
+                ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
+                m = m & ukeire_mask
             if m.sum() > 0:
                 receipts.add(row["受入"])
         out = sorted(receipts)
         if out:
             return out
         m = self._fallback_mask(route_name, order=order)
+        if ukeire and "UKEIRE" in self.df_shipments.columns:
+            ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
+            m = m & ukeire_mask
         if m.sum() == 0:
             return []
         return sorted(self.df_shipments.loc[m, "UKEIRE"].astype(str).unique().tolist())
 
     def filter_shipments(self, selections: list) -> pd.DataFrame:
-        """selections: list of {"便名","受入","オーダー"}"""
+        """selections: list of {"便名","受入","オーダー"[,"ukeire"]}
+        ukeire: オプション。指定時は UKEIRE 列でさらに絞り込む（KVC専用）
+        """
         masks = []
         for sel in selections:
             ps = self.df_places[
@@ -377,12 +420,23 @@ class DataManager:
                     (self.df_shipments["NONYUHIBIN"] == sel["オーダー"])
                 )
                 sub_mask_total = sub_mask if sub_mask_total is None else (sub_mask_total | sub_mask)
+
+            # UKEIRE フィルタ（sel に ukeire が指定されている場合）
+            if sub_mask_total is not None:
+                if sel.get("ukeire") and "UKEIRE" in self.df_shipments.columns:
+                    ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(sel["ukeire"]).strip()
+                    sub_mask_total = sub_mask_total & ukeire_mask
             if sub_mask_total is not None:
                 masks.append(sub_mask_total)
+
         if not masks:
             fallback_masks = []
             for sel in selections:
                 fb = self._fallback_mask(sel["便名"], receipt=sel["受入"], order=sel["オーダー"])
+                # UKEIRE フィルタ（fallback でも適用）
+                if sel.get("ukeire") and "UKEIRE" in self.df_shipments.columns:
+                    ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(sel["ukeire"]).strip()
+                    fb = fb & ukeire_mask
                 fallback_masks.append(fb)
             if not fallback_masks:
                 return pd.DataFrame()
@@ -390,6 +444,7 @@ class DataManager:
             for fm in fallback_masks[1:]:
                 final_fb |= fm
             return self.df_shipments.loc[final_fb].copy()
+        
         final_mask = masks[0]
         for m in masks[1:]:
             final_mask |= m
@@ -400,6 +455,10 @@ class DataManager:
         fallback_masks = []
         for sel in selections:
             fb = self._fallback_mask(sel["便名"], receipt=sel["受入"], order=sel["オーダー"])
+            # UKEIRE フィルタ（fallback 最後の段階でも適用）
+            if sel.get("ukeire") and "UKEIRE" in self.df_shipments.columns:
+                ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(sel["ukeire"]).strip()
+                fb = fb & ukeire_mask
             fallback_masks.append(fb)
         if not fallback_masks:
             return out
@@ -554,6 +613,9 @@ def _expand_ch_master_vendors(raw_vendor: str, vendor_map: Optional[dict]) -> Li
     # 現場指定の固定変換
     if normalized.endswith("-TP") or normalized == "TP":
         return ["日野"]
+    # KVC-B7 / KVC-B3 のようなハイフン区切りKVC受入分割名はそのまま保持する
+    if normalized.startswith("KVC-") and normalized not in ("KVC-"):
+        return [base]
     if normalized.endswith("-KVC") or normalized == "KVC":
         return ["KVC"]
     if normalized.endswith("-RH") or normalized == "RH":

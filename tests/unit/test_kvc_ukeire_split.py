@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import pytest
 import pandas as pd
 
-from src.services.sorter import _add_arrival_time_column
+from src.services.sorter import _add_arrival_time_column, _build_size1_mixed
 
 
 # ===========================================================================
@@ -186,3 +186,114 @@ class TestNonKvcVendorUnchangedRegression:
         assert hino_arrival == "07:30", f"日野の入車時間が不正: {hino_arrival}"
         # KVC-B7 のような入車時間ではないこと
         assert hino_arrival not in ("11:00", "13:00")
+
+
+class TestSize1MixedMergeByArrivalVendorException:
+    """サイズ1/21の便違い混載で、KVC・元町のみ入車時間一致例外を検証する。"""
+
+    def test_kvc_same_arrival_different_bins_are_merged(self):
+        expanded = pd.DataFrame([
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070505", "UKEIRE": "B7",
+                "納入先": "KVC", "入車時間": "14:11", "高さ": 900.0, "移動工数": 10.0,
+            },
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070508", "UKEIRE": "B3",
+                "納入先": "KVC", "入車時間": "14:11", "高さ": 900.0, "移動工数": 9.0,
+            },
+        ])
+
+        _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
+        assert details["山通番"].nunique() == 1
+
+    def test_motomachi_same_arrival_different_bins_are_merged(self):
+        expanded = pd.DataFrame([
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070605", "UKEIRE": "M1",
+                "納入先": "元町A", "入車時間": "15:20", "高さ": 900.0, "移動工数": 10.0,
+            },
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070608", "UKEIRE": "M2",
+                "納入先": "元町A", "入車時間": "15:20", "高さ": 900.0, "移動工数": 9.0,
+            },
+        ])
+
+        _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
+        assert details["山通番"].nunique() == 1
+
+    def test_kvc_different_arrival_different_bins_are_split(self):
+        expanded = pd.DataFrame([
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070705", "UKEIRE": "B7",
+                "納入先": "KVC", "入車時間": "14:11", "高さ": 900.0, "移動工数": 10.0,
+            },
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070708", "UKEIRE": "B3",
+                "納入先": "KVC", "入車時間": "14:30", "高さ": 900.0, "移動工数": 9.0,
+            },
+        ])
+
+        _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
+        assert details["山通番"].nunique() == 2
+
+    def test_non_exception_vendor_same_arrival_different_bins_still_split(self):
+        expanded = pd.DataFrame([
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070805", "UKEIRE": "A",
+                "納入先": "日野", "入車時間": "14:11", "高さ": 900.0, "移動工数": 10.0,
+            },
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070808", "UKEIRE": "B",
+                "納入先": "日野", "入車時間": "14:11", "高さ": 900.0, "移動工数": 9.0,
+            },
+        ])
+
+        _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
+        assert details["山通番"].nunique() == 2
+
+    def test_tmk_alias_same_arrival_different_bins_are_merged(self):
+        expanded = pd.DataFrame([
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070905", "UKEIRE": "B7",
+                "納入先": "TMK", "入車時間": "14:11", "高さ": 900.0, "移動工数": 10.0,
+                "ストア": "C15-A-1", "HINBAN": "581167801100",
+            },
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026070908", "UKEIRE": "B3",
+                "納入先": "TMK", "入車時間": "14:11", "高さ": 900.0, "移動工数": 9.0,
+                "ストア": "C15-A-1", "HINBAN": "581167801100",
+            },
+        ])
+
+        _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
+        assert details["山通番"].nunique() == 1
+
+    def test_tmk_alias_different_arrival_different_bins_are_split(self):
+        expanded = pd.DataFrame([
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026071005", "UKEIRE": "B7",
+                "納入先": "TMK", "入車時間": "14:11", "高さ": 900.0, "移動工数": 10.0,
+            },
+            {
+                "サイズ種類": "1", "NONYUHIBIN": "2026071008", "UKEIRE": "B3",
+                "納入先": "TMK", "入車時間": "14:30", "高さ": 900.0, "移動工数": 9.0,
+            },
+        ])
+
+        _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
+        assert details["山通番"].nunique() == 2
+
+    def test_tmk_alias_size21_same_arrival_different_bins_are_merged(self):
+        expanded = pd.DataFrame([
+            {
+                "サイズ種類": "21", "NONYUHIBIN": "2026071105", "UKEIRE": "B7",
+                "納入先": "TMK", "入車時間": "14:11", "高さ": 700.0, "移動工数": 10.0,
+            },
+            {
+                "サイズ種類": "21", "NONYUHIBIN": "2026071108", "UKEIRE": "B3",
+                "納入先": "TMK", "入車時間": "14:11", "高さ": 700.0, "移動工数": 9.0,
+            },
+        ])
+
+        _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
+        assert details["山通番"].nunique() == 1

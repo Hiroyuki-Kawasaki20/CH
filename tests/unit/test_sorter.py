@@ -19,7 +19,8 @@ from src.services.sorter import (
 from src.services.scheduler import cluster_by_store
 from src.services.process_assigner import (
     _time_to_seconds, _seconds_to_hhmm, _adjust_start_for_breaks,
-    _calc_work_end_with_breaks,
+    _calc_work_end_with_breaks, _to_operational_timeline_secs,
+    DAY_SECS, ARRIVAL_BUFFER_SECS,
     compute_proc_details, assign_processes_by_arrival_time,
     compute_proc_summary,
 )
@@ -135,6 +136,58 @@ class TestGrouping:
         hino02 = details[(details["納入先"].astype(str) == "日野EH") & (details["NONYUHIBIN"].astype(str).str.endswith("02"))]
         assert not kvc.empty and not hino02.empty
         assert int(kvc["山通番"].iloc[0]) != int(hino02["山通番"].iloc[0])
+
+    def test_takaoka_size17_adjacent_mountains_are_merged(self):
+        """高岡(K5)サイズ17で同一便・同一入車時間の隣接山は統合される。"""
+        det17 = pd.DataFrame([
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-5", "SEBANGO": "716", "サイズ種類": "17", "移動工数": 16.6501, "高さ": 830},
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+            {"グループ番号": 2, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+        ])
+
+        out = build_all_mountain_details({"17": det17}, pd.DataFrame())
+        assert out["山通番"].nunique() == 1
+        assert len(out) == 3
+        summary = out.groupby("山通番").agg(
+            パレット数=("山通番", "size"),
+            Max移動工数=("移動工数", "max"),
+        ).reset_index()
+        assert int(summary.loc[0, "パレット数"]) == 3
+        assert float(summary.loc[0, "Max移動工数"]) == pytest.approx(16.6501, abs=1e-4)
+
+    def test_non_takaoka_size17_adjacent_mountains_are_merged(self):
+        """サイズ17統合は全出荷先対象のため、高岡以外でも同条件なら統合される。"""
+        det17 = pd.DataFrame([
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-5", "SEBANGO": "716", "サイズ種類": "17", "移動工数": 16.6501, "高さ": 830},
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+            {"グループ番号": 2, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+        ])
+
+        out = build_all_mountain_details({"17": det17}, pd.DataFrame())
+        assert out["山通番"].nunique() == 1
+        assert len(out) == 3
+
+    def test_non_size17_mountains_remain_split_regression(self):
+        """サイズ17以外は統合後処理の対象外で、従来どおり分割を維持する。"""
+        det18 = pd.DataFrame([
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-5", "SEBANGO": "716", "サイズ種類": "18", "移動工数": 16.6501, "高さ": 830},
+            {"グループ番号": 1, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "18", "移動工数": 16.6500, "高さ": 830},
+            {"グループ番号": 2, "入車時間": "13:01", "NONYUHIBIN": "2026062503", "納入先": "KVC", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "18", "移動工数": 16.6500, "高さ": 830},
+        ])
+
+        out = build_all_mountain_details({"18": det18}, pd.DataFrame())
+        assert out["山通番"].nunique() == 2
+
+    def test_size17_mountains_with_different_arrival_are_not_merged(self):
+        """サイズ17でも入車時間が異なる山は統合しない。"""
+        det17 = pd.DataFrame([
+            {"グループ番号": 1, "入車時間": "07:55", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-5", "SEBANGO": "716", "サイズ種類": "17", "移動工数": 16.6501, "高さ": 830},
+            {"グループ番号": 1, "入車時間": "07:55", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+            {"グループ番号": 2, "入車時間": "08:03", "NONYUHIBIN": "2026062503", "納入先": "高岡", "UKEIRE": "K5", "ストア": "Q9-A-1", "SEBANGO": "715", "サイズ種類": "17", "移動工数": 16.6500, "高さ": 830},
+        ])
+
+        out = build_all_mountain_details({"17": det17}, pd.DataFrame())
+        assert out["山通番"].nunique() == 2
 
 
 class TestProcessAssigner:
@@ -599,8 +652,8 @@ class TestProcessAssigner:
         result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
         assert result.loc[result["山通番"] == 1, "山工程"].iloc[0] == PROC_MAIN
 
-    def test_set_flag_overnight_hino01_uses_shift2_limit_not_shift1_limit(self):
-        """日付またぎ日野01(セットあり)は前便由来の深夜帯を基準に2直上限を使う。"""
+    def test_set_flag_overnight_hino01_uses_24h_continuous_floor(self):
+        """日付またぎ日野01(セットあり)は24h連続表記の開始下限を使い、メインで成立する。"""
         df = pd.DataFrame({
             "山通番": [1],
             "移動工数": [0],
@@ -618,6 +671,66 @@ class TestProcessAssigner:
         result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
         row = result.loc[result["山通番"] == 1].iloc[0]
         assert row["山工程"] == PROC_MAIN
+
+    def test_deadline_normalization_is_noop_for_same_day_start(self):
+        """開始が当日基準の通常便では締切正規化が据え置きになる。"""
+        pickup_secs = _to_operational_timeline_secs(_time_to_seconds("07:00"))
+        raw_deadline = int(pickup_secs) - ARRIVAL_BUFFER_SECS
+        start_secs = _time_to_seconds("06:50")
+        eval_deadline = raw_deadline + DAY_SECS if (int(start_secs) >= DAY_SECS and raw_deadline < DAY_SECS) else raw_deadline
+
+        assert eval_deadline == raw_deadline
+        assert _seconds_to_hhmm(raw_deadline) == "06:50"
+
+        # 代表通常便（非巻き戻り）でも工程・開始は従来どおり
+        df = pd.DataFrame({
+            "山通番": [1],
+            "移動工数": [0],
+            "納入先": ["日野"],
+            "NONYUHIBIN": ["2026060101"],
+            "高さ": [300],
+        })
+        master_df = pd.DataFrame({
+            "OData_納入先": ["日野", "日野", "日野", "日野", "日野", "日野", "日野", "日野"],
+            "NONYUHIBIN": ["01", "03", "05", "07", "09", "11", "13", "15"],
+            "入車時間": ["06:50", "07:20", "07:50", "13:52", "17:30", "18:00", "22:00", "00:24"],
+            "セットありフラグ": ["0", "0", "0", "0", "0", "0", "0", "0"],
+        })
+
+        result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
+        row = result.loc[result["山通番"] == 1].iloc[0]
+        assert row["山工程"] == PROC_OVERFLOW
+        assert str(row["実開始時間"]) == "06:40"
+
+    def test_deadline_normalization_does_not_double_add_when_both_next_day_axis(self):
+        """開始・締切とも翌日基準のとき締切を二重加算しない。"""
+        deadline = _to_operational_timeline_secs(_time_to_seconds("24:20")) - ARRIVAL_BUFFER_SECS  # 24:10
+        start = _to_operational_timeline_secs(_time_to_seconds("24:24")) + ARRIVAL_BUFFER_SECS      # 24:34
+        eval_deadline = deadline + DAY_SECS if (int(start) >= DAY_SECS and int(deadline) < DAY_SECS) else int(deadline)
+
+        assert int(start) >= DAY_SECS
+        assert int(deadline) >= DAY_SECS
+        assert eval_deadline == int(deadline)
+        assert _seconds_to_hhmm(eval_deadline) == "24:10"
+
+        df = pd.DataFrame({
+            "山通番": [1],
+            "移動工数": [0],
+            "納入先": ["日野"],
+            "NONYUHIBIN": ["2026052801"],
+            "高さ": [300],
+        })
+        master_df = pd.DataFrame({
+            "OData_納入先": ["日野", "日野"],
+            "NONYUHIBIN": ["11", "01"],
+            "入車時間": ["24:20", "06:50"],
+            "セットありフラグ": ["0", "1"],
+        })
+
+        result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
+        row = result.loc[result["山通番"] == 1].iloc[0]
+        assert row["山工程"] == PROC_MAIN
+        assert str(row["実開始時間"]) == "24:30"
 
     def test_set_flag_shift2_first_trip_uses_shift2_limit_not_shift1(self):
         """2直1便目(セットあり)は前便が1直でも2直上限(01:35)を使う。"""

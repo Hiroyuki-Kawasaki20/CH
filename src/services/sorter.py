@@ -27,6 +27,7 @@ TAKAOKA_TARGET_UKEIRE = "K5"
 # 複数出荷先が共通でサイズ17パレットを引き取るため。2026/06 Kawasaki氏確認。
 SIZE17_MERGE_HEIGHT_CAP = 2500.0
 SIZE17_TYPE = "17"
+MERGE_BY_ARRIVAL_VENDORS = ("KVC", "元町")
 
 
 def _target_takaoka_mask(df: pd.DataFrame) -> pd.Series:
@@ -155,6 +156,8 @@ def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.
     if mixing_key in size1_packed.columns:
         aggs[mixing_key] = (mixing_key, "first")
     aggs["納入先"] = ("納入先", "first")
+    if "入車時間" in size1_packed.columns:
+        aggs["入車時間"] = ("入車時間", "first")
 
     units = size1_packed.groupby(group_cols).agg(**aggs).reset_index()
     if units.empty:
@@ -175,16 +178,36 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
     used, id_map = set(), {}
     all_true = pd.Series(True, index=units.index)
 
+    def _forbidden_same_vendor_diff_bin(base_row: pd.Series) -> pd.Series:
+        base_vendor = str(base_row.get("納入先", "")).strip()
+        base_bin = str(base_row.get("NONYUHIBIN", "")).strip()
+        base_arrival = str(base_row.get("入車時間", "")).strip()
+
+        units_vendor = units["納入先"].astype(str).str.strip()
+        units_bin = units["NONYUHIBIN"].astype(str).str.strip()
+        if "入車時間" in units.columns:
+            units_arrival = units["入車時間"].astype(str).str.strip()
+        else:
+            units_arrival = pd.Series("", index=units.index, dtype=str)
+
+        same_vendor = units_vendor.eq(base_vendor)
+        diff_bin = units_bin.ne(base_bin)
+
+        # 例外: KVC/元町（先頭一致）かつ入車時間一致なら便違いでも混載許可
+        allow_vendor = units_vendor.str.startswith(MERGE_BY_ARRIVAL_VENDORS) & bool(
+            base_vendor.startswith(MERGE_BY_ARRIVAL_VENDORS)
+        )
+        allow_by_arrival = allow_vendor & (base_arrival != "") & units_arrival.eq(base_arrival)
+
+        return same_vendor & diff_bin & (~allow_by_arrival)
+
     for _, g1 in units.sort_values("高さ合計", ascending=False).iterrows():
         id1 = int(g1["山ID"])
         if id1 in used:
             continue
 
         margin2 = float(height_cap) - float(g1["高さ合計"])
-        cond_same_dest_diff_bin = (
-            (units["納入先"] == g1.get("納入先", ""))
-            & (units["NONYUHIBIN"] != g1.get("NONYUHIBIN", ""))
-        )
+        cond_same_dest_diff_bin = _forbidden_same_vendor_diff_bin(g1)
         cond_mix2 = ~cond_same_dest_diff_bin
 
         has21_g1 = bool(g1.get("_has_size21", False))
@@ -205,14 +228,8 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         id2 = int(g2["山ID"])
 
         margin3 = float(height_cap) - float(g1["高さ合計"]) - float(g2["高さ合計"])
-        cond_mix3_1 = ~(
-            (units["納入先"] == g1.get("納入先", ""))
-            & (units["NONYUHIBIN"] != g1.get("NONYUHIBIN", ""))
-        )
-        cond_mix3_2 = ~(
-            (units["納入先"] == g2.get("納入先", ""))
-            & (units["NONYUHIBIN"] != g2.get("NONYUHIBIN", ""))
-        )
+        cond_mix3_1 = ~_forbidden_same_vendor_diff_bin(g1)
+        cond_mix3_2 = ~_forbidden_same_vendor_diff_bin(g2)
 
         has21_merged = bool(g1.get("_has_size21", False)) or bool(g2.get("_has_size21", False))
         cond_layer3 = (~units["_has_size1"]) if has21_merged else all_true
@@ -364,18 +381,21 @@ def _build_size1_mixed(expanded, height_cap, mixing_key):
     if "納入先" not in size1_df.columns or not size1_df["納入先"].astype(str).str.strip().ne("").any():
         # 納入先コード → OData_納入先 → SYUKKASAKI の優先順で補完
         if "納入先コード" in size1_df.columns and size1_df["納入先コード"].astype(str).str.strip().ne("").any():
-            size1_df["納入先"] = size1_df["納入先コード"].astype(str).str.strip()
+            size1_df["納入先"] = size1_df["納入先コード"].astype(str).str.strip().map(_normalize_dest_name)
         elif "OData_納入先" in size1_df.columns and size1_df["OData_納入先"].astype(str).str.strip().ne("").any():
-            size1_df["納入先"] = size1_df["OData_納入先"].astype(str).str.strip()
+            size1_df["納入先"] = size1_df["OData_納入先"].astype(str).str.strip().map(_normalize_dest_name)
         elif "SYUKKASAKI" in size1_df.columns:
-            size1_df["納入先"] = size1_df["SYUKKASAKI"].astype(str).str.strip()
+            size1_df["納入先"] = size1_df["SYUKKASAKI"].astype(str).str.strip().map(_normalize_dest_name)
         else:
             size1_df["納入先"] = ""
     else:
-        size1_df["納入先"] = size1_df["納入先"].astype(str).str.strip()
+        size1_df["納入先"] = size1_df["納入先"].astype(str).str.strip().map(_normalize_dest_name)
     if "NONYUHIBIN" not in size1_df.columns:
         size1_df["NONYUHIBIN"] = ""
     size1_df["NONYUHIBIN"] = size1_df["NONYUHIBIN"].astype(str).str.strip()
+    if "入車時間" not in size1_df.columns:
+        size1_df["入車時間"] = ""
+    size1_df["入車時間"] = size1_df["入車時間"].astype(str).str.strip()
 
     # まずは便単位×層役割（1/21）で高さ積みしてローカル山を作る。
     local_group_cols = ["NONYUHIBIN", "_role_class"]
