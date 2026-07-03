@@ -356,7 +356,6 @@ def export_spo_xlsx(spo_df: pd.DataFrame, out_dir: str, base_name: str = "SPOア
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     path = os.path.join(out_dir, f"{base_name}.xlsx")
     export_to_spo(spo_df, output_path=path)
-    _add_table_exact(path, "SPOExport")
     return path
 
 
