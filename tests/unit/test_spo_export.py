@@ -9,9 +9,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+from openpyxl import load_workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src.services import exporter
 from src.services import spo_export
 
 
@@ -130,3 +132,20 @@ def test_export_lock_serializes_parallel_calls(tmp_path, monkeypatch):
 
     assert active["max"] == 1
     assert output_path.exists()
+
+
+def test_export_spo_xlsx_adds_spoexport_table(tmp_path):
+    spo_df = pd.DataFrame(
+        [
+            {
+                "タイトル": "山1",
+                "工程": "1工程",
+                "groupdata": "[]",
+            }
+        ]
+    )
+    out_path = exporter.export_spo_xlsx(spo_df, str(tmp_path), base_name="SPO_test")
+
+    wb = load_workbook(out_path)
+    ws = wb.active
+    assert "SPOExport" in ws.tables
