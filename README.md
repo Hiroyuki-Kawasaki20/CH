@@ -15,6 +15,7 @@ CH（車体）ラインのかんばん自動仕分け・工程割当ツール。
 
 補足:
 - SPO出力のテーブル付与（`SPOExport`）は `src/services/spo_export.py` 側で一元実施する運用です。
+- `src/utils/excel_utils.py` の `_add_table_exact` は同名テーブル再呼び出し時にスキップする冪等実装です。
 
 ## 起動
 

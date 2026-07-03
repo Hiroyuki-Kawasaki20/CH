@@ -43,18 +43,21 @@ def index_to_letters(n: int) -> str:
 
 
 def _add_table_exact(file_path, table_name):
-    """Excelファイルにテーブル機能を付与"""
+    """Excelファイルにテーブル機能を付与（同名テーブルがあればスキップ）"""
     wb = load_workbook(file_path)
     ws = wb.active
     max_row, max_col = ws.max_row, ws.max_column
     if max_row < 1 or max_col < 1:
         wb.save(file_path)
         return
+    if table_name in ws.tables:
+        wb.save(file_path)
+        return
     ref = f"A1:{get_column_letter(max_col)}{max_row}"
     tbl = Table(displayName=table_name, ref=ref)
     style = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
     tbl.tableStyleInfo = style
-    names = [t.displayName for t in getattr(ws, "_tables", [])]
+    names = list(ws.tables.keys())
     if table_name in names:
         tbl.displayName = f"{table_name}_{len(names) + 1}"
     ws.add_table(tbl)
