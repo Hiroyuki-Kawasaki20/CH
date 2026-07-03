@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+
+# 一時出力ファイル
+tmp_*.xlsx
+tmp_*/
+
+# 環境・エディタ
+.venv/
+.vscode/
+*.log
