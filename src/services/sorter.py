@@ -724,7 +724,37 @@ def build_all_mountain_details(group_details: dict, size1_mixed_details: pd.Data
                 all_df[c] = ""
     all_df["納入先"] = all_df["納入先"].astype(str).str.strip()
     all_df["サイズ種類"] = all_df["サイズ種類"].astype(str).str.strip()
+    all_df["NONYUHIBIN"] = all_df["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
     all_df = _merge_adjacent_size17_mountains(all_df)
+    if "山通番" in all_df.columns and not all_df.empty:
+        work = all_df.copy()
+        work["山通番"] = pd.to_numeric(work["山通番"], errors="coerce").fillna(0).astype(int)
+        work["NONYUHIBIN"] = work["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
+
+        def _order_tail_key(s: str) -> int:
+            t = str(s).strip()
+            if len(t) >= 2 and t[-2:].isdigit():
+                return int(t[-2:])
+            return 99
+
+        def _size_key(s: str) -> tuple:
+            t = str(s).strip()
+            if t.isdigit():
+                return (0, int(t), t)
+            return (1, 999, t)
+
+        yama_keys = {}
+        for yama, sub in work.groupby("山通番", sort=False):
+            tails = [_order_tail_key(v) for v in sub["NONYUHIBIN"].tolist()]
+            sizes = [_size_key(v) for v in sub["サイズ種類"].tolist()]
+            order_key = min(tails) if tails else 99
+            size_order_key = min(sizes) if sizes else (1, 999, "")
+            yama_keys[int(yama)] = (order_key, size_order_key, int(yama))
+
+        old_yamas_sorted = sorted(yama_keys.keys(), key=lambda y: yama_keys[y])
+        renum_map = {int(old): i + 1 for i, old in enumerate(old_yamas_sorted)}
+        all_df["山通番"] = all_df["山通番"].map(renum_map).astype(int)
+
     if {"山通番", "移動工数"}.issubset(all_df.columns):
         all_df["移動工数"] = pd.to_numeric(all_df["移動工数"], errors="coerce")
         all_df = all_df.sort_values(["山通番", "移動工数"], ascending=[True, False]).reset_index(drop=True)
