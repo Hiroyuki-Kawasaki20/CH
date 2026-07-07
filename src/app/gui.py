@@ -1561,6 +1561,8 @@ class App(ctk.CTk):
             master_path = get_master_path()
             master_df = load_pickup_time_master_xlsx(master_path)
             unmatched_path = Path(self.export_dir) / "SPOアップロード用_未ヒット一覧.csv"
+            # ここでは本計算済みの mountain_start_times を使う。
+            # attach_pickup_start_time は、開始時間が空の行だけを後段で補完するフォールバック。
             spo_df = attach_pickup_start_time(spo_df, master_df, unmatched_csv_path=unmatched_path)
         except Exception:
             pass

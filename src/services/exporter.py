@@ -496,7 +496,7 @@ def attach_pickup_start_time(
             return None
         try:
             hh, mm = s.split(":", 1)
-            return int(hh) * 66 + int(mm)
+            return int(hh) * 60 + int(mm)
         except Exception:
             return None
 
@@ -540,28 +540,27 @@ def attach_pickup_start_time(
                 mins = _to_minutes(pickup)
                 if mins is None:
                     continue
-                if best_min is None or mins > best_min:
-                    best_min = mins
-                    if vendor == "武部":
-                        prev_group_time = _get_prev_group_time(vendor, mins)
-                        if prev_group_time is not None:
-                            best_time = _minutes_to_time(prev_group_time + 10)
-                        else:
-                            best_time = _minutes_to_time(mins + 10)
-                    else:
-                        try:
-                            current_bin = int(order2)
-                            if current_bin > 1:
-                                prev_bin = f"{current_bin - 1:02d}"
-                                prev_pickup = master_map.get((vendor, prev_bin), "")
-                                if prev_pickup:
-                                    prev_mins = _to_minutes(prev_pickup)
-                                    if prev_mins is not None:
-                                        best_time = _minutes_to_time(prev_mins + 10)
-                                        continue
-                        except (ValueError, TypeError):
-                            pass
-                        best_time = _minutes_to_time(mins + 10)
+                candidate_min = mins + 10
+                if vendor == "武部":
+                    prev_group_time = _get_prev_group_time(vendor, mins)
+                    if prev_group_time is not None:
+                        candidate_min = prev_group_time + 10
+                else:
+                    try:
+                        current_bin = int(order2)
+                        if current_bin > 1:
+                            prev_bin = f"{current_bin - 1:02d}"
+                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            if prev_pickup:
+                                prev_mins = _to_minutes(prev_pickup)
+                                if prev_mins is not None:
+                                    candidate_min = prev_mins + 10
+                    except (ValueError, TypeError):
+                        pass
+
+                if best_min is None or candidate_min < best_min:
+                    best_min = candidate_min
+                    best_time = _minutes_to_time(candidate_min)
             else:
                 if unmatched_csv_path is not None:
                     unmatched_rows.append({"index": idx, "vendor": vendor, "order2": order2})
