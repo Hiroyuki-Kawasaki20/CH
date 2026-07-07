@@ -1541,6 +1541,118 @@ def _legacy_assign_processes_by_arrival_time(
         if remaining_relief:
             _schedule_proc_rows(remaining_relief, PROC_RELIEF, prefer_deadline_order=True)
 
+    def _has_deadline_violation(target_rows: List[dict]) -> bool:
+        for rr in target_rows:
+            yy = int(rr["山通番"])
+            ddl = mtn_deadline_map.get(yy)
+            if ddl is None:
+                continue
+            st = _time_to_seconds(rr.get("実開始時間", ""))
+            if st is None:
+                continue
+            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
+            ddl_for_eval = _deadline_for_eval(ddl, st)
+            if ddl_for_eval is not None and en > int(ddl_for_eval):
+                return True
+        return False
+
+    def _fits_idle_gap_on_main(
+        yama_no: int,
+        gap_start: int,
+        gap_end: int,
+    ) -> Optional[Tuple[int, int]]:
+        work_dur = int(mtn_work_map.get(yama_no, 0))
+        shift_floor = _shift_start_secs(_shift_index_for_secs(int(gap_start)))
+        break_floor = int(gap_start)
+        for bs, be in BREAK_TIMES:
+            if int(gap_start) < int(bs) < int(gap_end):
+                _, resume_offset, _ = _break_policy(int(bs), int(be))
+                break_floor = max(int(break_floor), int(be) + int(resume_offset))
+        # 仕様①: max(休憩明け, 前段完了, シフト開始下限) から最速開始を試行。
+        candidate_start = max(int(gap_start), int(shift_floor), int(break_floor))
+        earliest_start = _adjust_start_for_breaks(candidate_start, work_dur)
+        earliest_end = _calc_work_end_with_breaks(earliest_start, work_dur)
+        if earliest_end <= int(gap_end):
+            return int(earliest_start), int(earliest_end)
+        return None
+
+    def _try_front_pack_to_main_idle_gap(target_rows: List[dict]) -> bool:
+        """空き窓限定で、リリーフ/あふれ山をメインへ最速前詰めできるか検証して採用する。"""
+        main_rows = [rr for rr in target_rows if rr.get("山工程") == PROC_MAIN]
+        main_points = []
+        for rr in main_rows:
+            st = _time_to_seconds(str(rr.get("実開始時間", "")))
+            if st is None:
+                continue
+            yy = int(rr["山通番"])
+            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
+            main_points.append((yy, int(st), int(en)))
+        if len(main_points) < 2:
+            return False
+
+        main_points.sort(key=lambda x: (x[1], x[0]))
+        gaps: List[Tuple[int, int]] = []
+        for i in range(len(main_points) - 1):
+            prev_end = int(main_points[i][2])
+            next_start = int(main_points[i + 1][1])
+            if next_start > prev_end:
+                gaps.append((prev_end, next_start))
+        if not gaps:
+            return False
+
+        candidates = []
+        for rr in target_rows:
+            proc_label = str(rr.get("山工程", ""))
+            if proc_label not in (PROC_RELIEF, PROC_OVERFLOW):
+                continue
+            yy = int(rr["山通番"])
+            ddl = mtn_deadline_map.get(yy)
+            if ddl is None:
+                continue
+            candidates.append((yy, int(ddl)))
+
+        # 締切の厳しい山から順に、空き窓限定の最速前詰めを試す。
+        for yy, _ in sorted(candidates, key=lambda x: (x[1], x[0])):
+            for gap_start, gap_end in gaps:
+                fit = _fits_idle_gap_on_main(yy, gap_start, gap_end)
+                if fit is None:
+                    continue
+                new_start, new_end = fit
+
+                trial_rows = copy.deepcopy(target_rows)
+                changed = False
+                for tr in trial_rows:
+                    if int(tr["山通番"]) != int(yy):
+                        continue
+                    tr["山工程"] = PROC_MAIN
+                    tr["実開始時間"] = _seconds_to_hhmm(new_start)
+                    tr["前倒し"] = False
+                    tr["照合追加180秒"] = False
+                    tr["_is_anchored"] = True
+                    tr["_end_secs"] = int(new_end)
+                    changed = True
+                if not changed:
+                    continue
+
+                # 既存メインの時刻は固定し、リリーフのみ再スケジュールして全体締切を再検証。
+                rem_relief = [tr for tr in trial_rows if tr.get("山工程") == PROC_RELIEF]
+                if rem_relief:
+                    _schedule_proc_rows(rem_relief, PROC_RELIEF, prefer_deadline_order=True)
+
+                # 最終表示時刻に近い状態（照合180秒反映後）で全山締切を再検証する。
+                prev_floor = int(mtn_start_floor_map.get(yy) or 0)
+                mtn_start_floor_map[yy] = int(new_start) if prev_floor <= 0 else min(prev_floor, int(new_start))
+                _finalize_inspection_delay_flags(trial_rows)
+
+                if _has_deadline_violation(trial_rows):
+                    mtn_start_floor_map[yy] = prev_floor
+                    continue
+
+                target_rows[:] = trial_rows
+                return True
+
+        return False
+
     def _enforce_main_deadline_strict(target_rows: List[dict]) -> bool:
         late_main = []
         for rr in target_rows:
@@ -1581,6 +1693,7 @@ def _legacy_assign_processes_by_arrival_time(
 
     for _ in range(3):
         _finalize_inspection_delay_flags(results)
+        _try_front_pack_to_main_idle_gap(results)
         if not _enforce_main_deadline_strict(results):
             break
         _reapply_overflow_for_relief(results)
