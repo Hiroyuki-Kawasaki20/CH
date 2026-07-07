@@ -72,6 +72,12 @@ def _set_flag_main_limit_secs(shift_idx: int) -> int:
     return limits[max(0, min(shift_idx, len(limits) - 1))]
 
 
+def _get_lane_count(item_name: str) -> int:
+    """品目名からレーン数を返す。日野系は2、それ以外は1。"""
+    name = str(item_name).strip()
+    return 2 if "日野" in name else 1
+
+
 def _to_operational_timeline_secs(secs: Optional[int]) -> Optional[int]:
     """業務日タイムラインへ正規化する。
 
@@ -421,9 +427,8 @@ def _legacy_assign_processes_by_arrival_time(
         return v.startswith("日野")
 
     def _is_hino_2lane_target(vendor: str) -> bool:
-        """日野2レーン並列スケジューリングの対象判定。完全一致 '日野' のみ。日野EH は対象外。"""
-        v = str(vendor).strip()
-        return v == "日野"
+        """日野2レーンの対象判定（"日野" のみ）。"""
+        return str(vendor).strip() == "日野"
 
     def _get_prev_bin_for_vendor(
         vendor: str,
@@ -524,7 +529,46 @@ def _legacy_assign_processes_by_arrival_time(
             # 引取開始時間を計算
             is_first_trip_in_shift = (vendor_shift_first_bin.get((lookup_vendor, shift_idx), "") == order2)
 
-            if not has_set_flag_col:
+            if _is_hino_2lane_target(vendor):
+                # 日野2レーンは列有無/フラグ値に関わらず同レーン直前便(N-2)を参照する。
+                # セットあり時のみ先頭便で同レーン最終便へ巻き戻す。
+                try:
+                    current_bin = int(order2)
+                    lane_count = _get_lane_count(lookup_vendor)
+                    prev_bin = _get_prev_bin_for_vendor(
+                        lookup_vendor,
+                        current_bin,
+                        allow_wrap=bool(has_set_flag_col and set_flag),
+                        offset=lane_count,
+                        lane_parity=(current_bin % 2) if lane_count == 2 else None,
+                    )
+                    if prev_bin is not None:
+                        prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
+                        prev_secs_raw = _time_to_seconds(prev_pickup) if prev_pickup else None
+                        prev_secs = _to_operational_timeline_secs(prev_secs_raw)
+                        if prev_secs is not None:
+                            st = prev_secs + ARRIVAL_BUFFER_SECS
+                            st_prev = st
+                        else:
+                            st = 0
+                            st_prev = 0
+                    elif is_first_trip_in_shift:
+                        st = _shift_start_secs(shift_idx) + 15 * 60
+                        st_prev = 0
+                    else:
+                        st = 0
+                        st_prev = 0
+
+                    if not set_flag:
+                        # セットなしは前日側(24:xx/25:xx)を直接採用せず、当日基準で下限制約を適用する。
+                        if int(st) >= DAY_SECS:
+                            st = int(st) - DAY_SECS
+                        shift_floor = _shift_start_secs(shift_idx) + 15 * 60
+                        st = max(int(st), int(shift_floor))
+                except (ValueError, TypeError):
+                    st = 0
+                    st_prev = 0
+            elif not has_set_flag_col:
                 # 旧マスタ（セットありフラグ列なし）は従来ルールを維持
                 if vendor == "武部":
                     mins = pickup_secs // 60
@@ -554,42 +598,6 @@ def _legacy_assign_processes_by_arrival_time(
                     except (ValueError, TypeError):
                         st = 0
                         st_prev = 0
-            elif _is_hino_2lane_target(vendor):
-                # 日野2レーン: 同レーン直前便（=N-2相当）の入車時刻 + 10分。
-                # 先頭便は同レーン最終便へ巻き戻って参照する。
-                try:
-                    current_bin = int(order2)
-                    is_first_trip_hino = (vendor_shift_first_bin.get((vendor, shift_idx), "") == order2)
-                    if not set_flag and is_first_trip_hino:
-                        # セットなし先頭便は従来どおり各直開始+15分。
-                        st = _shift_start_secs(shift_idx) + 15 * 60
-                        st_prev = st
-                    else:
-                        prev_bin = _get_prev_bin_for_vendor(
-                            lookup_vendor,
-                            current_bin,
-                            allow_wrap=bool(set_flag),
-                            offset=2,
-                            lane_parity=(current_bin % 2),
-                        )
-                        if prev_bin is not None:
-                            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
-                            # 日野巻き戻り便も業務日タイムラインへ寄せ、24時超え表記に統一する。
-                            prev_secs_raw = _time_to_seconds(prev_pickup) if prev_pickup else None
-                            prev_secs = _to_operational_timeline_secs(prev_secs_raw)
-                            if prev_secs is not None:
-                                st = prev_secs + ARRIVAL_BUFFER_SECS
-                                st_prev = st
-                            else:
-                                st = 0
-                                st_prev = 0
-                        else:
-                            # 巻き戻りでも同レーン前便が取れない場合のみ、開始+15分へフォールバック。
-                            st = _shift_start_secs(shift_idx) + 15 * 60
-                            st_prev = st
-                except (ValueError, TypeError):
-                    st = 0
-                    st_prev = 0
             elif set_flag:
                 # セットあり便は従来ルールを適用（前便入車+10分）。日野2レーンは前段で処理済み。
                 if vendor == "武部":
@@ -647,7 +655,7 @@ def _legacy_assign_processes_by_arrival_time(
                 try:
                     current_bin = int(order2)
                     # 前便入車時刻 + 10分 を引取開始下限に設定（日野以外は N-1 便）
-                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=True, offset=1)
+                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False, offset=1)
                     if prev_bin is not None:
                         prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -740,7 +748,36 @@ def _legacy_assign_processes_by_arrival_time(
             shift_idx = _shift_index_for_secs(pickup_secs)
             is_first_trip_in_shift = (vendor_shift_first_bin.get((lookup_vendor, shift_idx), "") == order2)
 
-            if not has_set_flag_col:
+            if _is_hino_2lane_target(vendor):
+                # リリーフ救済判定でも、日野2レーンは同レーン直前便(N-2)参照を使う。
+                try:
+                    current_bin = int(order2)
+                    lane_count = _get_lane_count(lookup_vendor)
+                    prev_bin = _get_prev_bin_for_vendor(
+                        lookup_vendor,
+                        current_bin,
+                        allow_wrap=bool(has_set_flag_col and set_flag),
+                        offset=lane_count,
+                        lane_parity=(current_bin % 2) if lane_count == 2 else None,
+                    )
+                    if prev_bin is not None:
+                        prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
+                        prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+                        st = (prev_secs + 10 * 60) if prev_secs is not None else 0
+                    elif is_first_trip_in_shift:
+                        st = _shift_start_secs(shift_idx) + 15 * 60
+                    else:
+                        st = 0
+
+                    if not set_flag:
+                        # セットなしは前日側(24:xx/25:xx)を直接採用せず、当日基準で下限制約を適用する。
+                        if int(st) >= DAY_SECS:
+                            st = int(st) - DAY_SECS
+                        shift_floor = _shift_start_secs(shift_idx) + 15 * 60
+                        st = max(int(st), int(shift_floor))
+                except (ValueError, TypeError):
+                    st = 0
+            elif not has_set_flag_col:
                 if vendor == "武部":
                     mins = pickup_secs // 60
                     prev_group_time = _get_prev_group_time(vendor, mins)
@@ -765,7 +802,12 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=True)
+                        prev_bin = _get_prev_bin_for_vendor(
+                            lookup_vendor,
+                            current_bin,
+                            allow_wrap=True,
+                            offset=1,
+                        )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -783,7 +825,7 @@ def _legacy_assign_processes_by_arrival_time(
             else:
                 try:
                     current_bin = int(order2)
-                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=True)
+                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False)
                     if prev_bin is not None:
                         prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
