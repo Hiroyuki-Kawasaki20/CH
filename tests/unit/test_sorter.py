@@ -15,7 +15,9 @@ from src.services.sorter import (
     build_all_mountain_details,
     _build_size1_mixed,
     _match_units_with_layer_rules,
+    run_pipeline,
 )
+from src.services.data_loader import load_data, DataManager, load_pickup_time_master_xlsx, get_master_path
 from src.services.scheduler import cluster_by_store
 from src.services.process_assigner import (
     _time_to_seconds, _seconds_to_hhmm, _adjust_start_for_breaks,
@@ -189,6 +191,41 @@ class TestGrouping:
         out = build_all_mountain_details({"17": det17}, pd.DataFrame())
         assert out["山通番"].nunique() == 2
 
+    def test_regression_order_yama_continuity_real_20260706_091011(self):
+        """回帰: 09/10/11 実データで各オーダー内の山通番が連続範囲であること。"""
+        df_ship, df_places = load_data()
+        master = load_pickup_time_master_xlsx(get_master_path())
+        dm = DataManager(df_ship, df_places)
+
+        orders = ["2026070609", "2026070610", "2026070611"]
+        selections = []
+        for route in dm.get_routes():
+            for receipt in dm.get_receipts_for_route(route):
+                cand = set(dm.get_orders_for_route_receipt(route, receipt))
+                for order in orders:
+                    if order in cand:
+                        selections.append({"便名": route, "受入": receipt, "オーダー": order})
+
+        _filtered, _expanded, group_results, group_details, _s1_summary, s1_details, _lane_end = run_pipeline(
+            dm,
+            selections,
+            2450,
+            "UKEIRE",
+            master_df=master,
+            return_lane_end_times=True,
+        )
+
+        all_det = build_all_mountain_details(group_details, s1_details)
+        assert not all_det.empty
+
+        nony = all_det["NONYUHIBIN"].astype(str).str.strip()
+        for tail in ["09", "10", "11"]:
+            sub = all_det[nony.str[-2:] == tail]
+            yamas = sorted(pd.to_numeric(sub["山通番"], errors="coerce").dropna().astype(int).unique().tolist())
+            assert yamas, f"tail={tail}: 山通番が存在しません"
+            contiguous = (max(yamas) - min(yamas) + 1) == len(yamas)
+            assert contiguous, f"tail={tail}: 山通番が不連続 yamas={yamas}"
+
 
 class TestProcessAssigner:
     def test_time_conversion(self):
@@ -285,8 +322,8 @@ class TestProcessAssigner:
         """リリーフ1山目の開始時刻が「前便入車+10分」の下限を下回らない（仕分けロジック遵守）。
 
         シナリオ:
-          山1 (日野-01, 締切12:00) → MAIN で余裕あり
-          山2 (日野-02, 前便01が12:00着 → 開始下限12:10, 締切12:04) → MAINでは間に合わないためRELIEF
+                    山1 (A-01, 締切12:00) → MAIN で余裕あり
+                    山2 (A-02, 前便01が12:00着 → 開始下限12:10, 締切12:04) → MAINでは間に合わないためRELIEF
           RELIEFの最遅開始 = 12:04 - work_secs ≈ 12:00 < 開始下限12:10
           修正前: relief開始 = 12:00 (下限違反)
           修正後: relief開始 >= 12:10 (下限尊重)
@@ -295,12 +332,12 @@ class TestProcessAssigner:
         df = pd.DataFrame({
             "山通番": [1, 2],
             "移動工数": [0.0, 0.0],
-            "納入先": ["日野", "日野"],
+            "納入先": ["A", "A"],
             "NONYUHIBIN": ["01", "02"],
             "高さ": [300, 300],
         })
         master_df = pd.DataFrame({
-            "OData_納入先": ["日野", "日野"],
+            "OData_納入先": ["A", "A"],
             "NONYUHIBIN": ["01", "02"],
             # 01が12:00着 → 山2の開始下限12:10
             # 山2の締切12:04は 開始下限12:10 より早い → 最遅開始(=12:00)が下限(12:10)を下回る
