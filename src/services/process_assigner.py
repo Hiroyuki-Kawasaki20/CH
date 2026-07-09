@@ -1072,17 +1072,9 @@ def _legacy_assign_processes_by_arrival_time(
                     prev_end = _calc_work_end_with_breaks(existing_start, work_dur)
                     continue
 
-            # リリーフ先頭は、後続山がある場合に遅らせ過ぎると連鎖遅延を生むため、
-            # 最早開始（start_floor/seq_floor）を優先する。
-            # 単独山のみ従来どおり締切逆算で遅開始を許容する。
+            # リリーフ先頭は、単独山を含めて最早開始（start_floor/seq_floor）を優先する。
             if proc_label == PROC_RELIEF and order_idx == 0 and deadline is not None:
-                latest_start = _latest_start_to_meet_deadline(deadline, work_dur)
-                if len(proc_rows) >= 2:
-                    candidate_start = max(start_floor, seq_floor)
-                elif latest_start is not None:
-                    candidate_start = max(latest_start, start_floor, seq_floor)
-                else:
-                    candidate_start = max(start_floor, seq_floor)
+                candidate_start = max(start_floor, seq_floor)
             else:
                 candidate_start = max(start_floor, seq_floor)
                 # メイン工程は既に確定済みの表示開始時刻を不必要に前倒ししない。
