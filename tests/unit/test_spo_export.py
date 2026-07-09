@@ -149,3 +149,15 @@ def test_export_spo_xlsx_adds_spoexport_table(tmp_path):
     wb = load_workbook(out_path)
     ws = wb.active
     assert "SPOExport" in ws.tables
+
+
+def test_spo_xlsx_goes_to_watch_dir_but_history_and_unmatched_go_local():
+    """SPO出力先分離: 監視フォルダにはXlsxのみ、履歴とCSVはローカル固定フォルダ"""
+    from src.app.gui import resolve_spo_output_dirs, LOCAL_OUTPUT_DIR
+    watch = r"C:\OneDrive\SPO監視"
+    dirs = resolve_spo_output_dirs(watch)
+    assert dirs["spo_xlsx_dir"] == watch
+    assert dirs["history_dir"] == LOCAL_OUTPUT_DIR
+    assert dirs["unmatched_dir"] == LOCAL_OUTPUT_DIR
+    assert dirs["history_dir"] != watch
+    assert dirs["unmatched_dir"] != watch
