@@ -894,7 +894,8 @@ def _legacy_assign_processes_by_arrival_time(
 
         # メイン工程へ置いた場合の可否を評価（前便入車+10分を開始下限として反映）
         next_main_idx = main_mountain_count + 1
-        main_inspection_delay = 0  # 照合180秒は後処理で開始時間順に付与
+        # A案: can_main初回判定に照合180秒を反映（3山目/5山目/...）
+        main_inspection_delay = 180 if (next_main_idx >= 3 and next_main_idx % 2 == 1) else 0
         sequential_time = main_end_time + main_inspection_delay
         # start_floorが順繋時刻より遅い場合が「前便入車+10分」の拘束が発動した状態
         is_floor_binding = (

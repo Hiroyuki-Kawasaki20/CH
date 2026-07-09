@@ -11,3 +11,8 @@ tmp_*/
 .venv/
 .vscode/
 *.log
+
+# 実行時の生成ファイル（テスト・出力用）
+SPOアップロード用_履歴.xlsx
+SPOアップロード用_未ヒット一覧.csv
+test_output.txt
