@@ -192,3 +192,59 @@ def test_relief_yama_uses_earliest_feasible_start():
         failures.append(f"(c) deadline violation(s): {late}")
 
     assert not failures, "\n".join(failures)
+
+
+def test_single_relief_yama_starts_from_prev_arrival_buffer_first():
+    # 単独リリーフ山（proc_rows が1件）の開始時刻は、
+    # 「前便入車 + ARRIVAL_BUFFER_SECS」の最速開始を採用すべき。
+    spo_df, _ = _load_input_files()
+    root = Path(__file__).resolve().parents[2]
+    master_df = load_pickup_time_master_xlsx(root / "入車時間マスタ.xlsx")
+    details_df = _build_detail_rows_from_spo_vendor_aware(spo_df, master_df)
+    proc_details = pa.compute_proc_details(details_df)
+
+    assigned = pa.assign_processes_by_arrival_time(proc_details, master_df)
+    relief_rows = assigned[assigned["山工程"] == pa.PROC_RELIEF]
+    assert len(relief_rows) == 1
+    relief_yama = int(relief_rows.iloc[0]["山通番"])
+
+    m = master_df.copy()
+    m["OData_納入先"] = m["OData_納入先"].astype(str).str.strip().map(pa._normalize_dest_name)
+    m["NONYUHIBIN"] = m["NONYUHIBIN"].astype(str).str.strip()
+    m["入車時間"] = m["入車時間"].astype(str).str.strip()
+    master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in m.iterrows()}
+
+    floors = []
+    for _, row in details_df[details_df["山通番"] == relief_yama].iterrows():
+        vendor = pa._normalize_dest_name(str(row.get("納入先", "")).strip())
+        nony = str(row.get("NONYUHIBIN", "")).strip().translate(pa._ZEN2HAN_DIGIT_COLON)
+        order2 = nony[-2:] if len(nony) >= 2 else ""
+        if not vendor or not order2:
+            continue
+
+        if vendor == "KVC":
+            ukeire = str(row.get("UKEIRE", "")).strip()
+            lookup_vendor = f"KVC-{ukeire}" if ukeire else vendor
+        else:
+            lookup_vendor = vendor
+
+        try:
+            current_bin = int(order2)
+        except (TypeError, ValueError):
+            continue
+
+        prev_bin = f"{current_bin - 1:02d}" if current_bin > 1 else None
+        if prev_bin is None:
+            continue
+
+        prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
+        prev_secs = pa._to_operational_timeline_secs(pa._time_to_seconds(prev_pickup)) if prev_pickup else None
+        if prev_secs is not None:
+            floors.append(int(prev_secs) + pa.ARRIVAL_BUFFER_SECS)
+
+    assert floors, "expected at least one previous-arrival floor"
+    expected_start = max(floors)
+    actual_start = pa._to_operational_timeline_secs(
+        pa._time_to_seconds(str(relief_rows.iloc[0]["実開始時間"]))
+    )
+    assert actual_start == expected_start
