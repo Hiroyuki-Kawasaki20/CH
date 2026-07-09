@@ -64,6 +64,32 @@ from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
+# ===== SPO出力先の設定 =====
+# ローカル固定フォルダ（ハードコード）
+LOCAL_OUTPUT_DIR = r"C:\Users\1588386\DIG_Project\CHかんばんセット"
+
+
+def resolve_spo_output_dirs(spo_watch_dir: str) -> dict:
+    """3ファイルの出力先を返す（テスト可能な純粋関数）。
+    
+    Power Automateの多重トリガー防止のため、SPO監視フォルダに落ちるファイルを
+    SPOアップロード用.xlsx のみとし、履歴とCSVはローカル固定フォルダに分離する。
+    
+    Args:
+        spo_watch_dir: SPO監視フォルダ（OneDrive共有フォルダ）のパス
+    
+    Returns:
+        dict: 3つの出力先を含む辞書
+            - spo_xlsx_dir: SPOアップロード用.xlsx の出力先（SPO監視フォルダ）
+            - history_dir: SPOアップロード用_履歴.xlsx の出力先（ローカル固定フォルダ）
+            - unmatched_dir: SPOアップロード用_未ヒット一覧.csv の出力先（ローカル固定フォルダ）
+    """
+    return {
+        "spo_xlsx_dir": spo_watch_dir,
+        "history_dir": LOCAL_OUTPUT_DIR,
+        "unmatched_dir": LOCAL_OUTPUT_DIR,
+    }
+
 
 class App(ctk.CTk):
     def __init__(self):
@@ -1536,7 +1562,18 @@ class App(ctk.CTk):
         messagebox.showwarning("あふれアラート", "\n".join(lines))
 
     def _auto_export_spo(self):
-        """SPO用Excel自動出力"""
+        """SPO用Excel自動出力（出力先分離版）。
+        
+        - SPOアップロード用.xlsx → SPO監視フォルダ（Power Automate監視対象）
+        - 履歴・未ヒットCSV → ローカル固定フォルダ（トリガー対象外）
+        """
+        # 出力先を分離
+        dirs = resolve_spo_output_dirs(self.export_dir)
+        
+        # ローカル固定フォルダを事前作成（存在保証）
+        Path(dirs["history_dir"]).mkdir(parents=True, exist_ok=True)
+        Path(dirs["unmatched_dir"]).mkdir(parents=True, exist_ok=True)
+        
         start_times = getattr(self, "mountain_start_times", {})
         overflow_yamas = {
             int(yama)
@@ -1560,16 +1597,19 @@ class App(ctk.CTk):
         try:
             master_path = get_master_path()
             master_df = load_pickup_time_master_xlsx(master_path)
-            unmatched_path = Path(self.export_dir) / "SPOアップロード用_未ヒット一覧.csv"
+            # 未ヒット一覧CSVの出力先をローカルフォルダに変更
+            unmatched_path = Path(dirs["unmatched_dir"]) / "SPOアップロード用_未ヒット一覧.csv"
             # ここでは本計算済みの mountain_start_times を使う。
             # attach_pickup_start_time は、開始時間が空の行だけを後段で補完するフォールバック。
             spo_df = attach_pickup_start_time(spo_df, master_df, unmatched_csv_path=unmatched_path)
         except Exception:
             pass
         if spo_df is not None and not spo_df.empty:
-            spo_path = export_spo_xlsx(spo_df, out_dir=self.export_dir)
+            # SPOアップロード用.xlsx はSPO監視フォルダへ
+            spo_path = export_spo_xlsx(spo_df, out_dir=dirs["spo_xlsx_dir"])
             try:
-                append_to_spo_history(spo_df, out_dir=self.export_dir)
+                # 履歴はローカル固定フォルダへ
+                append_to_spo_history(spo_df, out_dir=dirs["history_dir"])
             except Exception:
                 pass
             try:
