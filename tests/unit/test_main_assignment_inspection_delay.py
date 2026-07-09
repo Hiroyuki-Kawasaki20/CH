@@ -1,0 +1,65 @@
+# -*- coding: utf-8 -*-
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from src.services.data_loader import load_pickup_time_master_xlsx
+from src.services.process_assigner import assign_processes_by_arrival_time
+
+
+def _parse_groupeddata(cell_text):
+    try:
+        obj = json.loads(str(cell_text))
+    except Exception:
+        return []
+    if isinstance(obj, list):
+        return [x for x in obj if isinstance(x, dict)]
+    if isinstance(obj, dict):
+        return [obj]
+    return []
+
+
+def _build_proc_details_from_spo(spo_df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, r in spo_df.iterrows():
+        yama_no = int(pd.to_numeric(r.get("グループ番号", 0), errors="coerce") or 0)
+        max_cost = float(pd.to_numeric(r.get("Max移動工数", 0), errors="coerce") or 0.0)
+        for it in _parse_groupeddata(r.get("GroupedData", "")):
+            rows.append(
+                {
+                    "山通番": yama_no,
+                    "移動工数": max_cost,
+                    "OData_納入先": str(it.get("OData_納入先", "")).strip(),
+                    "納入先": str(it.get("OData_納入先", "")).strip(),
+                    "NONYUHIBIN": str(it.get("NONYUHIBIN", "")).strip(),
+                    "UKEIRE": str(it.get("UKEIRE", "")).strip(),
+                    "OData_ストア": str(it.get("OData_ストア", "")).strip(),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_yama8_c15_a_3_is_assigned_to_main_with_inspection_delay_rule():
+    root = Path(__file__).resolve().parents[2]
+    spo_path = root / "SPOアップロード用.xlsx"
+    master_path = root / "入車時間マスタ.xlsx"
+
+    assert spo_path.exists(), f"SPO file not found: {spo_path}"
+    assert master_path.exists(), f"Master file not found: {master_path}"
+
+    spo_df = pd.read_excel(spo_path)
+    proc_details = _build_proc_details_from_spo(spo_df)
+    master_df = load_pickup_time_master_xlsx(master_path)
+
+    out_df, _ = assign_processes_by_arrival_time(
+        proc_details=proc_details,
+        master_df=master_df,
+        return_lane_end_times=True,
+    )
+
+    yama8 = out_df[out_df["山通番"] == 8]
+    assert not yama8.empty, "山通番8が結果に存在しません"
+
+    actual_proc = str(yama8.iloc[0]["山工程"])
+    assert actual_proc == "メイン", f"expected yama8 process=メイン, got {actual_proc}"
