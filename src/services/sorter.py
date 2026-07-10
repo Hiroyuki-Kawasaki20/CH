@@ -152,6 +152,7 @@ def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.
         "Max移動工数": ("移動工数", "max"),
         "_has_size1": ("_is_size1", "any"),
         "_has_size21": ("_is_size21", "any"),
+        "_has_special_hinban": ("_has_special_hinban", "any"),
     }
     if mixing_key in size1_packed.columns:
         aggs[mixing_key] = (mixing_key, "first")
@@ -166,6 +167,7 @@ def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.
 
     units["_has_size1"] = units["_has_size1"].astype(bool)
     units["_has_size21"] = units["_has_size21"].astype(bool)
+    units["_has_special_hinban"] = units["_has_special_hinban"].astype(bool)
     units["山ID"] = np.arange(1, len(units) + 1)
     return units
 
@@ -211,9 +213,29 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         cond_mix2 = ~cond_same_dest_diff_bin
 
         has21_g1 = bool(g1.get("_has_size21", False))
-        cond_layer2 = (~units["_has_size1"]) if has21_g1 else all_true
+        has_special_g1 = bool(g1.get("_has_special_hinban", False))
+        
+        # 【特例品番フィルタ：631426010000】
+        # (1) g1 または g2 が size21 を含む場合：g3 から 631426010000 を除外
+        # (2) g1 または g2 が 631426010000 を含む場合：g3 から size21 を除外
+        if has21_g1:
+            # g1=size21 → g2 から 631426010000 を除外
+            if "_has_special_hinban" in units.columns:
+                special_hinban_series = units.get("_has_special_hinban", pd.Series(False, index=units.index))
+                special_hinban_units = units[special_hinban_series]
+                cond_layer2 = ~units["山ID"].isin(special_hinban_units["山ID"])
+            else:
+                # 後方互換: 旧フォーマットでは size21 山に size1 を載せない
+                cond_layer2 = ~units["_has_size1"]
+        elif has_special_g1:
+            # g1=631426010000 → g2 から size21 を除外
+            size21_series = units.get("_has_size21", pd.Series(False, index=units.index))
+            size21_units = units[size21_series]
+            cond_layer2 = ~units["山ID"].isin(size21_units["山ID"])
+        else:
+            cond_layer2 = all_true
         cond_mix2_final = cond_mix2 & cond_layer2
-
+        
         cand2 = units[
             (~units["山ID"].isin(used))
             & (units["山ID"] != id1)
@@ -231,8 +253,33 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         cond_mix3_1 = ~_forbidden_same_vendor_diff_bin(g1)
         cond_mix3_2 = ~_forbidden_same_vendor_diff_bin(g2)
 
-        has21_merged = bool(g1.get("_has_size21", False)) or bool(g2.get("_has_size21", False))
-        cond_layer3 = (~units["_has_size1"]) if has21_merged else all_true
+        # 【特例品番フィルタ：層3用】g1 + g2 の統合フラグで判定
+        has21_g1 = bool(g1.get("_has_size21", False))
+        has21_g2 = bool(g2.get("_has_size21", False))
+        has21_merged = has21_g1 | has21_g2
+        
+        has_special_g1 = bool(g1.get("_has_special_hinban", False))
+        has_special_g2 = bool(g2.get("_has_special_hinban", False))
+        has_special_merged = has_special_g1 | has_special_g2
+
+        # 【特例品番フィルタ：631426010000】
+        # (1) g1 または g2 が size21 を含む場合：g3 から 631426010000 を除外
+        # (2) g1 または g2 が 631426010000 を含む場合：g3 から size21 を除外
+        
+        if has21_merged:
+            if "_has_special_hinban" in units.columns:
+                special_hinban_series = units.get("_has_special_hinban", pd.Series(False, index=units.index))
+                special_hinban_units = units[special_hinban_series]
+                cond_layer3 = ~units["山ID"].isin(special_hinban_units["山ID"])
+            else:
+                # 後方互換: 旧フォーマットでは size21 山に size1 を載せない
+                cond_layer3 = ~units["_has_size1"]
+        elif has_special_merged:
+            size21_series = units.get("_has_size21", pd.Series(False, index=units.index))
+            size21_units = units[size21_series]
+            cond_layer3 = ~units["山ID"].isin(size21_units["山ID"])
+        else:
+            cond_layer3 = all_true
         cond_mix3_final = cond_mix3_1 & cond_mix3_2 & cond_layer3
 
         cand3 = units[
@@ -308,14 +355,6 @@ def run_pipeline(
                     target_mask_part = _target_takaoka_mask(part)
                     if target_mask_part.any():
                         hsum = pd.to_numeric(part.loc[target_mask_part, "高さ"], errors="coerce").fillna(0).sum() if "高さ" in part.columns else 0.0
-                        logger.debug(
-                            "DEBUG 高岡2026062503/K5: run_pipeline groupby(入車時間) key=%s 件数=%d 高さ合計=%.1f cap=%.1f 超過=%s",
-                            str(part.iloc[0].get("入車時間", "")),
-                            int(target_mask_part.sum()),
-                            float(hsum),
-                            float(height_cap),
-                            bool(hsum > float(height_cap)),
-                        )
                     if str(size_type) == "1":
                         part_hinbans = part["HINBAN"] if "HINBAN" in part.columns else None
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap, hinbans=part_hinbans)
@@ -377,6 +416,10 @@ def _build_size1_mixed(expanded, height_cap, mixing_key):
     size1_df["_is_size1"] = stype_sub.eq("1")
     size1_df["_is_size21"] = stype_sub.eq("21")
     size1_df["_role_class"] = np.where(size1_df["_is_size21"], "21", "1")
+
+    # SPECIAL_HINBAN (631426010000) フラグを追加
+    hinban_normalized = size1_df.get("HINBAN", pd.Series("", index=size1_df.index)).astype(str).str.strip()
+    size1_df["_has_special_hinban"] = hinban_normalized.eq(_normalize_hinban_text(SPECIAL_HINBAN))
 
     if "納入先" not in size1_df.columns or not size1_df["納入先"].astype(str).str.strip().ne("").any():
         # 納入先コード → OData_納入先 → SYUKKASAKI の優先順で補完
