@@ -54,7 +54,7 @@ from src.services.scheduler import (
     aggregate_proc_details_to_mountains,
 )
 from src.services.exporter import (
-    build_spo_export_df, export_spo_xlsx,
+    build_spo_export_df, export_spo_xlsx_staged,
     attach_pickup_start_time, export_kanban_xlsx,
     append_to_spo_history,
 )
@@ -1605,8 +1605,8 @@ class App(ctk.CTk):
         except Exception:
             pass
         if spo_df is not None and not spo_df.empty:
-            # SPOアップロード用.xlsx はSPO監視フォルダへ
-            spo_path = export_spo_xlsx(spo_df, out_dir=dirs["spo_xlsx_dir"])
+            # SPOアップロード用.xlsx はSPO監視フォルダへ（staging+timestamp+move方式）
+            spo_path = export_spo_xlsx_staged(spo_df, watch_dir=dirs["spo_xlsx_dir"])
             try:
                 # 履歴はローカル固定フォルダへ
                 append_to_spo_history(spo_df, out_dir=dirs["history_dir"])
