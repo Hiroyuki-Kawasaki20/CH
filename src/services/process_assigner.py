@@ -78,6 +78,52 @@ def _get_lane_count(item_name: str) -> int:
     return 2 if "日野" in name else 1
 
 
+def _is_hino_2lane_target(vendor: str) -> bool:
+    """日野2レーンの対象判定（"日野" のみ）。"""
+    return str(vendor).strip() == "日野"
+
+
+def _get_prev_bin_for_vendor(
+    vendor: str,
+    current_bin: int,
+    vendor_bin_numbers: Dict[str, List[int]],
+    allow_wrap: bool = False,
+    offset: int = 1,
+    lane_parity: Optional[int] = None,
+) -> Optional[str]:
+    """納入先ごとの便一覧から、対象便の offset 個前の便番号を返す。"""
+    if current_bin <= 0:
+        return None
+
+    bins = vendor_bin_numbers.get(vendor, [])
+    if not bins:
+        # マスタに便番号が無い場合は単純計算（循環なし）
+        target = current_bin - offset
+        if target > 0:
+            return f"{target:02d}"
+        if allow_wrap:
+            # 循環許可時は最終便を返す
+            return f"{max(1, current_bin):02d}"
+        return None
+
+    # bins はソート済み（ascending）。offset 個前の便を探す。
+    lowers = sorted([b for b in bins if b < current_bin], reverse=True)
+    if len(lowers) >= offset:
+        return f"{int(lowers[offset - 1]):02d}"
+
+    if allow_wrap and offset == 1:
+        # offset=1 でかつ循環許可の場合のみ、最終便を返す（従来との互換性）
+        return f"{int(max(bins)):02d}"
+
+    if allow_wrap and offset == 2 and lane_parity in (0, 1):
+        # 日野2レーン向け: 同レーン(同奇偶)内で巻き戻り、当月最終便を返す。
+        parity_bins = [b for b in bins if (b % 2) == lane_parity and b != current_bin]
+        if parity_bins:
+            return f"{int(max(parity_bins)):02d}"
+
+    return None
+
+
 def _to_operational_timeline_secs(secs: Optional[int]) -> Optional[int]:
     """業務日タイムラインへ正規化する。
 
@@ -422,54 +468,6 @@ def _legacy_assign_processes_by_arrival_time(
         vendor_bin_numbers.setdefault(v, set()).add(bn)
     vendor_bin_numbers = {v: sorted(list(bset)) for v, bset in vendor_bin_numbers.items()}
 
-    def _is_hino_vendor(vendor: str) -> bool:
-        v = str(vendor).strip()
-        return v.startswith("日野")
-
-    def _is_hino_2lane_target(vendor: str) -> bool:
-        """日野2レーンの対象判定（"日野" のみ）。"""
-        return str(vendor).strip() == "日野"
-
-    def _get_prev_bin_for_vendor(
-        vendor: str,
-        current_bin: int,
-        allow_wrap: bool = False,
-        offset: int = 1,
-        lane_parity: Optional[int] = None,
-    ) -> Optional[str]:
-        if current_bin <= 0:
-            return None
-        # offset 個前の便番号を返す。offset=1 で前便(従来)、offset=2 で2便前(日野2レーン用)。
-        bins = vendor_bin_numbers.get(vendor, [])
-        if not bins:
-            # マスタに便番号が無い場合は単純計算（循環なし）
-            target = current_bin - offset
-            if target > 0:
-                return f"{target:02d}"
-            if allow_wrap:
-                # 循環許可時は最終便を返す
-                return f"{max(1, current_bin):02d}"
-            return None
-        
-        # bins はソート済み（ascending）。offset 個前の便を探す。
-        lowers = sorted([b for b in bins if b < current_bin], reverse=True)
-        if len(lowers) >= offset:
-            # offset 個前の便が存在
-            return f"{int(lowers[offset - 1]):02d}"
-        
-        # offset 個前が存在しない場合
-        if allow_wrap and offset == 1:
-            # offset=1 でかつ循環許可の場合のみ、最終便を返す（従来との互換性）
-            return f"{int(max(bins)):02d}"
-
-        if allow_wrap and offset == 2 and lane_parity in (0, 1):
-            # 日野2レーン向け: 同レーン(同奇偶)内で巻き戻り、当月最終便を返す。
-            parity_bins = [b for b in bins if (b % 2) == lane_parity and b != current_bin]
-            if parity_bins:
-                return f"{int(max(parity_bins)):02d}"
-        
-        return None
-
     def _get_prev_group_time(vendor: str, current_mins: int) -> Optional[int]:
         if vendor not in vendor_sorted_groups:
             return None
@@ -538,6 +536,7 @@ def _legacy_assign_processes_by_arrival_time(
                     prev_bin = _get_prev_bin_for_vendor(
                         lookup_vendor,
                         current_bin,
+                        vendor_bin_numbers,
                         allow_wrap=bool(has_set_flag_col and set_flag),
                         offset=lane_count,
                         lane_parity=(current_bin % 2) if lane_count == 2 else None,
@@ -582,7 +581,13 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False, offset=1)
+                        prev_bin = _get_prev_bin_for_vendor(
+                            lookup_vendor,
+                            current_bin,
+                            vendor_bin_numbers,
+                            allow_wrap=False,
+                            offset=1,
+                        )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -612,7 +617,13 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=True, offset=1)
+                        prev_bin = _get_prev_bin_for_vendor(
+                            lookup_vendor,
+                            current_bin,
+                            vendor_bin_numbers,
+                            allow_wrap=True,
+                            offset=1,
+                        )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -633,7 +644,13 @@ def _legacy_assign_processes_by_arrival_time(
                 st = _shift_start_secs(shift_idx) + 15 * 60
                 try:
                     current_bin = int(order2)
-                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False, offset=1)
+                    prev_bin = _get_prev_bin_for_vendor(
+                        lookup_vendor,
+                        current_bin,
+                        vendor_bin_numbers,
+                        allow_wrap=False,
+                        offset=1,
+                    )
                     if prev_bin is not None:
                         prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -655,7 +672,13 @@ def _legacy_assign_processes_by_arrival_time(
                 try:
                     current_bin = int(order2)
                     # 前便入車時刻 + 10分 を引取開始下限に設定（日野以外は N-1 便）
-                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False, offset=1)
+                    prev_bin = _get_prev_bin_for_vendor(
+                        lookup_vendor,
+                        current_bin,
+                        vendor_bin_numbers,
+                        allow_wrap=False,
+                        offset=1,
+                    )
                     if prev_bin is not None:
                         prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -756,6 +779,7 @@ def _legacy_assign_processes_by_arrival_time(
                     prev_bin = _get_prev_bin_for_vendor(
                         lookup_vendor,
                         current_bin,
+                        vendor_bin_numbers,
                         allow_wrap=bool(has_set_flag_col and set_flag),
                         offset=lane_count,
                         lane_parity=(current_bin % 2) if lane_count == 2 else None,
@@ -785,7 +809,13 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False)
+                        prev_bin = _get_prev_bin_for_vendor(
+                            lookup_vendor,
+                            current_bin,
+                            vendor_bin_numbers,
+                            allow_wrap=False,
+                            offset=1,
+                        )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -805,6 +835,7 @@ def _legacy_assign_processes_by_arrival_time(
                         prev_bin = _get_prev_bin_for_vendor(
                             lookup_vendor,
                             current_bin,
+                            vendor_bin_numbers,
                             allow_wrap=True,
                             offset=1,
                         )
@@ -825,7 +856,13 @@ def _legacy_assign_processes_by_arrival_time(
             else:
                 try:
                     current_bin = int(order2)
-                    prev_bin = _get_prev_bin_for_vendor(lookup_vendor, current_bin, allow_wrap=False)
+                    prev_bin = _get_prev_bin_for_vendor(
+                        lookup_vendor,
+                        current_bin,
+                        vendor_bin_numbers,
+                        allow_wrap=False,
+                        offset=1,
+                    )
                     if prev_bin is not None:
                         prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None

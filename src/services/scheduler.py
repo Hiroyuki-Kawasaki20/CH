@@ -20,6 +20,9 @@ from ..utils.normalizer import _ZEN2HAN_DIGIT_COLON, _normalize_dest_name
 from .process_assigner import (
     _adjust_start_for_breaks,
     _calc_work_end_with_breaks,
+    _get_lane_count,
+    _get_prev_bin_for_vendor,
+    _is_hino_2lane_target,
     _is_truthy_flag,
     _legacy_assign_processes_by_arrival_time,
     _seconds_to_hhmm,
@@ -618,21 +621,6 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
         vendor_bin_numbers.setdefault(v, set()).add(bn)
     vendor_bin_numbers = {v: sorted(list(bset)) for v, bset in vendor_bin_numbers.items()}
 
-    def _get_prev_bin_for_vendor(vendor: str, current_bin: int, allow_wrap: bool = False) -> Optional[str]:
-        if current_bin <= 0:
-            return None
-        bins = vendor_bin_numbers.get(vendor, [])
-        if not bins:
-            if current_bin > 1:
-                return f"{current_bin - 1:02d}"
-            return None
-        lowers = [b for b in bins if b < current_bin]
-        if lowers:
-            return f"{int(max(lowers)):02d}"
-        if allow_wrap:
-            return f"{int(max(bins)):02d}"
-        return None
-
     def _get_prev_group_time(vendor: str, current_mins: int) -> Optional[int]:
         if vendor not in vendor_sorted_groups:
             return None
@@ -694,7 +682,15 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False)
+                        lane_count = _get_lane_count(vendor)
+                        prev_bin = _get_prev_bin_for_vendor(
+                            vendor,
+                            current_bin,
+                            vendor_bin_numbers,
+                            allow_wrap=False,
+                            offset=lane_count if _is_hino_2lane_target(vendor) else 1,
+                            lane_parity=(current_bin % 2) if _is_hino_2lane_target(vendor) and lane_count == 2 else None,
+                        )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -723,7 +719,15 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                        lane_count = _get_lane_count(vendor)
+                        prev_bin = _get_prev_bin_for_vendor(
+                            vendor,
+                            current_bin,
+                            vendor_bin_numbers,
+                            allow_wrap=True,
+                            offset=lane_count if _is_hino_2lane_target(vendor) else 1,
+                            lane_parity=(current_bin % 2) if _is_hino_2lane_target(vendor) and lane_count == 2 else None,
+                        )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -743,7 +747,13 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
                 st = _shift_start_secs(shift_idx) + 15 * 60
                 try:
                     current_bin = int(order2)
-                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=False)
+                    prev_bin = _get_prev_bin_for_vendor(
+                        vendor,
+                        current_bin,
+                        vendor_bin_numbers,
+                        allow_wrap=False,
+                        offset=1,
+                    )
                     if prev_bin is not None:
                         prev_pickup = master_map.get((vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
@@ -764,7 +774,15 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
             else:
                 try:
                     current_bin = int(order2)
-                    prev_bin = _get_prev_bin_for_vendor(vendor, current_bin, allow_wrap=True)
+                    lane_count = _get_lane_count(vendor)
+                    prev_bin = _get_prev_bin_for_vendor(
+                        vendor,
+                        current_bin,
+                        vendor_bin_numbers,
+                        allow_wrap=True,
+                        offset=lane_count if _is_hino_2lane_target(vendor) else 1,
+                        lane_parity=(current_bin % 2) if _is_hino_2lane_target(vendor) and lane_count == 2 else None,
+                    )
                     if prev_bin is not None:
                         prev_pickup = master_map.get((vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
