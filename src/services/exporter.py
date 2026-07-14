@@ -21,7 +21,7 @@ from ..utils.excel_utils import (
     index_to_letters,
 )
 from ..utils.normalizer import _normalize_hhmm, _ZEN2HAN_DIGIT_COLON
-from .spo_export import export_to_spo
+from .spo_export import export_to_spo, export_to_spo_staged, DEFAULT_STAGING_DIR
 
 
 def export_setboard_html(
@@ -357,6 +357,36 @@ def export_spo_xlsx(spo_df: pd.DataFrame, out_dir: str, base_name: str = "SPOア
     path = os.path.join(out_dir, f"{base_name}.xlsx")
     export_to_spo(spo_df, output_path=path)
     return path
+
+
+def export_spo_xlsx_staged(
+    spo_df: pd.DataFrame,
+    watch_dir: str,
+    staging_dir: str = DEFAULT_STAGING_DIR,
+    base_name: str = "SPOアップロード用",
+) -> Optional[str]:
+    """Staging方式でSPO Excel出力（OneDrive同期競合回避）。
+
+    staging領域でExcel作成＋テーブル化を完了させてから watch_dir へ
+    os.replace（フォールバック: shutil.move）で移動する。
+    ファイル名はタイムスタンプ+UUID付きで毎回一意になる。
+
+    Args:
+        spo_df: 出力対象DataFrame
+        watch_dir: Power Automate監視フォルダのパス（OneDrive同期対象）
+        staging_dir: staging領域（デフォルト: C:\\Temp\\spo_staging）
+        base_name: ファイル名の基本部分
+
+    Returns:
+        移動後の最終ファイルパス（成功時）、None（空DataFrame時）
+    """
+    return export_to_spo_staged(
+        df=spo_df,
+        watch_dir=watch_dir,
+        staging_dir=staging_dir,
+        table_name="SPOExport",
+        base_name=base_name,
+    )
 
 
 def export_kanban_xlsx(

@@ -161,3 +161,133 @@ def test_spo_xlsx_goes_to_watch_dir_but_history_and_unmatched_go_local():
     assert dirs["unmatched_dir"] == LOCAL_OUTPUT_DIR
     assert dirs["history_dir"] != watch
     assert dirs["unmatched_dir"] != watch
+
+
+def test_generate_unique_filename_creates_unique_names():
+    """タイムスタンプ+UUID4先頭8桁で一意なファイル名を生成する。"""
+    name1 = spo_export._generate_unique_filename("SPOアップロード用")
+    name2 = spo_export._generate_unique_filename("SPOアップロード用")
+    
+    # ファイル名のパターンを確認
+    assert name1.startswith("SPOアップロード用_")
+    assert name1.endswith(".xlsx")
+    assert name2.startswith("SPOアップロード用_")
+    assert name2.endswith(".xlsx")
+    
+    # 異なる名前が生成されることを確認
+    assert name1 != name2
+
+
+def test_export_to_spo_staged_empty_dataframe_returns_none(tmp_path):
+    """空DataFrameの場合、ファイルを作成せず None を返す。"""
+    df_empty = pd.DataFrame()
+    watch_dir = tmp_path / "watch"
+    staging_dir = tmp_path / "staging"
+    
+    result = spo_export.export_to_spo_staged(
+        df_empty, 
+        watch_dir=str(watch_dir),
+        staging_dir=str(staging_dir),
+        table_name="SPOExport",
+        base_name="SPOアップロード用"
+    )
+    
+    assert result is None
+    assert not (watch_dir / "*").exists()
+    assert not (staging_dir / "*").exists()
+
+
+def test_export_to_spo_staged_creates_file_in_watch_dir_after_move(tmp_path):
+    """staging で完成させ、os.replace で watch_dir に移動。その後存在確認。"""
+    df = pd.DataFrame({"A": [1, 2], "B": ["x", "y"]})
+    watch_dir = tmp_path / "watch"
+    staging_dir = tmp_path / "staging"
+    
+    result = spo_export.export_to_spo_staged(
+        df,
+        watch_dir=str(watch_dir),
+        staging_dir=str(staging_dir),
+        table_name="SPOExport",
+        base_name="SPOアップロード用"
+    )
+    
+    # watch_dir に一意名のファイルが存在することを確認
+    assert result is not None
+    watch_file = Path(result)
+    assert watch_file.exists()
+    assert watch_file.parent == watch_dir
+    
+    # ファイル名にタイムスタンプが含まれることを確認
+    assert "SPOアップロード用_" in watch_file.name
+    assert watch_file.name.endswith(".xlsx")
+    
+    # staging_dir に残存ファイルがないことを確認
+    staging_files = list(staging_dir.glob("*"))
+    assert len(staging_files) == 0
+    
+    # Excelファイルにテーブルがあることをを確認（SPOExportテーブル）
+    wb = load_workbook(str(watch_file))
+    ws = wb.active
+    table_names = [t.name for t in ws.tables.values()]
+    assert "SPOExport" in table_names
+
+
+def test_export_to_spo_staged_fallback_to_shutil_move_on_cross_drive(tmp_path, monkeypatch):
+    """os.replace で OSError が発生した場合、shutil.move にフォールバック。"""
+    df = pd.DataFrame({"A": [1, 2], "B": ["x", "y"]})
+    watch_dir = tmp_path / "watch"
+    staging_dir = tmp_path / "staging"
+    
+    replace_called = {"count": 0}
+    original_replace = os.replace
+    
+    def fake_replace(src, dst):
+        replace_called["count"] += 1
+        if replace_called["count"] == 1:
+            raise OSError("cross-device link")
+        return original_replace(src, dst)
+    
+    monkeypatch.setattr(spo_export.os, "replace", fake_replace)
+    
+    result = spo_export.export_to_spo_staged(
+        df,
+        watch_dir=str(watch_dir),
+        staging_dir=str(staging_dir),
+        table_name="SPOExport",
+        base_name="SPOアップロード用"
+    )
+    
+    # フォールバックが発動したことを確認
+    assert replace_called["count"] >= 1
+    
+    # watch_dir にファイルが最終的に存在することを確認
+    assert result is not None
+    assert Path(result).exists()
+
+
+def test_export_to_spo_staged_cleanup_on_exception(tmp_path, monkeypatch):
+    """例外発生時、staging_path・final_path 双方を削除してから re-raise。"""
+    df = pd.DataFrame({"A": [1, 2], "B": ["x", "y"]})
+    watch_dir = tmp_path / "watch"
+    staging_dir = tmp_path / "staging"
+    
+    # staging_dir作成を失敗させる（テーブル追加失敗を模擬）
+    def fake_add_table_exact(path, table_name):
+        raise ValueError("Simulated table creation error")
+    
+    monkeypatch.setattr(spo_export, "_add_table_exact", fake_add_table_exact)
+    
+    try:
+        result = spo_export.export_to_spo_staged(
+            df,
+            watch_dir=str(watch_dir),
+            staging_dir=str(staging_dir),
+            table_name="SPOExport",
+            base_name="SPOアップロード用"
+        )
+        assert False, "例外が発生するはずだが発生しなかった"
+    except ValueError as e:
+        assert "Simulated table creation error" in str(e)
+        # watch_dir が clean であることを確認
+        watch_files = list(watch_dir.glob("*")) if watch_dir.exists() else []
+        assert len(watch_files) == 0
