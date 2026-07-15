@@ -58,6 +58,10 @@ from src.services.exporter import (
     attach_pickup_start_time, export_kanban_xlsx,
     append_to_spo_history,
 )
+from src.services.lane_end_times_history import (
+    push_lane_end_times, select_lane_end_times,
+    generate_lane_end_times_label, normalize_choice_label,
+)
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
 # ===== CustomTkinter 設定 =====
@@ -130,9 +134,10 @@ class App(ctk.CTk):
         self._auto_reload_after_id = None
         self.export_dir = str(get_export_dir())
         self.master_data = pd.DataFrame(columns=["OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"])
-        self.lane_end_times_memory = {}
-        self.selected_shift = tk.StringVar(value="1直")
-        self.last_run_shift = None
+        # ===== 前回終了時刻の履歴管理 =====
+        self.lane_end_times_history = []  # 最大2件・最新が先頭
+        self._last_lane_end_times = {}  # 直前の計算結果を一時保存（push時に使用）
+        self.selected_history_choice = tk.StringVar(value="最新")
         self.late_relief_warnings = []
         self._route_display_to_internal = {}  # "KVC-B7" -> "KVC" のマッピング
         self._load_auto_reload_settings()
@@ -366,29 +371,48 @@ class App(ctk.CTk):
 
         # ② オーダー選択
         order_header = ctk.CTkFrame(left_top, fg_color="transparent")
-        order_header.pack(fill="x", pady=(6, 4))
-        ctk.CTkLabel(order_header, text="  ② オーダーを選ぶ", fg_color=C_STEP2, text_color="white",
-                 font=ctk.CTkFont(family="Meiryo UI", size=13, weight="bold"),
-                 anchor="w", corner_radius=6, height=30
-                     ).pack(side="left", fill="x", expand=True)
-        self._order_count_label = ctk.CTkLabel(
-            order_header, text="0 件", fg_color=C_INFO, text_color="white",
-            font=ctk.CTkFont(family="Meiryo UI", size=10), corner_radius=10, width=46, height=28)
-        self._order_count_label.pack(side="right", padx=(4, 0))
+        order_header.pack(fill="x", pady=(2, 0))
+        ctk.CTkLabel(order_header, text="  ② オーダーを選ぶ", 
+                     fg_color=C_STEP2, text_color="white",
+                     font=ctk.CTkFont(family="Meiryo UI", size=14, weight="bold"), 
+                     anchor="w", corner_radius=6, height=30).pack(fill="x", pady=(0, 4))
+        self._order_count_label = ctk.CTkLabel(left_top, text="0 件", 
+                                               font=self._label_font, text_color=C_NEUTRAL)
 
         order_frame = ctk.CTkFrame(left_top, fg_color="transparent")
-        order_frame.pack(fill="both", expand=True, pady=(0, 6))
+        order_frame.pack(fill="x", pady=(0, 6))
         order_sb = tk.Scrollbar(order_frame, orient="vertical")
         self.order_list = tk.Listbox(order_frame, selectmode="extended", exportselection=False,
-                                     font=("Meiryo UI", 13), bg="white", fg="#2B2D42",
+                                     font=("Meiryo UI", 12), height=6,
+                                     bg="white", fg="#2B2D42",
                                      selectbackground=C_ACCENT, selectforeground="white",
                                      relief="flat", highlightthickness=1, highlightcolor="#D6DCE5",
                                      highlightbackground="#D6DCE5", yscrollcommand=order_sb.set)
         order_sb.configure(command=self.order_list.yview)
+        
         self.order_list.pack(side="left", fill="both", expand=True)
         order_sb.pack(side="right", fill="y")
         self.order_list.bind("<Double-Button-1>", lambda e: self.add_selection())
         self._on_summary_mode_changed()
+
+        # ④ 前回時刻選択（履歴管理）
+        shift_frame = ctk.CTkFrame(left_top, fg_color="transparent")
+        shift_frame.pack(fill="x", pady=(6, 0))
+        ctk.CTkLabel(shift_frame, text="前回時刻選択", font=self._label_bold).pack(side="left", padx=(0, 8))
+        # 初期値：履歴が空なので「未計算」ラベル
+        initial_values = [
+            generate_lane_end_times_label(self.lane_end_times_history, "最新"),
+            generate_lane_end_times_label(self.lane_end_times_history, "1つ前"),
+        ]
+        self.history_combo = ttk.Combobox(shift_frame, values=initial_values, state="readonly",
+                                     textvariable=self.selected_history_choice, width=20,
+                                     font=("Meiryo UI", 11))
+        # ここは combobox 値を初期化後に self.selected_history_choice をセット
+        # （Combobox内の値として最初のラベル「最新 (未計算)」をセット）
+        self.selected_history_choice.set(initial_values[0])
+        self.history_combo.pack(side="left")
+        if self.selected_history_choice.get() == "":
+            self.selected_history_choice.set("最新")
 
         # ③ バッテリー交換オプション
         battery_frame = ctk.CTkFrame(left_top, fg_color="transparent")
@@ -402,28 +426,6 @@ class App(ctk.CTk):
             fg_color=C_ACCENT,
             hover_color=C_ACCENT_HOVER,
         ).pack(anchor="w", pady=(0, 6))
-
-        shift_frame = ctk.CTkFrame(left_top, fg_color="transparent")
-        shift_frame.pack(fill="x", pady=(2, 6))
-        ctk.CTkLabel(shift_frame, text="直選択", font=self._label_bold).pack(side="left", padx=(0, 8))
-        ctk.CTkRadioButton(
-            shift_frame,
-            text="1直",
-            variable=self.selected_shift,
-            value="1直",
-            font=self._label_font,
-            fg_color=C_ACCENT,
-            hover_color=C_ACCENT_HOVER,
-        ).pack(side="left", padx=(0, 8))
-        ctk.CTkRadioButton(
-            shift_frame,
-            text="2直",
-            variable=self.selected_shift,
-            value="2直",
-            font=self._label_font,
-            fg_color=C_ACCENT,
-            hover_color=C_ACCENT_HOVER,
-        ).pack(side="left")
 
         # 下部エリア（実行/操作ボタン）
         left_bottom = ctk.CTkFrame(left, fg_color="transparent", height=120)
@@ -1008,8 +1010,8 @@ class App(ctk.CTk):
         self.refresh_selection_tree()
 
     def clear_lane_time_carryover(self):
-        self.lane_end_times_memory = {}
-        self.last_run_shift = None
+        # ③ 履歴を完全にリセット
+        self.lane_end_times_history = []
         messagebox.showinfo("引継クリア", "工程別の引き継ぎ時刻をクリアしました。次回は初回動作になります。")
 
     def refresh_selection_tree(self):
@@ -1024,10 +1026,11 @@ class App(ctk.CTk):
         if not self.selections:
             messagebox.showinfo("実行", "選択が空です。便名・受入・オーダーを追加してください。")
             return
-        current_shift = str(self.selected_shift.get()).strip() or "1直"
-        use_previous_lane_end_times = bool(self.last_run_shift == current_shift)
-        lane_end_times_backup = dict(self.lane_end_times_memory)
-        previous_lane_end_times = self.lane_end_times_memory if use_previous_lane_end_times else {}
+        # ④ 履歴から選択値に基づいて前回の時刻を取得
+        previous_lane_end_times = select_lane_end_times(
+            self.lane_end_times_history,
+            normalize_choice_label(self.selected_history_choice.get())
+        )
         self.progress_bar.pack(fill="x", pady=(0, 4))
         self.progress_bar.start()
         self.title("実行中... CHかんばんセット")
@@ -1067,17 +1070,32 @@ class App(ctk.CTk):
         self.group_details = group_details
         self.size1_mixed_summary = s1_summary
         self.size1_mixed_details = s1_details
-        self.lane_end_times_memory = dict(previous_lane_end_times)
-
         # 工程割当
         assignment_ok = self.recompute_process_assignment()
         if not assignment_ok:
-            self.lane_end_times_memory = lane_end_times_backup
+            # エラー時は履歴を push しない（変更なし）
             self.progress_bar.stop()
             self.progress_bar.pack_forget()
             self.title("CHかんばんセット — 仕分け・セットボード")
             return
-        self.last_run_shift = current_shift
+
+        # ⑤ 実行成功時に確定した終了時刻を履歴に push（計算後のみ）
+        # self._last_lane_end_times は recompute_process_assignment 内で計算された確定値
+        result_times = dict(self._last_lane_end_times) if self._last_lane_end_times else {}
+        if result_times:
+            self.lane_end_times_history = push_lane_end_times(
+                self.lane_end_times_history,
+                result_times
+            )
+            # 履歴更新後、combobox値を動的に再生成
+            updated_values = [
+                generate_lane_end_times_label(self.lane_end_times_history, "最新"),
+                generate_lane_end_times_label(self.lane_end_times_history, "1つ前"),
+            ]
+            self.history_combo['values'] = updated_values
+            # 現在の選択が有効でなくなった場合は「最新」を選択
+            if self.selected_history_choice.get() not in updated_values:
+                self.selected_history_choice.set(updated_values[0])
 
         # 表示はセットボード中心（不要タブは非表示）
         self.update_setboard_views()
@@ -1144,13 +1162,20 @@ class App(ctk.CTk):
                     print(f"入車時間マスタ読み込みエラー: {e}")
 
             if not master_df.empty:
+                # ⑦ 工程割当時に履歴から選択値に基づいて時刻を取得
+                working_lane_end_times = select_lane_end_times(
+                    self.lane_end_times_history,
+                    normalize_choice_label(self.selected_history_choice.get())
+                )
                 self.mountain_proc, lane_end_times = assign_processes_by_arrival_time(
                     self.proc_details,
                     master_df,
-                    previous_lane_end_times=self.lane_end_times_memory,
+                    previous_lane_end_times=working_lane_end_times,
                     return_lane_end_times=True,
                 )
-                self.lane_end_times_memory = dict(lane_end_times or {})
+                # 計算結果を一時保存（成功後にpushするため）
+                self._last_lane_end_times = lane_end_times
+                # ⑥ 工程割当結果を作業用変数で保持（確定後にpush）
                 self.late_relief_warnings = self._collect_late_relief_warnings(master_df)
                 if "実開始時間" in self.mountain_proc.columns:
                     self.mountain_start_times = dict(zip(
@@ -1167,7 +1192,6 @@ class App(ctk.CTk):
                     "実開始時間": [""] * len(yamas),
                         "照合追加180秒": [False] * len(yamas),
                 })
-                self.lane_end_times_memory = {PROC_MAIN: 0, PROC_RELIEF: 0, PROC_OVERFLOW: 0}
                 self.mountain_start_times = {}
 
             self.mountain_proc_map = dict(zip(self.mountain_proc["山通番"], self.mountain_proc["山工程"]))
