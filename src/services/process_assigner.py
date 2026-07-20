@@ -138,6 +138,29 @@ def _to_operational_timeline_secs(secs: Optional[int]) -> Optional[int]:
     return day_secs
 
 
+def _axis_aligned_deadline_secs(
+    deadline_secs: Optional[int],
+    start_floor_secs: Optional[int],
+) -> Optional[int]:
+    """開始下限が翌日軸(24h超)の便は、当日軸の締切を+24hして同一軸の比較値を返す。
+
+    例: 日野08便(セットあり)は開始下限24:00(86400秒)だが、締切は
+    06:29-10分=22740秒(当日軸)のまま。生の値でソートすると翌日締切の
+    07便(87240秒)より先と誤判定されるため、軸をそろえて比較する。
+    実行可否判定(_deadline_for_eval)と同じ思想の順序決定用ヘルパー。
+    """
+    if deadline_secs is None:
+        return None
+    ddl = int(deadline_secs)
+    if (
+        start_floor_secs is not None
+        and int(start_floor_secs) >= DAY_SECS
+        and ddl < DAY_SECS
+    ):
+        return ddl + DAY_SECS
+    return ddl
+
+
 def _schedule_work(current_end: int, mountain_count: int, work_duration: int) -> Tuple[int, int, int]:
     """工程内の次山を開始/終了する時刻を返す（2山ごと照合+180秒を含む）。"""
     next_idx = mountain_count + 1
@@ -192,20 +215,36 @@ def _pick_next_main_mountain(
     次にメイン工程で処理する山を返す。
 
     方針:
-    - 主対象山: 締切が最も早い山
+    - 主対象山: 締切が最も早い山。同一締切内では引取開始時間が早い山を優先。
     - 主対象山を遅らせない範囲で、先に処理できる山があれば前倒し採用
     """
     if not unscheduled:
         raise ValueError("unscheduled is empty")
+    
+    # DEBUG: 実行確認
+    print(f"[DEBUG _pick_next_main_mountain] Called with {len(unscheduled)} unscheduled mountains")
+    print(f"  unscheduled yamas: {[m['山通番'] for m in unscheduled[:5]]}")
+    for m in unscheduled[:3]:
+        print(f"    山{m['山通番']}: 締切={m.get('締め切り_秒')} 引取={m.get('引取開始時間_秒')}")
 
     with_deadline = [m for m in unscheduled if m.get("締め切り_秒") is not None]
     if not with_deadline:
         chosen = sorted(unscheduled, key=lambda x: x["山通番"])[0]
         return chosen, False
 
-    primary = sorted(with_deadline, key=lambda x: (x["締め切り_秒"], x["山通番"]))[0]
+    # 同一締切内では引取開始時間が早い山を優先
+    # 引取開始時間_秒がない場合は、山通番で後進（既存動作）
+    primary = sorted(
+        with_deadline,
+        key=lambda x: (
+            _axis_aligned_deadline_secs(x["締め切り_秒"], x.get("開始時間_秒")),
+            x["山通番"],
+        ),
+    )[0]
     primary_work = int(primary["引取工数_秒"])
-    primary_deadline = primary.get("締め切り_秒")
+    primary_deadline = _axis_aligned_deadline_secs(
+        primary.get("締め切り_秒"), primary.get("開始時間_秒")
+    )
 
     # 主対象山をいま処理して間に合う見込みがない場合は、前倒しせず主対象を優先
     primary_floor = primary.get("開始時間_秒")
@@ -219,7 +258,9 @@ def _pick_next_main_mountain(
         if int(cand["山通番"]) == int(primary["山通番"]):
             continue
         cand_work = int(cand["引取工数_秒"])
-        cand_deadline = cand.get("締め切り_秒")
+        cand_deadline = _axis_aligned_deadline_secs(
+            cand.get("締め切り_秒"), cand.get("開始時間_秒")
+        )
         cand_floor = cand.get("開始時間_秒")
         cand_start, cand_end, _ = _floored_schedule(main_end_time, main_mountain_count, cand_work, cand_floor)
 
@@ -245,8 +286,8 @@ def _pick_next_main_mountain(
     # 前倒し候補は「より早い締切」を優先。締切なしは最後に回す。
     safe_prefetch.sort(
         key=lambda x: (
-            x[2].get("締め切り_秒") is None,
-            x[2].get("締め切り_秒") or float("inf"),
+            _axis_aligned_deadline_secs(x[2].get("締め切り_秒"), x[2].get("開始時間_秒")) is None,
+            _axis_aligned_deadline_secs(x[2].get("締め切り_秒"), x[2].get("開始時間_秒")) or float("inf"),
             -int(x[2].get("引取工数_秒", 0)),
             int(x[2].get("山通番", 0)),
         )
@@ -493,6 +534,16 @@ def _legacy_assign_processes_by_arrival_time(
             max_cost + BASE_ONE_TIME + ((pal - 1) * MIDDLE_WORK) + (pal * BASE_PER_PAL), 0
         ))
 
+        # 引取開始時間を取得（最初のレコードから）
+        pickup_start_time_secs = None
+        first_row = sub.iloc[0]
+        if "引取開始時間" in sub.columns:
+            pickup_time_str = str(first_row.get("引取開始時間", "")).strip()
+            if pickup_time_str:
+                pickup_start_secs = _time_to_seconds(pickup_time_str)
+                if pickup_start_secs is not None:
+                    pickup_start_time_secs = _to_operational_timeline_secs(pickup_start_secs)
+
         deadline_secs = None
         start_time_secs = None
         prev_arrival_floor_secs = None
@@ -516,9 +567,7 @@ def _legacy_assign_processes_by_arrival_time(
             else:
                 lookup_vendor = vendor
             pickup = master_map.get((lookup_vendor, order2), "")
-            if not pickup:
-                continue
-            pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup))
+            pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup)) if pickup else None
             if pickup_secs is None:
                 continue
             set_flag = bool(set_flag_map.get((lookup_vendor, order2), False))
@@ -721,6 +770,7 @@ def _legacy_assign_processes_by_arrival_time(
             "引取工数_秒": pick_cost_secs,
             "締め切り_秒": deadline_secs,
             "開始時間_秒": start_time_secs,
+            "引取開始時間_秒": pickup_start_time_secs,
         })
         mtn_prev_arrival_floor_map[yama_int] = int(prev_arrival_floor_secs or 0)
 
@@ -948,6 +998,12 @@ def _legacy_assign_processes_by_arrival_time(
         # 巻き戻り等で開始が翌日基準(24h超)の便は、締切も同軸へそろえて比較する。
         deadline_for_eval = _deadline_for_eval(deadline, actual_start)
         can_main = deadline_for_eval is None or work_end <= int(deadline_for_eval)
+        
+        # DEBUG: メイン/リリーフ判定を追跡
+        if yama <= 12:  # 便13の山のみ
+            print(f"[DEBUG ASSIGN] 山{yama}: can_main={can_main}")
+            print(f"  work_end={work_end} deadline_for_eval={deadline_for_eval}")
+            print(f"  work_duration={work_duration} main_count={main_mountain_count}")
 
         if can_main:
             main_mountain_count += 1
@@ -1076,8 +1132,14 @@ def _legacy_assign_processes_by_arrival_time(
         if prefer_deadline_order:
             proc_rows.sort(
                 key=lambda r: (
-                    mtn_deadline_map.get(int(r["山通番"])) is None,
-                    mtn_deadline_map.get(int(r["山通番"])) or float("inf"),
+                    _axis_aligned_deadline_secs(
+                        mtn_deadline_map.get(int(r["山通番"])),
+                        mtn_start_floor_map.get(int(r["山通番"])),
+                    ) is None,
+                    _axis_aligned_deadline_secs(
+                        mtn_deadline_map.get(int(r["山通番"])),
+                        mtn_start_floor_map.get(int(r["山通番"])),
+                    ) or float("inf"),
                     int(r["山通番"]),
                 )
             )
@@ -1608,7 +1670,7 @@ def _legacy_assign_processes_by_arrival_time(
 
     def _try_front_pack_to_main_idle_gap(target_rows: List[dict]) -> bool:
         """空き窓限定で、リリーフ/あふれ山をメインへ最速前詰めできるか検証して採用する。"""
-        main_rows = [rr for rr in target_rows if rr.get("山工程") == PROC_MAIN]
+        main_rows = [rr for rr in target_rows if rr.get("山通番") == ""]
         main_points = []
         for rr in main_rows:
             st = _time_to_seconds(str(rr.get("実開始時間", "")))
