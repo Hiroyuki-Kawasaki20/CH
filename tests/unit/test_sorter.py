@@ -488,9 +488,9 @@ class TestProcessAssigner:
             "高さ": [400, 400, 400, 400],
         })
         master_df = pd.DataFrame({
-            "OData_納入先": ["D", "D", "A", "C"],
-            "NONYUHIBIN": ["03", "02", "02", "02"],
-            "入車時間": ["09:00", "11:40", "09:20", "08:50"],
+            "OData_納入先": ["D", "D", "A", "A", "C"],  
+            "NONYUHIBIN": ["03", "02", "01", "02", "02"],  
+            "入車時間": ["09:00", "11:40", "09:15", "09:20", "08:50"],  
         })
 
         proc_det = compute_proc_details(df)
