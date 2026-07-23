@@ -161,6 +161,19 @@ def _axis_aligned_deadline_secs(
     return ddl
 
 
+def _cycle_aware_prev_floor_secs(prev_arrival_secs: int, current_arrival_secs: int) -> int:
+    """前便入車+10分の開始下限（秒）を返す。
+
+    便番号は循環するため、01便の前便は最大便番号の便（wrap）。
+    wrapで得た前便の入車が現行便の入車以降に見える場合は前サイクル
+    （前日）の便とみなし、-24hで当日軸へ引き戻す。負値は0（制約なし）。
+    """
+    floor = int(prev_arrival_secs) + ARRIVAL_BUFFER_SECS
+    if int(prev_arrival_secs) >= int(current_arrival_secs):
+        floor -= DAY_SECS
+    return max(0, floor)
+
+
 def _schedule_work(current_end: int, mountain_count: int, work_duration: int) -> Tuple[int, int, int]:
     """工程内の次山を開始/終了する時刻を返す（2山ごと照合+180秒を含む）。"""
     next_idx = mountain_count + 1
@@ -634,18 +647,14 @@ def _legacy_assign_processes_by_arrival_time(
                             lookup_vendor,
                             current_bin,
                             vendor_bin_numbers,
-                            allow_wrap=False,
+                            allow_wrap=True,
                             offset=1,
                         )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
-                            if prev_secs is not None:
-                                st = prev_secs + ARRIVAL_BUFFER_SECS
-                                st_prev = st
-                            else:
-                                st = 0
-                                st_prev = 0
+                            st = _cycle_aware_prev_floor_secs(prev_secs, pickup_secs) if prev_secs is not None else 0
+                            st_prev = st
                         else:
                             st = 0
                             st_prev = 0
@@ -725,18 +734,14 @@ def _legacy_assign_processes_by_arrival_time(
                         lookup_vendor,
                         current_bin,
                         vendor_bin_numbers,
-                        allow_wrap=False,
+                        allow_wrap=True,
                         offset=1,
                     )
                     if prev_bin is not None:
                         prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
-                        if prev_secs is not None:
-                            st = prev_secs + ARRIVAL_BUFFER_SECS
-                            st_prev = st
-                        else:
-                            st = 0  # 前便マスタなし or 解析不可 → 開始制約なし
-                            st_prev = 0
+                        st = _cycle_aware_prev_floor_secs(prev_secs, pickup_secs) if prev_secs is not None else 0
+                        st_prev = st
                     else:
                         st = 0  # 初便：前便なし → 開始制約なし
                         st_prev = 0
@@ -863,13 +868,13 @@ def _legacy_assign_processes_by_arrival_time(
                             lookup_vendor,
                             current_bin,
                             vendor_bin_numbers,
-                            allow_wrap=False,
+                            allow_wrap=True,
                             offset=1,
                         )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
-                            st = (prev_secs + 10 * 60) if prev_secs is not None else 0
+                            st = _cycle_aware_prev_floor_secs(prev_secs, pickup_secs) if prev_secs is not None else 0
                         else:
                             st = 0
                     except (ValueError, TypeError):
@@ -910,13 +915,13 @@ def _legacy_assign_processes_by_arrival_time(
                         lookup_vendor,
                         current_bin,
                         vendor_bin_numbers,
-                        allow_wrap=False,
+                        allow_wrap=True,
                         offset=1,
                     )
                     if prev_bin is not None:
                         prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
-                        st = (prev_secs + 10 * 60) if prev_secs is not None else 0
+                        st = _cycle_aware_prev_floor_secs(prev_secs, pickup_secs) if prev_secs is not None else 0
                     else:
                         st = 0
                 except (ValueError, TypeError):
