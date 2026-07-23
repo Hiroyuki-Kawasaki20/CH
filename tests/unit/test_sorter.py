@@ -482,7 +482,7 @@ class TestProcessAssigner:
         """MAINと非MAINが混在する出力でも、MAINは入車10分前締切を必ず守る。"""
         df = pd.DataFrame({
             "山通番": [1, 2, 3, 4],
-            "移動工数": [120, 60, 30, 30],
+            "移動工数": [120, 60, 30000, 30],
             "納入先": ["D", "D", "A", "C"],
             "NONYUHIBIN": ["03", "02", "02", "02"],
             "高さ": [400, 400, 400, 400],
@@ -510,7 +510,7 @@ class TestProcessAssigner:
         work_map = {
             1: int(np.round(120 + BASE_ONE_TIME + BASE_PER_PAL, 0)),
             2: int(np.round(60 + BASE_ONE_TIME + BASE_PER_PAL, 0)),
-            3: int(np.round(30 + BASE_ONE_TIME + BASE_PER_PAL, 0)),
+            3: int(np.round(30000 + BASE_ONE_TIME + BASE_PER_PAL, 0)),
             4: int(np.round(30 + BASE_ONE_TIME + BASE_PER_PAL, 0)),
         }
         for _, row in main_rows.iterrows():
