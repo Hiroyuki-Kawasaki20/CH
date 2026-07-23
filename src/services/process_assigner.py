@@ -233,12 +233,6 @@ def _pick_next_main_mountain(
     """
     if not unscheduled:
         raise ValueError("unscheduled is empty")
-    
-    # DEBUG: 実行確認
-    print(f"[DEBUG _pick_next_main_mountain] Called with {len(unscheduled)} unscheduled mountains")
-    print(f"  unscheduled yamas: {[m['山通番'] for m in unscheduled[:5]]}")
-    for m in unscheduled[:3]:
-        print(f"    山{m['山通番']}: 締切={m.get('締め切り_秒')} 引取={m.get('引取開始時間_秒')}")
 
     with_deadline = [m for m in unscheduled if m.get("締め切り_秒") is not None]
     if not with_deadline:
@@ -1003,12 +997,6 @@ def _legacy_assign_processes_by_arrival_time(
         # 巻き戻り等で開始が翌日基準(24h超)の便は、締切も同軸へそろえて比較する。
         deadline_for_eval = _deadline_for_eval(deadline, actual_start)
         can_main = deadline_for_eval is None or work_end <= int(deadline_for_eval)
-        
-        # DEBUG: メイン/リリーフ判定を追跡
-        if yama <= 12:  # 便13の山のみ
-            print(f"[DEBUG ASSIGN] 山{yama}: can_main={can_main}")
-            print(f"  work_end={work_end} deadline_for_eval={deadline_for_eval}")
-            print(f"  work_duration={work_duration} main_count={main_mountain_count}")
 
         if can_main:
             main_mountain_count += 1
