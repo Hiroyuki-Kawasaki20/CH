@@ -1663,7 +1663,7 @@ def _legacy_assign_processes_by_arrival_time(
 
     def _try_front_pack_to_main_idle_gap(target_rows: List[dict]) -> bool:
         """空き窓限定で、リリーフ/あふれ山をメインへ最速前詰めできるか検証して採用する。"""
-        main_rows = [rr for rr in target_rows if rr.get("山通番") == ""]
+        main_rows = [rr for rr in target_rows if rr.get("山工程") == PROC_MAIN]
         main_points = []
         for rr in main_rows:
             st = _time_to_seconds(str(rr.get("実開始時間", "")))
