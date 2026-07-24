@@ -1554,34 +1554,14 @@ def _legacy_assign_processes_by_arrival_time(
     # 最終結果で照合180秒フラグを再計算し、必要な山は実開始時刻にも
     # 180秒待ちを反映して表示時刻とフラグの不整合を防ぐ。
     def _finalize_inspection_delay_flags(target_rows: List[dict]):
-        for rr in target_rows:
-            rr["照合追加180秒"] = False
-
-        def _start_key(rr: dict):
-            st = _time_to_seconds(str(rr.get("実開始時間", "")))
-            return (st is None, st if st is not None else float("inf"), int(rr.get("山通番", 0)))
-
-        for proc_label in (PROC_MAIN, PROC_RELIEF):
-            lane_rows = [rr for rr in target_rows if rr.get("山工程") == proc_label]
-            lane_rows.sort(key=_start_key)
-            prev_end = 0
-            for idx, rr in enumerate(lane_rows):
-                yama_no = int(rr["山通番"])
-                work_dur = int(mtn_work_map.get(yama_no, 0))
-                inspection_delay = 180 if (idx >= 2 and idx % 2 == 0) else 0
-
-                # 既存開始時刻を尊重しつつ、必要な待ち時間だけ後ろへ押し出す。
-                current_start = _time_to_seconds(str(rr.get("実開始時間", "")))
-                start_floor = int(mtn_start_floor_map.get(yama_no) or 0)
-                candidate_floor = max(prev_end + inspection_delay, start_floor)
-                if current_start is not None:
-                    candidate_floor = max(candidate_floor, int(current_start))
-
-                new_start = _adjust_start_for_breaks(candidate_floor, work_dur)
-                rr["実開始時間"] = _seconds_to_hhmm(new_start)
-                rr["照合追加180秒"] = bool(inspection_delay)
-                prev_end = _calc_work_end_with_breaks(new_start, work_dur)
-                rr["_end_secs"] = int(prev_end)
+        # Issue #35: かつてここで行っていた仕上げ再パック（時刻順ソート＋idx再計算に
+        # よる照合180秒の再付与と開始時刻の詰め直し）は、探索フェーズ
+        # （_schedule_proc_rows・締切順）が確定したスケジュールを上書きし、探索時に
+        # 存在しなかった締切超過を自ら作り出してメイン山を誤ってリリーフへ格下げ
+        # させていた（逆行現象）。照合追加180秒フラグと実開始時間は探索フェーズで
+        # 整合済みのため、ここでは何も行わない。
+        # 検証: 全207テストで悪化ゼロ・改善2件（詳細はIssue #35参照）。
+        return
 
     def _reapply_overflow_for_relief(target_rows: List[dict]):
         nonlocal overflow_started
