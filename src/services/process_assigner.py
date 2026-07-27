@@ -1756,6 +1756,49 @@ def _legacy_assign_processes_by_arrival_time(
         )
         return True
 
+
+    def _serialize_lanes_final(target_rows: List[dict]):
+        # Issue #36: 出力直前の最終直列化。探索・前詰め試行(trial_rows評価)には
+        # 一切関与しない独立ステップ。山工程・照合追加180秒フラグは不変とし、
+        # 同一レーン内で重複する山だけを運用タイムライン秒上で後ろ倒しして解消する。
+        def _op_start(rr: dict):
+            st = _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", ""))))
+            return (st is None, st if st is not None else float("inf"), int(rr.get("山通番", 0)))
+
+        lane_labels = []
+        for rr in target_rows:
+            label = rr.get("山工程")
+            if label not in lane_labels:
+                lane_labels.append(label)
+
+        for proc_label in lane_labels:
+            lane_rows = [rr for rr in target_rows if rr.get("山工程") == proc_label]
+            lane_rows.sort(key=_op_start)
+            prev_end = None
+            for rr in lane_rows:
+                current_start = _to_operational_timeline_secs(
+                    _time_to_seconds(str(rr.get("実開始時間", "")))
+                )
+                if current_start is None:
+                    continue
+                yama_no = int(rr["山通番"])
+                work_dur = int(mtn_work_map.get(yama_no, 0))
+                inspection_delay = 180 if bool(rr.get("照合追加180秒")) else 0
+
+                candidate = int(current_start)
+                if prev_end is not None:
+                    candidate = max(candidate, int(prev_end) + inspection_delay)
+
+                if candidate > int(current_start):
+                    new_start = int(_adjust_start_for_breaks(candidate, work_dur))
+                    rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
+                    end_secs = int(_calc_work_end_with_breaks(new_start, work_dur))
+                    rr["_end_secs"] = end_secs
+                    if "実終了時間" in rr:
+                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
+                else:
+                    new_start = int(current_start)
+                prev_end = int(_calc_work_end_with_breaks(new_start, work_dur))
     for _ in range(3):
         _finalize_inspection_delay_flags(results)
         _try_front_pack_to_main_idle_gap(results)
@@ -1764,6 +1807,7 @@ def _legacy_assign_processes_by_arrival_time(
         _reapply_overflow_for_relief(results)
 
     _finalize_inspection_delay_flags(results)
+    _serialize_lanes_final(results)
 
     for r in results:
         r.pop("_is_anchored", None)
