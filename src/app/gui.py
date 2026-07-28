@@ -96,6 +96,34 @@ def resolve_spo_output_dirs(spo_watch_dir: str) -> dict:
     }
 
 
+
+# ============================================================
+# Issue #45: セットボードの並び順キー（深夜跨ぎ対応 / テスト可能な純関数）
+# exporter.py の _start_key と同一思想。判定境界は 03:00（Issue #43準拠）。
+# ============================================================
+def _start_sort_key_for_test(start_times: dict, yama_no) -> tuple:
+    from src.utils.normalizer import _normalize_hhmm
+
+    st = str(start_times.get(int(yama_no), "")).strip()
+    try:
+        norm = _normalize_hhmm(st)
+    except Exception:
+        norm = ""
+    if not norm:
+        return (1, 10 ** 9, int(yama_no))
+    try:
+        hh, mm = str(norm).split(":", 1)
+        mins = int(hh) * 60 + int(mm)
+        # Issue #43: 深夜跨ぎ便は 00:xx と 24:00 表記が混在。
+        # 03:00 未満を +24h し、同一軸で時系列比較する。
+        if mins < 3 * 60:
+            mins += 24 * 60
+        return (0, mins, int(yama_no))
+    except Exception:
+        return (1, 10 ** 9, int(yama_no))
+
+
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -2068,28 +2096,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# ============================================================
-# Issue #45: セットボードの並び順キー（深夜跨ぎ対応 / テスト可能な純関数）
-# exporter.py の _start_key と同一思想。判定境界は 03:00（Issue #43準拠）。
-# ============================================================
-def _start_sort_key_for_test(start_times: dict, yama_no) -> tuple:
-    from src.utils.normalizer import _normalize_hhmm
-
-    st = str(start_times.get(int(yama_no), "")).strip()
-    try:
-        norm = _normalize_hhmm(st)
-    except Exception:
-        norm = ""
-    if not norm:
-        return (1, 10 ** 9, int(yama_no))
-    try:
-        hh, mm = str(norm).split(":", 1)
-        mins = int(hh) * 60 + int(mm)
-        # Issue #43: 深夜跨ぎ便は 00:xx と 24:00 表記が混在。
-        # 03:00 未満を +24h し、同一軸で時系列比較する。
-        if mins < 3 * 60:
-            mins += 24 * 60
-        return (0, mins, int(yama_no))
-    except Exception:
-        return (1, 10 ** 9, int(yama_no))
