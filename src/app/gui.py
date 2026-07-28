@@ -1708,12 +1708,9 @@ class App(ctk.CTk):
             return
 
         def _start_sort_key(yama_no: int):
-            st = str(self.mountain_start_times.get(int(yama_no), "")).strip()
-            try:
-                hh, mm = st.split(":", 1)
-                return (0, int(hh) * 60 + int(mm), int(yama_no))
-            except Exception:
-                return (1, 10**9, int(yama_no))
+            # Issue #45: 深夜跨ぎ便(00:xx)が先頭に飛ぶ不具合を修正。
+            # 判定境界03:00はexporter.py _start_key(Issue #43)と同一。
+            return _start_sort_key_for_test(self.mountain_start_times, yama_no)
 
         yama_list = [int(y) for y in display_df["山通番"].unique()]
         yama_list = sorted(yama_list, key=_start_sort_key)
@@ -2071,3 +2068,28 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ============================================================
+# Issue #45: セットボードの並び順キー（深夜跨ぎ対応 / テスト可能な純関数）
+# exporter.py の _start_key と同一思想。判定境界は 03:00（Issue #43準拠）。
+# ============================================================
+def _start_sort_key_for_test(start_times: dict, yama_no) -> tuple:
+    from src.utils.normalizer import _normalize_hhmm
+
+    st = str(start_times.get(int(yama_no), "")).strip()
+    try:
+        norm = _normalize_hhmm(st)
+    except Exception:
+        norm = ""
+    if not norm:
+        return (1, 10 ** 9, int(yama_no))
+    try:
+        hh, mm = str(norm).split(":", 1)
+        mins = int(hh) * 60 + int(mm)
+        # Issue #43: 深夜跨ぎ便は 00:xx と 24:00 表記が混在。
+        # 03:00 未満を +24h し、同一軸で時系列比較する。
+        if mins < 3 * 60:
+            mins += 24 * 60
+        return (0, mins, int(yama_no))
+    except Exception:
+        return (1, 10 ** 9, int(yama_no))
