@@ -173,3 +173,92 @@ def normalize_choice_label(label: str) -> str:
     
     # 括弧がなければそのまま
     return label
+
+
+import json as _json
+import os as _os
+import sys as _sys
+import tempfile as _tempfile
+from datetime import datetime as _datetime
+from pathlib import Path as _Path
+
+HISTORY_FILENAME = "lane_end_times_history.json"
+HISTORY_FORMAT_VERSION = 1
+
+
+def get_history_path() -> _Path:
+    """履歴ファイルの保存先を返す（既存 get_config_path と同じ流儀）。"""
+    if getattr(_sys, 'frozen', False):
+        return _Path(_sys.executable).parent / HISTORY_FILENAME
+    return _Path(__file__).resolve().parents[2] / "config" / HISTORY_FILENAME
+
+
+def save_lane_end_times_history(history: list, path=None) -> bool:
+    """履歴をJSONファイルへ原子的に保存する。
+
+    書き込み中にプロセスが落ちても前回のファイルを壊さないよう、
+    一時ファイルへ書き切ってから os.replace で置き換える。
+
+    Args:
+        history: 保存する履歴（list[dict]）。空リストも可。
+        path: 保存先。None の場合 get_history_path() を使用。
+
+    Returns:
+        成功時 True、失敗時 False（例外は投げない＝GUIを止めない）。
+    """
+    try:
+        target = _Path(path) if path is not None else get_history_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": HISTORY_FORMAT_VERSION,
+            "saved_at": _datetime.now().isoformat(timespec="seconds"),
+            "history": list(history) if history else [],
+        }
+        fd, tmp_name = _tempfile.mkstemp(
+            prefix=".tmp_", suffix=".json", dir=str(target.parent)
+        )
+        try:
+            with _os.fdopen(fd, "w", encoding="utf-8") as f:
+                _json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.flush()
+                _os.fsync(f.fileno())
+            _os.replace(tmp_name, str(target))
+        except Exception:
+            try:
+                if _os.path.exists(tmp_name):
+                    _os.remove(tmp_name)
+            except Exception:
+                pass
+            raise
+        return True
+    except Exception:
+        return False
+
+
+def load_lane_end_times_history(path=None) -> list:
+    """履歴をJSONファイルから読み込む。
+
+    ファイルが無い・壊れている・構造が違う場合は空リストを返し、
+    GUIの起動を妨げない。
+
+    Args:
+        path: 読込元。None の場合 get_history_path() を使用。
+
+    Returns:
+        履歴（list[dict]）。読めない場合は []。
+    """
+    try:
+        target = _Path(path) if path is not None else get_history_path()
+        if not target.exists():
+            return []
+        with open(target, "r", encoding="utf-8") as f:
+            payload = _json.load(f)
+        if not isinstance(payload, dict):
+            return []
+        history = payload.get("history")
+        if not isinstance(history, list):
+            return []
+        cleaned = [dict(item) for item in history if isinstance(item, dict)]
+        return cleaned[:MAX_HISTORY]
+    except Exception:
+        return []
