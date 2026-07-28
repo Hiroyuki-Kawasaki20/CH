@@ -286,7 +286,13 @@ def build_spo_export_df(
                 return (1, int(y))
             try:
                 hh, mm = norm.split(":", 1)
-                return (0, int(hh) * 60 + int(mm), int(y))
+                mins = int(hh) * 60 + int(mm)
+                # Issue #43: 深夜跨ぎ便は 24:00 表記と 00:xx 表記が混在しうる。
+                # TIMELINE_WRAP_BOUNDARY_SECS(03:00) と同思想で 03:00 未満を +24h し、
+                # 同一軸で時系列比較する。
+                if mins < 3 * 60:
+                    mins += 24 * 60
+                return (0, mins, int(y))
             except Exception:
                 return (1, int(y))
 
@@ -302,7 +308,11 @@ def build_spo_export_df(
     proc_mountain_counter = {}
     main_export_label = "1工程"
 
-    for yama, sub in df.groupby("山通番", sort=True):
+    # Issue #43: 「山N」は現場作業順=開始時刻昇順で採番する(山通番順ではない)。
+    _grouped = {int(k): v for k, v in df.groupby("山通番", sort=True)}
+    _yama_order = sorted(_grouped.keys(), key=_start_key)
+    for yama in _yama_order:
+        sub = _grouped[yama]
         is_virtual = is_virtual_yama(yama)
         # SPO要件: 仮想山はパレット数0で出力する。
         pal = 0 if is_virtual else int(sub.shape[0])
