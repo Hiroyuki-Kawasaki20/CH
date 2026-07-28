@@ -62,6 +62,7 @@ from src.services.exporter import (
 from src.services.lane_end_times_history import (
     push_lane_end_times, select_lane_end_times,
     generate_lane_end_times_label, normalize_choice_label,
+    save_lane_end_times_history, load_lane_end_times_history,
 )
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
@@ -114,8 +115,8 @@ def _start_sort_key_for_test(start_times: dict, yama_no) -> tuple:
     try:
         hh, mm = str(norm).split(":", 1)
         mins = int(hh) * 60 + int(mm)
-        # Issue #43: 深夜跨ぎ便は 00:xx と 24:00 表記が混在。
-        # 03:00 未満を +24h し、同一軸で時系列比較する。
+        # Issue #43: 深夜跨ぎ便(00:xx)が先頭に飛ぶ不具合を修正。
+        # 判定境界03:00はexporter.py _start_key(Issue #43)と同一。
         if mins < 3 * 60:
             mins += 24 * 60
         return (0, mins, int(yama_no))
@@ -164,7 +165,8 @@ class App(ctk.CTk):
         self.export_dir = str(get_export_dir())
         self.master_data = pd.DataFrame(columns=["OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"])
         # ===== 前回終了時刻の履歴管理 =====
-        self.lane_end_times_history = []  # 最大2件・最新が先頭
+        # 最大2件・最新が先頭。GUI落ち対策でファイルから復元する
+        self.lane_end_times_history = load_lane_end_times_history()
         self._last_lane_end_times = {}  # 直前の計算結果を一時保存（push時に使用）
         self.selected_history_choice = tk.StringVar(value="最新")
         self.late_relief_warnings = []
@@ -1041,6 +1043,7 @@ class App(ctk.CTk):
     def clear_lane_time_carryover(self):
         # ③ 履歴を完全にリセット
         self.lane_end_times_history = []
+        save_lane_end_times_history([])
         messagebox.showinfo("引継クリア", "工程別の引き継ぎ時刻をクリアしました。次回は初回動作になります。")
 
     def refresh_selection_tree(self):
@@ -1116,6 +1119,8 @@ class App(ctk.CTk):
                 self.lane_end_times_history,
                 result_times
             )
+            # GUI落ち・仕分けミス時に巻き戻せるようファイルへ永続化
+            save_lane_end_times_history(self.lane_end_times_history)
             # 履歴更新後、combobox値を動的に再生成
             updated_values = [
                 generate_lane_end_times_label(self.lane_end_times_history, "最新"),

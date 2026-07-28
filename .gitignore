@@ -16,3 +16,7 @@ tmp_*/
 SPOアップロード用_履歴.xlsx
 SPOアップロード用_未ヒット一覧.csv
 test_output.txt
+
+# 前回仕分け終了時刻の履歴（端末ごとの作業結果なので共有しない）
+config/lane_end_times_history.json
+lane_end_times_history.json
