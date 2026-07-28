@@ -66,7 +66,7 @@ def export_setboard_html(
                 dest_col = "納入先" if "納入先" in sub.columns else "OData_納入先"
                 dests = sorted([str(x).strip() for x in sub.get(dest_col, pd.Series(dtype=str)).tolist() if str(x).strip()])
                 dest_text = "/".join(sorted(set(dests))) if dests else "-"
-                start_time = str(mountain_start_times.get(int(yama), "")).strip() or "-"
+                start_time = _to_display_hhmm_24h(mountain_start_times.get(int(yama), "")) or "-"
 
                 card = f"""
                     <tr>
@@ -333,7 +333,7 @@ def build_spo_export_df(
         proc_mountain_counter[y_proc_label] += 1
         proc_mountain_num = proc_mountain_counter[y_proc_label]
 
-        start_time = str(mountain_start_times.get(int(yama), "")).strip()
+        start_time = _to_display_hhmm_24h(mountain_start_times.get(int(yama), ""))
         rows.append({
             "タイトル": f"山{proc_mountain_num}",
             "工程": y_proc_label,
@@ -609,7 +609,7 @@ def attach_pickup_start_time(
         if existing and existing.strip() and existing.strip() != "nan" and ":" in existing:
             continue
         if best_time and (not existing or pd.isna(existing) or existing.strip() in ("", "nan")):
-            out.at[idx, "引取開始時間"] = best_time
+            out.at[idx, "引取開始時間"] = _to_display_hhmm_24h(best_time)
 
     if unmatched_csv_path is not None and unmatched_rows:
         Path(unmatched_csv_path).parent.mkdir(parents=True, exist_ok=True)
@@ -617,3 +617,46 @@ def attach_pickup_start_time(
             unmatched_csv_path, index=False, encoding="utf-8-sig"
         )
     return out
+
+
+# ============================================================
+# Issue #44-1: 表示専用 24時間超え表記ヘルパー
+# 内部ロジック(process_assigner)は変更せず、出力直前のみ表記統一する。
+# 判定境界は Issue #43 で確定した 03:00 規約に合わせる。
+# ============================================================
+def _to_display_hhmm_24h(value) -> str:
+    """深夜0時跨ぎの HH:MM を 24時間超え表記へ変換する（表示専用）。
+
+    00:00 -> 24:00 / 00:09 -> 24:09 / 02:59 -> 26:59
+    03:00 以降および既に24時以上の表記はそのまま返す。
+    解釈できない値は入力をそのまま返す（破壊しない）。
+    """
+    import re as _re
+
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if s == "" or s.lower() in ("nan", "nat", "none"):
+        return ""
+    try:
+        s = s.translate(_ZEN2HAN_DIGIT_COLON)
+    except Exception:
+        pass
+    m = _re.match(r"^(\d{1,2}):(\d{2})", s)
+    if not m:
+        try:
+            norm = _normalize_hhmm(s)
+        except Exception:
+            norm = ""
+        if not norm:
+            return s
+        m = _re.match(r"^(\d{1,2}):(\d{2})", str(norm))
+        if not m:
+            return s
+    hh = int(m.group(1))
+    mm = int(m.group(2))
+    if hh >= 24:
+        return f"{hh:02d}:{mm:02d}"
+    if hh < 3:
+        hh += 24
+    return f"{hh:02d}:{mm:02d}"
