@@ -54,6 +54,7 @@ from src.services.scheduler import (
     aggregate_proc_details_to_mountains,
 )
 from src.services.exporter import (
+    _to_display_hhmm_24h,
     build_spo_export_df, export_spo_xlsx_staged,
     attach_pickup_start_time, export_kanban_xlsx,
     append_to_spo_history,
@@ -1579,7 +1580,7 @@ class App(ctk.CTk):
             "",
         ]
         for yama in sorted(overflow_yamas)[:20]:
-            st = self.mountain_start_times.get(int(yama), "")
+            st = _to_display_hhmm_24h(self.mountain_start_times.get(int(yama), ""))
             lines.append(f"山{yama}: 開始 {st}")
         if len(overflow_yamas) > 20:
             lines.append(f"... 他 {len(overflow_yamas) - 20} 山")
@@ -1737,7 +1738,7 @@ class App(ctk.CTk):
                 ))
             from src.services.sorter import get_dest_list_for_group
             dests = "/".join(get_dest_list_for_group(sub))
-            start_time = self.mountain_start_times.get(int(yama), "")
+            start_time = _to_display_hhmm_24h(self.mountain_start_times.get(int(yama), ""))
             proc = self.mountain_proc_map.get(int(yama), PROC_MAIN)
 
             # レーン振り分け
