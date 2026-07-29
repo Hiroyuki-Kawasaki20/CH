@@ -10,6 +10,7 @@ from src.services.process_assigner import (
     assign_processes_by_arrival_time,
     _legacy_assign_processes_by_arrival_time,
     ARRIVAL_BUFFER_SECS,
+    SHIFT_FIRST_TRIP_BUFFER_SECS,
     _time_to_seconds,
     _to_operational_timeline_secs,
     _seconds_to_hhmm,
@@ -40,7 +41,7 @@ class TestHino2LaneWraparound:
         )
         row = result.loc[result["山通番"] == 1].iloc[0]
         start_secs = _time_to_seconds(str(row["実開始時間"]))
-        floor_secs = _shift_start_secs(0) + 15 * 60
+        floor_secs = _shift_start_secs(0) + SHIFT_FIRST_TRIP_BUFFER_SECS
         assert start_secs is not None
         assert start_secs >= floor_secs
         assert str(row["実開始時間"]) == "06:40"
@@ -67,7 +68,7 @@ class TestHino2LaneWraparound:
         src = inspect.getsource(_legacy_assign_processes_by_arrival_time)
         split_part = src.split("yama_split_units_map", 1)[1]
         assert "if not set_flag:" in split_part
-        assert "shift_floor = _shift_start_secs(shift_idx) + 15 * 60" in split_part
+        assert "shift_floor = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS" in split_part
         assert "st = max(int(st), int(shift_floor))" in split_part
 
     def test_hino_set_flag_true_uses_same_lane_previous_order_plus_buffer(self):
