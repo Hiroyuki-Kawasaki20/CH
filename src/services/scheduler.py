@@ -15,6 +15,8 @@ from ..models.constants import (
     PROC_MAIN,
     PROC_OVERFLOW,
     PROC_RELIEF,
+    SHIFT_FIRST_TRIP_BUFFER_SECS, FIRST_BIN_RELEASE_BUFFER_SECS,
+    PICKUP_DEADLINE_BUFFER_SECS,
 )
 from ..utils.normalizer import _ZEN2HAN_DIGIT_COLON, _normalize_dest_name
 from .process_assigner import (
@@ -666,7 +668,7 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
 
             set_flag = bool(set_flag_map.get((vendor, order2), False))
             shift_idx = _shift_index_for_secs(pickup_secs)
-            strict_deadline = max(0, int(pickup_secs) - _ARRIVAL_BUFFER_SECS)
+            strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
             is_first_trip_in_shift = (vendor_shift_first_bin.get((vendor, shift_idx), "") == order2)
 
             if not has_set_flag_col:
@@ -744,7 +746,7 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
                         st = 0
                         st_prev = 0
             elif is_first_trip_in_shift:
-                st = _shift_start_secs(shift_idx) + 15 * 60
+                st = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS
                 try:
                     current_bin = int(order2)
                     prev_bin = _get_prev_bin_for_vendor(
@@ -864,7 +866,7 @@ def _cluster_release_time(
         return 0
 
     if is_first_bin:
-        return int(pickup) + 15 * 60
+        return int(pickup) + FIRST_BIN_RELEASE_BUFFER_SECS
 
     try:
         cur = int(str(order2).strip())
