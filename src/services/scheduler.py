@@ -859,7 +859,7 @@ def _cluster_release_time(
     master_map: Dict[Tuple[str, str], int],
     is_first_bin: bool,
 ) -> int:
-    """クラスターの解禁時刻を返す（前便+10分 / 1便目+15分）。"""
+    """クラスターの解禁時刻を返す（前便+LUNCH_PRE_MARGIN_SECS / 1便目+FIRST_BIN_RELEASE_BUFFER_SECS）。"""
     vendor, order2 = cluster_key
     pickup = master_map.get((vendor, order2))
     if pickup is None:
