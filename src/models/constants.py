@@ -40,18 +40,18 @@ BREAK_TIMES = [
 
 # ===== 時間バッファ（秒単位） =====
 # 各直1便目の引取開始バッファ（直開始時刻 + この時間）
-SHIFT_FIRST_TRIP_BUFFER_SECS = 15 * 60
+SHIFT_FIRST_TRIP_BUFFER_SECS = 35 * 60
 # 1便目クラスターの解禁バッファ（その便の入車時刻 + この時間）
-FIRST_BIN_RELEASE_BUFFER_SECS = 15 * 60
+FIRST_BIN_RELEASE_BUFFER_SECS = 35 * 60
 # 長休憩（昼休憩）前: 休憩開始の何分前までに山を完了させるか
 LUNCH_PRE_MARGIN_SECS = 10 * 60
 # 長休憩後: 作業再開までのバッファ
-LUNCH_POST_RESUME_SECS = 15 * 60
+LUNCH_POST_RESUME_SECS = 35 * 60
 # 長休憩後: 新しい山の開始をロックする時間
-LUNCH_POST_LOCK_SECS = 15 * 60
+LUNCH_POST_LOCK_SECS = 35 * 60
 
 # 集荷完了の締切: 各便の入車時刻の何分前までに山を完了させるか
-PICKUP_DEADLINE_BUFFER_SECS = 10 * 60
+PICKUP_DEADLINE_BUFFER_SECS = 20 * 60
 
 # ===== 混載ポリシー =====
 SIZE_MIXING_POLICY = {

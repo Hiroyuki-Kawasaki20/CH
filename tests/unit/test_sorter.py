@@ -241,25 +241,25 @@ class TestProcessAssigner:
 
     def test_lunch_break_limits_last_mountain_end_to_10min_before(self):
         """10:40/20:55の長休憩は、休憩10分前を超える作業を休憩後へ送る。"""
-        # 10:20開始 + 15分作業 = 10:35（10:30制限を超過）→ 11:40開始へ繰り下げ
+        # 10:20開始 + 15分作業 = 10:35（10:30制限を超過）→ 12:00開始へ繰り下げ
         start_1 = 10 * 3600 + 20 * 60
         adjusted_1 = _adjust_start_for_breaks(start_1, 15 * 60)
-        assert adjusted_1 == 11 * 3600 + 40 * 60
+        assert adjusted_1 == 12 * 3600
 
-        # 20:40開始 + 10分作業 = 20:50（20:45制限を超過）→ 21:55開始へ繰り下げ
+        # 20:40開始 + 10分作業 = 20:50（20:45制限を超過）→ 22:15開始へ繰り下げ
         start_2 = 20 * 3600 + 40 * 60
         adjusted_2 = _adjust_start_for_breaks(start_2, 10 * 60)
-        assert adjusted_2 == 21 * 3600 + 55 * 60
+        assert adjusted_2 == 22 * 3600 + 15 * 60
 
-    def test_lunch_break_first_mountain_starts_15min_after_break(self):
-        """長休憩中に入る開始時刻は、休憩終了15分後へ調整する。"""
-        # 11:30は10:40-11:25休憩の直後帯 → 11:40
+    def test_lunch_break_first_mountain_starts_buffer_after_break(self):
+        """長休憩中に入る開始時刻は、休憩終了35分後へ調整する。"""
+        # 11:30は10:40-11:25休憩の直後帯 → 12:00
         adjusted_1 = _adjust_start_for_breaks(11 * 3600 + 30 * 60)
-        assert adjusted_1 == 11 * 3600 + 40 * 60
+        assert adjusted_1 == 12 * 3600
 
-        # 21:45は20:55-21:40休憩の直後帯 → 21:55
+        # 21:45は20:55-21:40休憩の直後帯 → 22:15
         adjusted_2 = _adjust_start_for_breaks(21 * 3600 + 45 * 60)
-        assert adjusted_2 == 21 * 3600 + 55 * 60
+        assert adjusted_2 == 22 * 3600 + 15 * 60
 
     def test_assign_all_main_no_master(self):
         """マスタなしの場合は全てメイン工程"""
@@ -561,8 +561,8 @@ class TestProcessAssigner:
             end_secs = _calc_work_end_with_breaks(int(start_secs), int(work_map[yama]))
             assert end_secs <= int(deadline_map[yama])
 
-    def test_start_floor_shift_first_trip_without_set_flag_uses_shift_start_plus_15(self):
-        """セットなしの各直1便目は「各直開始+15分」を開始下限にする。"""
+    def test_start_floor_shift_first_trip_without_set_flag_uses_shift_start_plus_buffer(self):
+        """セットなし各直1便目は「各直開始+35分」を開始下限にする。"""
         df = pd.DataFrame({
             "山通番": [1, 2],
             "移動工数": [0, 0],
@@ -581,7 +581,7 @@ class TestProcessAssigner:
 
         start_1 = result.loc[result["山通番"] == 1, "実開始時間"].iloc[0]
         start_2 = result.loc[result["山通番"] == 2, "実開始時間"].iloc[0]
-        assert start_1 == "06:40"
+        assert start_1 == "07:00"
         assert start_2 >= "08:50"
 
     def test_start_floor_shift_first_trip_with_set_flag_keeps_legacy_rule(self):
@@ -605,8 +605,8 @@ class TestProcessAssigner:
         # 従来ルールでは初便の開始制約なし（0）なので、06:40固定にはならない
         assert start_1 != "06:40"
 
-    def test_hino_01_without_set_flag_uses_shift_start_plus_15(self):
-        """日野でもセットなし各直1便目は「各直開始+15分」を開始下限にする。"""
+    def test_hino_01_without_set_flag_uses_shift_start_plus_buffer(self):
+        """日野でもセットなし各直1便目は「各直開始+35分」を開始下限にする。"""
         df = pd.DataFrame({
             "山通番": [1],
             "移動工数": [0],
@@ -623,8 +623,8 @@ class TestProcessAssigner:
 
         result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
         start_1 = result.loc[result["山通番"] == 1, "実開始時間"].iloc[0]
-        # 1直始業06:25 + 15分 = 06:40
-        assert start_1 == "06:40"
+        # 1直始業06:25 + 35分 = 07:00
+        assert start_1 == "07:00"
 
     def test_overnight_hino_01_is_not_misclassified_as_shift_first_trip(self):
         """日付またぎ(23:xx→00:xx)で日野01を誤って各直1便目扱いしない。"""
@@ -737,7 +737,7 @@ class TestProcessAssigner:
         result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
         row = result.loc[result["山通番"] == 1].iloc[0]
         assert row["山工程"] == PROC_OVERFLOW
-        assert str(row["実開始時間"]) == "06:40"
+        assert str(row["実開始時間"]) == "07:00"
 
     def test_deadline_normalization_does_not_double_add_when_both_next_day_axis(self):
         """開始・締切とも翌日基準のとき締切を二重加算しない。"""
