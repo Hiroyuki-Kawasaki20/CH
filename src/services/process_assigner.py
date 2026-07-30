@@ -16,6 +16,9 @@ from ..models.constants import (
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, PROC_MAIN_LABEL, PROC_RELIEF_LABEL,
     BREAK_TIMES, is_virtual_yama,
+    SHIFT_FIRST_TRIP_BUFFER_SECS, FIRST_BIN_RELEASE_BUFFER_SECS,
+    LUNCH_PRE_MARGIN_SECS, LUNCH_POST_RESUME_SECS, LUNCH_POST_LOCK_SECS,
+    PICKUP_DEADLINE_BUFFER_SECS,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -24,7 +27,7 @@ from ..utils.normalizer import (
 
 # 各直の開始時刻（秒）: 1直=06:25, 2直=16:40
 SHIFT_START_SECS = [6 * 3600 + 25 * 60, 16 * 3600 + 40 * 60]
-ARRIVAL_BUFFER_SECS = 10 * 60  # 入車時間の10分前完了を締切とする
+ARRIVAL_BUFFER_SECS = 10 * 60  # 前便入車+10分の開始下限バッファ
 DAY_SECS = 24 * 3600
 TIMELINE_WRAP_BOUNDARY_SECS = 3 * 3600  # 時刻補正境界: 03:00 未満のみ +24h
 # セットあり便のメイン工程許容上限（1直:15:20, 2直:01:35(=25:35)）
@@ -42,7 +45,7 @@ SPECIAL_LUNCH_BREAKS = {
 def _break_policy(bs: int, be: int) -> Tuple[int, int, int]:
     """休憩ごとの (休憩前完了バッファ秒, 再開オフセット秒, 休憩後開始禁止秒) を返す。"""
     if (int(bs), int(be)) in SPECIAL_LUNCH_BREAKS:
-        return 10 * 60, 15 * 60, 15 * 60
+        return LUNCH_PRE_MARGIN_SECS, LUNCH_POST_RESUME_SECS, LUNCH_POST_LOCK_SECS
     return 0, 60, 0
 
 
@@ -579,7 +582,7 @@ def _legacy_assign_processes_by_arrival_time(
                 continue
             set_flag = bool(set_flag_map.get((lookup_vendor, order2), False))
             shift_idx = _shift_index_for_secs(pickup_secs)
-            strict_deadline = max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS)
+            strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
             # 引取開始時間を計算
             is_first_trip_in_shift = (vendor_shift_first_bin.get((lookup_vendor, shift_idx), "") == order2)
 
@@ -608,7 +611,7 @@ def _legacy_assign_processes_by_arrival_time(
                             st = 0
                             st_prev = 0
                     elif is_first_trip_in_shift:
-                        st = _shift_start_secs(shift_idx) + 15 * 60
+                        st = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS
                         st_prev = 0
                     else:
                         st = 0
@@ -618,7 +621,7 @@ def _legacy_assign_processes_by_arrival_time(
                         # セットなしは前日側(24:xx/25:xx)を直接採用せず、当日基準で下限制約を適用する。
                         if int(st) >= DAY_SECS:
                             st = int(st) - DAY_SECS
-                        shift_floor = _shift_start_secs(shift_idx) + 15 * 60
+                        shift_floor = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS
                         st = max(int(st), int(shift_floor))
                 except (ValueError, TypeError):
                     st = 0
@@ -693,7 +696,7 @@ def _legacy_assign_processes_by_arrival_time(
                         st_prev = 0
             elif is_first_trip_in_shift:
                 # セットなし × 各直1便目は納入先に関わらず各直開始+15分。
-                st = _shift_start_secs(shift_idx) + 15 * 60
+                st = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS
                 try:
                     current_bin = int(order2)
                     prev_bin = _get_prev_bin_for_vendor(
@@ -814,7 +817,7 @@ def _legacy_assign_processes_by_arrival_time(
             pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup)) if pickup else None
             if pickup_secs is None:
                 continue
-            strict_deadline = max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS)
+            strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
 
             set_flag = bool(set_flag_map.get((lookup_vendor, order2), False))
             shift_idx = _shift_index_for_secs(pickup_secs)
@@ -838,7 +841,7 @@ def _legacy_assign_processes_by_arrival_time(
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                         st = (prev_secs + 10 * 60) if prev_secs is not None else 0
                     elif is_first_trip_in_shift:
-                        st = _shift_start_secs(shift_idx) + 15 * 60
+                        st = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS
                     else:
                         st = 0
 
@@ -846,7 +849,7 @@ def _legacy_assign_processes_by_arrival_time(
                         # セットなしは前日側(24:xx/25:xx)を直接採用せず、当日基準で下限制約を適用する。
                         if int(st) >= DAY_SECS:
                             st = int(st) - DAY_SECS
-                        shift_floor = _shift_start_secs(shift_idx) + 15 * 60
+                        shift_floor = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS
                         st = max(int(st), int(shift_floor))
                 except (ValueError, TypeError):
                     st = 0
@@ -897,7 +900,7 @@ def _legacy_assign_processes_by_arrival_time(
                     except (ValueError, TypeError):
                         st = 0
             elif is_first_trip_in_shift:
-                st = _shift_start_secs(shift_idx) + 15 * 60
+                st = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS
             elif vendor == "武部":
                 mins = pickup_secs // 60
                 prev_group_time = _get_prev_group_time(vendor, mins)
