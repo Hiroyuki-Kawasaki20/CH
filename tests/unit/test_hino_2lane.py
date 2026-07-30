@@ -85,7 +85,8 @@ class TestHino2LaneWraparound:
         )
         row = result.loc[result["山通番"] == 1].iloc[0]
         expected = _seconds_to_hhmm(_time_to_seconds("13:10") + ARRIVAL_BUFFER_SECS)
-        assert str(row["実開始時間"]) == expected
+        # 13:10+10分=13:20 は休憩(12:55-13:25)内のため、休憩明け+1分=13:26 に調整される
+        assert str(row["実開始時間"]) == "13:26"
 
     def test_non_hino_set_flag_true_uses_previous_order_plus_buffer(self):
         """日野以外(1レーン)のセットあり便は order-1 の入車時間+10分を使う。"""
@@ -277,7 +278,7 @@ class TestBackwardCompatibility:
         )
         row = result.loc[result["山通番"] == 1].iloc[0]
         assert row["山工程"] == PROC_MAIN
-        assert str(row["実開始時間"]) == "08:41"
+        assert str(row["実開始時間"]) == "09:01"  # 8:36は休憩(8:30-9:00)内→休憩明け+1分
 
     def test_non_hino_uses_existing_n_minus_1_behavior(self):
         """非日野は従来どおりN-1便+10分を開始下限にする。"""

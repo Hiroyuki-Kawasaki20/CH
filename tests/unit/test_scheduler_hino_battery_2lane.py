@@ -61,4 +61,5 @@ def test_legacy_assign_path_keeps_hino_n_minus_2_behavior_when_battery_off():
     row = result.loc[result["山通番"] == 1].iloc[0]
 
     expected_hhmm = _seconds_to_hhmm(_time_to_seconds("13:10") + ARRIVAL_BUFFER_SECS)
-    assert str(row["実開始時間"]) == expected_hhmm
+    # 13:10+10分=13:20 は休憩(12:55-13:25)内のため、休憩明け+1分=13:26 に調整される
+    assert str(row["実開始時間"]) == "13:26"
