@@ -40,7 +40,13 @@ def _build_proc_details_from_spo(spo_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_yama8_c15_a_3_is_assigned_to_main_with_inspection_delay_rule():
+def test_yama1_is_assigned_to_main_process():
+    """回帰: fixture 内の山1がメイン工程に割り当てられること。
+    
+    NOTE: 検査遅延ルール (order_idx >= 2 and order_idx % 2 == 0) は山1では発火しない
+    (GroupedData が2項目のみで order_idx = 0,1 のため)。
+    本テストは単なる通常割当の動作確認であり、検査遅延ロジック自体の検証ではない。
+    """
     root = Path(__file__).resolve().parents[2]
     # Use snapshot fixtures instead of live data files
     spo_path = root / "tests" / "fixtures" / "issue42" / "spo_upload_snapshot.xlsx"

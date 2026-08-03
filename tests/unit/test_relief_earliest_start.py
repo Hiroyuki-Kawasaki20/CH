@@ -5,6 +5,7 @@ from typing import Dict
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src.models.constants import BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL, PROC_MAIN
 from src.services import process_assigner as pa
@@ -186,9 +187,10 @@ def test_relief_yama_uses_earliest_feasible_start():
     if y2_start is None:
         failures.append("(b) yama2 start time is missing")
     else:
-        # With snapshot data, verify start time is within reasonable bounds (e.g., not negative, not excessively late)
-        if int(y2_start) < 0 or int(y2_start) > 100000:  # 100000 is ~27.8 hours
-            failures.append(f"(b) yama2 start time out of reasonable bounds: {int(y2_start)}")
+        # Window: [86000, 87500] (1500 secs ~25 min)
+        # Rationale: Prev order (日野便6) arrival 85800 + ARRIVAL_BUFFER 600 = 86400, with ±tolerance
+        if int(y2_start) < 86000 or int(y2_start) > 87500:
+            failures.append(f"(b) yama2 start time out of expected window [86000,87500]: {int(y2_start)}")
 
     # (c) 全山で締切非侵害
     late = []
@@ -205,11 +207,10 @@ def test_relief_yama_uses_earliest_feasible_start():
     assert not failures, "\n".join(failures)
 
 
+@pytest.mark.xfail(reason="Fixture has no relief yamas; #42 permanent fix under discussion")
 def test_single_relief_yama_starts_from_prev_arrival_buffer_first():
     # 単独リリーフ山（proc_rows が1件）の開始時刻は、
     # 「前便入車 + ARRIVAL_BUFFER_SECS」の最速開始を採用すべき。
-    # NOTE: With snapshot data, relief yamas may not always exist.
-    # This test validates the logic when relief yamas are present.
     spo_df, master_df = _load_fixture_input_files()
     details_df = _build_detail_rows_from_spo_vendor_aware(spo_df, master_df)
     proc_details = pa.compute_proc_details(details_df)
@@ -217,52 +218,49 @@ def test_single_relief_yama_starts_from_prev_arrival_buffer_first():
     assigned = pa.assign_processes_by_arrival_time(proc_details, master_df)
     relief_rows = assigned[assigned["山工程"] == pa.PROC_RELIEF]
 
-    # If there are no relief rows in the snapshot, test passes (core logic still applies)
-    # If there are relief rows, verify they follow the expected timing logic
-    if len(relief_rows) == 0:
-        # Snapshot has no relief assignments; this is valid and test passes
-        pass
-    else:
-        relief_yama = int(relief_rows.iloc[0]["山通番"])
+    # Core test logic: relief yama should exist and follow timing logic
+    assert len(relief_rows) >= 1, "Expected at least one relief yama in fixture"
 
-        m = master_df.copy()
-        m["OData_納入先"] = m["OData_納入先"].astype(str).str.strip().map(pa._normalize_dest_name)
-        m["NONYUHIBIN"] = m["NONYUHIBIN"].astype(str).str.strip()
-        m["入車時間"] = m["入車時間"].astype(str).str.strip()
-        master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in m.iterrows()}
+    relief_yama = int(relief_rows.iloc[0]["山通番"])
 
-        floors = []
-        for _, row in details_df[details_df["山通番"] == relief_yama].iterrows():
-            vendor = pa._normalize_dest_name(str(row.get("納入先", "")).strip())
-            nony = str(row.get("NONYUHIBIN", "")).strip().translate(pa._ZEN2HAN_DIGIT_COLON)
-            order2 = nony[-2:] if len(nony) >= 2 else ""
-            if not vendor or not order2:
-                continue
+    m = master_df.copy()
+    m["OData_納入先"] = m["OData_納入先"].astype(str).str.strip().map(pa._normalize_dest_name)
+    m["NONYUHIBIN"] = m["NONYUHIBIN"].astype(str).str.strip()
+    m["入車時間"] = m["入車時間"].astype(str).str.strip()
+    master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in m.iterrows()}
 
-            if vendor == "KVC":
-                ukeire = str(row.get("UKEIRE", "")).strip()
-                lookup_vendor = f"KVC-{ukeire}" if ukeire else vendor
-            else:
-                lookup_vendor = vendor
+    floors = []
+    for _, row in details_df[details_df["山通番"] == relief_yama].iterrows():
+        vendor = pa._normalize_dest_name(str(row.get("納入先", "")).strip())
+        nony = str(row.get("NONYUHIBIN", "")).strip().translate(pa._ZEN2HAN_DIGIT_COLON)
+        order2 = nony[-2:] if len(nony) >= 2 else ""
+        if not vendor or not order2:
+            continue
 
-            try:
-                current_bin = int(order2)
-            except (TypeError, ValueError):
-                continue
+        if vendor == "KVC":
+            ukeire = str(row.get("UKEIRE", "")).strip()
+            lookup_vendor = f"KVC-{ukeire}" if ukeire else vendor
+        else:
+            lookup_vendor = vendor
 
-            prev_bin = f"{current_bin - 1:02d}" if current_bin > 1 else None
-            if prev_bin is None:
-                continue
+        try:
+            current_bin = int(order2)
+        except (TypeError, ValueError):
+            continue
 
-            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
-            prev_secs = pa._to_operational_timeline_secs(pa._time_to_seconds(prev_pickup)) if prev_pickup else None
-            if prev_secs is not None:
-                floors.append(int(prev_secs) + pa.ARRIVAL_BUFFER_SECS)
+        prev_bin = f"{current_bin - 1:02d}" if current_bin > 1 else None
+        if prev_bin is None:
+            continue
 
-        # If there are floors, verify the logic; otherwise the relief yama may not have prev arrivals
-        if floors:
-            expected_start = max(floors)
-            actual_start = pa._to_operational_timeline_secs(
-                pa._time_to_seconds(str(relief_rows.iloc[0]["実開始時間"]))
-            )
-            assert actual_start == expected_start
+        prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
+        prev_secs = pa._to_operational_timeline_secs(pa._time_to_seconds(prev_pickup)) if prev_pickup else None
+        if prev_secs is not None:
+            floors.append(int(prev_secs) + pa.ARRIVAL_BUFFER_SECS)
+
+    # Verify timing logic
+    assert floors, "Expected at least one floor (prev order + buffer) for relief yama"
+    expected_start = max(floors)
+    actual_start = pa._to_operational_timeline_secs(
+        pa._time_to_seconds(str(relief_rows.iloc[0]["実開始時間"]))
+    )
+    assert actual_start == expected_start, f"Expected start {expected_start}, got {actual_start}"

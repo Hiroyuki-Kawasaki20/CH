@@ -1,0 +1,105 @@
+===== V-1 全6定数の実行時の値 =====
+VALUES 900 900 600 900 900 600
+IMPORT OK
+===== V-2 strict_deadline の全行（3行とも新定数のはず）=====
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:585: strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:749: effective_deadline = strict_deadline
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:820: strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:927: effective_deadline = strict_deadline
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\scheduler.py:672: strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\scheduler.py:805: effective_deadline = strict_deadline
+===== V-3 引き算の旧定数が残っていないこと（0件が正解）=====
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\app\gui.py:1599: deadline_candidates.append(max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS))
+V-3 end (何も出なければ0件)
+===== V-4 足し算（前便+10分）が無傷で残っていること =====
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:174: floor = int(prev_arrival_secs) + ARRIVAL_BUFFER_SECS
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:608: st = prev_secs + ARRIVAL_BUFFER_SECS
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:670: st = pickup_secs + ARRIVAL_BUFFER_SECS
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:686: st = prev_secs + ARRIVAL_BUFFER_SECS
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:712: st_prev = (prev_secs + ARRIVAL_BUFFER_SECS) if prev_secs is not None else 0
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:724: st = pickup_secs + ARRIVAL_BUFFER_SECS
+===== V-5 定義行と min_gap_secs が無傷であること =====
+30: ARRIVAL_BUFFER_SECS = 10 * 60  # 前便入車+10分の開始下限バッファ
+40: _ARRIVAL_BUFFER_SECS = 10 * 60
+183: min_gap_secs: int,
+194: if gap_secs >= int(min_gap_secs):
+390: min_gap_secs: int = 10 * 60,
+431: gaps = _find_insertable_gaps(current_schedule, int(min_gap_secs), lane_start_secs)
+===== V-6 PICKUP_DEADLINE_BUFFER_SECS の全出現箇所 =====
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\models\constants.py:54: PICKUP_DEADLINE_BUFFER_SECS = 10 * 60
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:21: PICKUP_DEADLINE_BUFFER_SECS,
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:585: strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:820: strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\scheduler.py:19: PICKUP_DEADLINE_BUFFER_SECS,
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\scheduler.py:41: PICKUP_DEADLINE_BUFFER_SECS = 10 * 60
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\scheduler.py:672: strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
+===== V-7 生存確認（壊していないこと）=====
+30: BREAK_TIMES = [
+33: (10 * 3600 + 40 * 60, 11 * 3600 + 25 * 60),   # 10:40~11:25
+37: (20 * 3600 + 55 * 60, 21 * 3600 + 40 * 60),   # 20:55~21:40
+45: def _break_policy(bs: int, be: int) -> Tuple[int, int, int]:
+49: return 0, 60, 0
+167: def _cycle_aware_prev_floor_secs(prev_arrival_secs: int, current_arrival_secs: int) -> int:
+===== V-8 git 状態（指示外ファイルにMが無いこと）=====
+refactor/extract-time-buffer-consts
+ D "__pycache__/\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+ D "__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_JSON_\343\202\273\343\203\203\343\203\210\343\203\234\343\203\274\343\203\211.cpython-313.pyc"
+ D "__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+ D _archive/ch_kanban_settings.bak
+ M src/app/gui.py
+ M src/models/constants.py
+ M src/services/process_assigner.py
+ M src/services/scheduler.py
+ M "\345\205\245\350\273\212\346\231\202\351\226\223\343\203\236\343\202\271\343\202\277.xlsx"
+?? _archive/gui_20260730_frozen.py.bak
+?? t103_state_check.txt
+?? t104_branch.txt
+?? t105_extract_consts.txt
+?? t106_deadline_const.txt
+?? t107_verify.txt
+ ...67\245\350\277\275\345\217\212.cpython-313.pyc" | Bin 185657 -> 0 bytes
+ ...03\234\343\203\274\343\203\211.cpython-313.pyc" | Bin 185618 -> 0 bytes
+ ...67\245\350\277\275\345\217\212.cpython-313.pyc" | Bin 190061 -> 0 bytes
+ _archive/ch_kanban_settings.bak                    |  26 ----
+ src/app/gui.py                                     | 151 +++++++++++----------
+ src/models/constants.py                            |  15 ++
+ src/services/process_assigner.py                   |  23 ++--
+ src/services/scheduler.py                          |   9 +-
+ ...6\223\343\203\236\343\202\271\343\202\277.xlsx" | Bin 6329 -> 6319 bytes
+ 9 files changed, 116 insertions(+), 108 deletions(-)
+===== V-9 gui.py の締切用途の周辺確認（読み取りのみ・変更禁止）=====
+行48:
+    compute_proc_summary,
+    _time_to_seconds, _seconds_to_hhmm, _to_operational_timeline_secs,
+    _calc_work_end_with_breaks, ARRIVAL_BUFFER_SECS,
+)
+from src.services.scheduler import (
+----
+行1588:
+            end_secs = _calc_work_end_with_breaks(start_secs, work_secs)
+
+            deadline_candidates = []
+            for _, drow in sub.iterrows():
+                vendor = _normalize_dest_name(str(drow.get("納入先", "")).strip())
+----
+行1599:
+                if pickup_secs is None:
+                    continue
+                deadline_candidates.append(max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS))
+
+            if not deadline_candidates:
+----
+行1601:
+                deadline_candidates.append(max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS))
+
+            if not deadline_candidates:
+                continue
+            deadline_secs = min(deadline_candidates)
+----
+行1603:
+            if not deadline_candidates:
+                continue
+            deadline_secs = min(deadline_candidates)
+            if end_secs > deadline_secs:
+                warnings.append({
+----

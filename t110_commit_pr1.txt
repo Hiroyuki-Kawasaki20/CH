@@ -1,0 +1,65 @@
+===== Y-1 pytest =====
+    
+        all_det = build_all_mountain_details(group_details, s1_details)
+>       assert not all_det.empty
+E       assert not True
+E        +  where True = Empty DataFrame\nColumns: []\nIndex: [].empty
+
+tests\unit\test_sorter.py:219: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/unit/test_hino_2lane.py::TestHino2LaneWraparound::test_hino_split_loop_has_set_off_floor_clamp
+FAILED tests/unit/test_main_assignment_inspection_delay.py::test_yama8_c15_a_3_is_assigned_to_main_with_inspection_delay_rule
+FAILED tests/unit/test_relief_declined_keeps_current.py::test_front_pack_declined_when_violates_other_deadline
+FAILED tests/unit/test_relief_earliest_start.py::test_relief_yama_uses_earliest_feasible_start
+FAILED tests/unit/test_relief_earliest_start.py::test_single_relief_yama_starts_from_prev_arrival_buffer_first
+FAILED tests/unit/test_sorter.py::TestGrouping::test_regression_order_yama_continuity_real_20260706_091011
+6 failed, 230 passed, 2 skipped, 1 xfailed in 13.49s
+pytest exit=1
+===== Y-2 add（3ファイル限定）=====
+===== Y-3 ステージ内容の確認（3ファイルだけのはず）=====
+===== Y-4 commit =====
+On branch refactor/extract-time-buffer-consts
+Your branch is up to date with 'origin/refactor/extract-time-buffer-consts'.
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	deleted:    "__pycache__/\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+	deleted:    "__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_JSON_\343\202\273\343\203\203\343\203\210\343\203\234\343\203\274\343\203\211.cpython-313.pyc"
+	deleted:    "__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+	deleted:    _archive/ch_kanban_settings.bak
+	modified:   src/app/gui.py
+	modified:   "\345\205\245\350\273\212\346\231\202\351\226\223\343\203\236\343\202\271\343\202\277.xlsx"
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	_archive/gui_20260730_frozen.py.bak
+	t103_state_check.txt
+	t104_branch.txt
+	t105_extract_consts.txt
+	t106_deadline_const.txt
+	t107_verify.txt
+	t108_dedup.txt
+	t109_import_fix.txt
+	t110_commit_pr1.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")
+===== Y-5 コミット後の状態 =====
+75a4317 refactor: 譎る俣繝舌ャ繝輔ぃ6螳壽焚繧団onstants.py縺ｸ謚ｽ蜃ｺ・域嫌蜍募､画峩縺ｪ縺暦ｼ・7ef557f Merge pull request #48 from Hiroyuki-Kawasaki20/feat/persist-lane-end-times-history
+c84e4fb feat: 蜑榊屓莉募・縺醍ｵゆｺ・凾蛻ｻ縺ｮ螻･豁ｴ繧偵ヵ繧｡繧､繝ｫ縺ｸ豌ｸ邯壼喧
+ D "__pycache__/\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+ D "__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_JSON_\343\202\273\343\203\203\343\203\210\343\203\234\343\203\274\343\203\211.cpython-313.pyc"
+ D "__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+ D _archive/ch_kanban_settings.bak
+ M src/app/gui.py
+ M "\345\205\245\350\273\212\346\231\202\351\226\223\343\203\236\343\202\271\343\202\277.xlsx"
+?? _archive/gui_20260730_frozen.py.bak
+?? t103_state_check.txt
+?? t104_branch.txt
+?? t105_extract_consts.txt
+?? t106_deadline_const.txt
+?? t107_verify.txt
+?? t108_dedup.txt
+?? t109_import_fix.txt
+?? t110_commit_pr1.txt
+===== Y-6 push =====
