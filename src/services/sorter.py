@@ -213,20 +213,23 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         cond_mix2 = ~cond_same_dest_diff_bin
 
         has21_g1 = bool(g1.get("_has_size21", False))
+        has1_g1 = bool(g1.get("_has_size1", False))
         has_special_g1 = bool(g1.get("_has_special_hinban", False))
         
         # 【特例品番フィルタ：631426010000】
         # (1) g1 または g2 が size21 を含む場合：g3 から 631426010000 を除外
         # (2) g1 または g2 が 631426010000 を含む場合：g3 から size21 を除外
         if has21_g1:
-            # g1=size21 → g2 から 631426010000 を除外
+            # 後方互換: 旧フォーマットでは size21 山に size1 を載せない
+            cond_layer2 = ~units["_has_size1"]
+            # g1=size21 → g2 から 631426010000 を追加除外
             if "_has_special_hinban" in units.columns:
                 special_hinban_series = units.get("_has_special_hinban", pd.Series(False, index=units.index))
                 special_hinban_units = units[special_hinban_series]
-                cond_layer2 = ~units["山ID"].isin(special_hinban_units["山ID"])
-            else:
-                # 後方互換: 旧フォーマットでは size21 山に size1 を載せない
-                cond_layer2 = ~units["_has_size1"]
+                cond_layer2 &= ~units["山ID"].isin(special_hinban_units["山ID"])
+        elif has1_g1:
+            # 対称ルール: size1 を含む山には size21 を載せない
+            cond_layer2 = ~units["_has_size21"]
         elif has_special_g1:
             # g1=631426010000 → g2 から size21 を除外
             size21_series = units.get("_has_size21", pd.Series(False, index=units.index))
@@ -261,19 +264,22 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         has_special_g1 = bool(g1.get("_has_special_hinban", False))
         has_special_g2 = bool(g2.get("_has_special_hinban", False))
         has_special_merged = has_special_g1 | has_special_g2
+        has1_merged = bool(g1.get("_has_size1", False)) | bool(g2.get("_has_size1", False))
 
         # 【特例品番フィルタ：631426010000】
         # (1) g1 または g2 が size21 を含む場合：g3 から 631426010000 を除外
         # (2) g1 または g2 が 631426010000 を含む場合：g3 から size21 を除外
         
         if has21_merged:
+            # 後方互換: 旧フォーマットでは size21 山に size1 を載せない
+            cond_layer3 = ~units["_has_size1"]
             if "_has_special_hinban" in units.columns:
                 special_hinban_series = units.get("_has_special_hinban", pd.Series(False, index=units.index))
                 special_hinban_units = units[special_hinban_series]
-                cond_layer3 = ~units["山ID"].isin(special_hinban_units["山ID"])
-            else:
-                # 後方互換: 旧フォーマットでは size21 山に size1 を載せない
-                cond_layer3 = ~units["_has_size1"]
+                cond_layer3 &= ~units["山ID"].isin(special_hinban_units["山ID"])
+        elif has1_merged:
+            # 対称ルール: size1 を含む山には size21 を載せない
+            cond_layer3 = ~units["_has_size21"]
         elif has_special_merged:
             size21_series = units.get("_has_size21", pd.Series(False, index=units.index))
             size21_units = units[size21_series]
