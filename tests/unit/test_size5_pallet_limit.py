@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import pytest
 import pandas as pd
 import numpy as np
-from src.services.sorter import assign_groups_sequential
-from src.models.constants import SIZE5_TYPE, SIZE5_MAX_PALLETS_PER_YAMA, DEFAULT_HEIGHT_CAP
+from src.services.sorter import assign_groups_sequential, run_pipeline
+from src.models.constants import SIZE5_TYPE, SIZE5_MAX_PALLETS_PER_YAMA, DEFAULT_HEIGHT_CAP, DEFAULT_MIXING_KEY
 
 
 class TestSize5PalletLimit:
@@ -102,6 +102,99 @@ class TestSize5PalletLimit:
         
         assert groups == [1]
         assert max(groups) == 1
+
+
+class _StubDataManager:
+    """run_pipeline テスト用のスタブ DataManager"""
+    
+    def __init__(self, df_shipments: pd.DataFrame):
+        """df_shipments: フィルタ後のデータフレーム（受け取ったままそのまま返す）"""
+        self.df_shipments = df_shipments
+    
+    def filter_shipments(self, selections: list) -> pd.DataFrame:
+        """呼び出し時は df_shipments をそのまま返す（選択条件は既に反映済み想定）"""
+        return self.df_shipments.copy()
+
+
+class TestSize5RunPipelineIntegration:
+    """run_pipeline における size5 max_pallets 統合テスト"""
+    
+    def test_run_pipeline_size5_vs_size3_max_pallets_wiring(self):
+        """
+        run_pipeline が size5 に対して max_pallets パラメータを正しく通していることを確認。
+        size5 は 4 パレット → 2 山、size3 は 4 パレット → 1 山であることで検証。
+        """
+        # ========== テストデータ構築 ==========
+        # サイズ5 × 4 パレット（全て高さ500mm）
+        size5_rows = pd.DataFrame({
+            "PLANKANBANSU": [1, 1, 1, 1],  # 4 パレット
+            "サイズ種類": ["5", "5", "5", "5"],
+            "高さ": [500.0, 500.0, 500.0, 500.0],
+            "移動工数": [100, 100, 100, 100],
+            "SYUKKASAKI": ["仕入先A", "仕入先A", "仕入先A", "仕入先A"],
+        })
+        
+        # サイズ3 × 4 パレット（全て高さ500mm）
+        size3_rows = pd.DataFrame({
+            "PLANKANBANSU": [1, 1, 1, 1],  # 4 パレット
+            "サイズ種類": ["3", "3", "3", "3"],
+            "高さ": [500.0, 500.0, 500.0, 500.0],
+            "移動工数": [100, 100, 100, 100],
+            "SYUKKASAKI": ["仕入先B", "仕入先B", "仕入先B", "仕入先B"],
+        })
+        
+        # 結合してスタブ DataManager に渡す
+        all_rows = pd.concat([size5_rows, size3_rows], axis=0, ignore_index=True)
+        stub_dm = _StubDataManager(all_rows)
+        
+        # ========== run_pipeline 実行 ==========
+        filtered, expanded, group_results, group_details, _, _ = run_pipeline(
+            stub_dm,
+            selections=[],  # selections は使用しない（スタブが直接返す）
+            height_cap=DEFAULT_HEIGHT_CAP,
+            mixing_key=DEFAULT_MIXING_KEY,
+            master_df=None,
+            previous_lane_end_times=None,
+            return_lane_end_times=False,
+        )
+        
+        # ========== 検証 ==========
+        # サイズ5 の group_details を確認
+        assert "5" in group_details, "size5 が group_details に含まれていない"
+        size5_details = group_details["5"]
+        size5_groups = size5_details["グループ番号"].unique()
+        
+        # size5 の 4 パレット → 2 山 であることを確認
+        assert len(size5_groups) == 2, (
+            f"size5: 期待=2山、実際={len(size5_groups)}山。"
+            f"max_pallets=SIZE5_MAX_PALLETS_PER_YAMA が正しく通ってない可能性あり"
+        )
+        
+        # サイズ3 の group_details を確認
+        assert "3" in group_details, "size3 が group_details に含まれていない"
+        size3_details = group_details["3"]
+        size3_groups = size3_details["グループ番号"].unique()
+        
+        # size3 の 4 パレット → 1 山 であることを確認（max_pallets なし）
+        assert len(size3_groups) == 1, (
+            f"size3: 期待=1山、実際={len(size3_groups)}山。"
+            f"size3 は max_pallets 制限がないはずだが異常"
+        )
+        
+        # 各グループの パレット数 を確認（group_results から）
+        assert "5" in group_results, "size5 が group_results に含まれていない"
+        size5_result = group_results["5"]
+        size5_pallet_counts = size5_result["パレット数"].tolist()
+        assert size5_pallet_counts == [2, 2], (
+            f"size5 groups のパレット数期待=[2, 2]、実際={size5_pallet_counts}"
+        )
+        
+        assert "3" in group_results, "size3 が group_results に含まれていない"
+        size3_result = group_results["3"]
+        size3_pallet_counts = size3_result["パレット数"].tolist()
+        assert size3_pallet_counts == [4], (
+            f"size3 groups のパレット数期待=[4]、実際={size3_pallet_counts}"
+        )
 
 
 if __name__ == "__main__":
