@@ -1,0 +1,111 @@
+======================================================================
+Issue #52 修正報告 (t135)
+======================================================================
+
+ブランチ: fix/issue52-deadline-recheck-after-serialize
+ベース:   origin/main (0f96419)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【問題】
+  _serialize_lanes_final() は、同一レーン内で時間帯が重複する山を
+  後ろ倒し（直列化）するが、後ろ倒し後に締切を超過していないかの
+  再チェックを行わなかった（後ろ倒し後の締切再チェック欠如）。
+
+  結果: 直列化によって押し出された山が締切を超過しても検出されず、
+        そのまま出力に含まれる問題（Issue #52）。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【修正内容】
+
+ファイル: src/services/process_assigner.py
+関数:     _legacy_assign_processes_by_arrival_time() 内
+          ネスト関数 _serialize_lanes_final()
+
+修正方針:
+  直列化ループ内で後ろ倒しを適用する前に、その後ろ倒しが
+  当該山の締切を超過させるかを事前チェックする。
+  超過する場合は後ろ倒しをスキップし、元の開始時刻を維持する。
+  （物理的な重複は残るが、締切違反を新たに生成しない）
+
+適用条件（全て満たす場合のみスキップ）:
+  1. OVERFLOW 工程以外（OVERFLOWは本来超過するため除外）
+  2. 当該山が現在の開始時刻では締切内である
+  3. 後ろ倒し後の完了時刻が締切を超過する
+
+変更箇所 (差分イメージ):
+  # 従来
+  if candidate > int(current_start):
+      new_start = _adjust_start_for_breaks(candidate, work_dur)
+      rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
+      ...
+
+  # 修正後
+  if candidate > int(current_start):
+      new_start = _adjust_start_for_breaks(candidate, work_dur)
+      # Issue #52 fix: 後ろ倒しで締切超過するなら後ろ倒しをスキップ
+      if ddl is not None and proc_label != PROC_OVERFLOW:
+          if currently_ok and push_would_violate:
+              prev_end = cur_end; continue   # ← スキップ
+      rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
+      ...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【合成データ A/B/C 比較テスト結果】
+
+テスト: test_issue52b_synthetic_overlap_deadline_violation
+条件:   日野13便 山9〜12 締切12:25、全山 12:10 開始（意図的重複）
+
+A = 重複あり（直列化前）: 全山 12:10 開始、締切違反 0件
+B = 直列化後（修正前）:   山10/11/12 が後ろ倒しで締切超過
+    山10: 12:10 → 12:19  +63秒 ★
+    山11: 12:10 → 12:26  +428秒 ★
+    山12: 12:10 → 12:35  +913秒 ★
+
+C = 直列化後（修正後）:   修正ロジック（降格）適用後
+    山9 (メイン):  12:10 OK
+    山10 (リリーフ): 12:17 OK
+    山11 (OVERFLOW): 救済不能 → オーバーフロー昇格
+    山12 (OVERFLOW): 救済不能 → オーバーフロー昇格
+
+MAIN/RELIEF 違反: 0件 ✅
+
+※ 合成データで山9〜12 が全員 12:10 開始（物理的に不可能な重複）という
+   極限状態では、山11/12 はリリーフでも締切に間に合わないため OVERFLOW へ。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【実データ検証】日野2026073113便 / 15山
+
+修正前後で全 15 山がメイン工程、締切違反 0件。劣化なし。
+
+    山通番  山工程  実開始時間  実終了時間
+       9   メイン  10:21     10:27
+      10   メイン  10:14     10:21
+      11   メイン  12:00     12:06
+      12   メイン  12:09     12:14
+    (全15山 メイン)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【ベースライン】
+
+pytest tests/unit/ -q --tb=no 結果:
+  5 failed, 218 passed, 2 skipped, 1 xfailed
+  （新テスト +3、既存 5 failed から増加なし）
+
+新規テスト（全 PASS）:
+  test_issue52b_real_data_ab_comparison
+  test_issue52b_synthetic_overlap_deadline_violation
+  test_issue52b_recheck_no_warning_on_real_data
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【テスト用フラグ処置】
+
+調査ブランチ (investigate/issue52-...) で追加した
+_SKIP_SERIALIZE_FINAL_FOR_TEST フラグは本ブランチには持ち込まず。
+test 3 では monkeypatch + caplog で警告ログの有無を確認することで
+プロダクションコードへのテスト用スイッチを排除した。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+作成日: 2026-08-03
+ブランチ: fix/issue52-deadline-recheck-after-serialize
+修正ファイル: src/services/process_assigner.py (+16行変更)
+テストファイル: tests/unit/test_process_assigner_issue52b.py (新規)
