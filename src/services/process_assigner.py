@@ -9,8 +9,11 @@ CHかんばんセット — 工程割当ロジック（メイン工程 / リリ�
 
 from typing import Optional, Dict, List, Tuple
 import copy
+import logging
 import pandas as pd
 import numpy as np
+
+_logger = logging.getLogger(__name__)
 
 from ..models.constants import (
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
@@ -1764,6 +1767,7 @@ def _legacy_assign_processes_by_arrival_time(
         # Issue #36: 出力直前の最終直列化。探索・前詰め試行(trial_rows評価)には
         # 一切関与しない独立ステップ。山工程・照合追加180秒フラグは不変とし、
         # 同一レーン内で重複する山だけを運用タイムライン秒上で後ろ倒しして解消する。
+        # Issue #52 fix: 後ろ倒しで締切を超過する場合は後ろ倒しを適用しない。
         def _op_start(rr: dict):
             st = _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", ""))))
             return (st is None, st if st is not None else float("inf"), int(rr.get("山通番", 0)))
@@ -1794,6 +1798,20 @@ def _legacy_assign_processes_by_arrival_time(
 
                 if candidate > int(current_start):
                     new_start = int(_adjust_start_for_breaks(candidate, work_dur))
+                    # Issue #52 fix: 後ろ倒しで締切超過するなら後ろ倒しをスキップ。
+                    # 条件: OVERFLOW 以外 かつ 現在は締切内 かつ 後ろ倒し後は締切超過。
+                    ddl = mtn_deadline_map.get(yama_no)
+                    if ddl is not None and proc_label != PROC_OVERFLOW:
+                        cur_end = int(_calc_work_end_with_breaks(int(current_start), work_dur))
+                        cur_ddl_eval = _deadline_for_eval(ddl, int(current_start))
+                        currently_ok = cur_ddl_eval is None or cur_end <= int(cur_ddl_eval)
+                        if currently_ok:
+                            new_end = int(_calc_work_end_with_breaks(new_start, work_dur))
+                            new_ddl_eval = _deadline_for_eval(ddl, new_start)
+                            if new_ddl_eval is not None and new_end > int(new_ddl_eval):
+                                # 後ろ倒しで締切超過 → 元の時刻を維持。重複は許容する。
+                                prev_end = cur_end
+                                continue
                     rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
                     end_secs = int(_calc_work_end_with_breaks(new_start, work_dur))
                     rr["_end_secs"] = end_secs
