@@ -1,0 +1,50 @@
+===== D-1 対象テスト単独 =====
+..................                                                       [100%]
+18 passed in 5.57s
+===== D-2 フルスイート（基線: 5 failed / 231 passed 相当へ戻るはず）=====
+
+FAILED tests/unit/test_main_assignment_inspection_delay.py::test_yama8_c15_a_3_is_assigned_to_main_with_inspection_delay_rule
+FAILED tests/unit/test_relief_declined_keeps_current.py::test_front_pack_declined_when_violates_other_deadline
+FAILED tests/unit/test_relief_earliest_start.py::test_relief_yama_uses_earliest_feasible_start
+FAILED tests/unit/test_relief_earliest_start.py::test_single_relief_yama_starts_from_prev_arrival_buffer_first
+FAILED tests/unit/test_sorter.py::TestGrouping::test_regression_order_yama_continuity_real_20260706_091011
+5 failed, 231 passed, 2 skipped, 1 xfailed in 16.06s
+
+===== D-3 diff確認（テスト1ファイル・2箇所のみ）=====
+diff --git a/tests/unit/test_hino_2lane.py b/tests/unit/test_hino_2lane.py
+index 496a49e..cab0c57 100644
+--- a/tests/unit/test_hino_2lane.py
++++ b/tests/unit/test_hino_2lane.py
+@@ -10,6 +10,7 @@ from src.services.process_assigner import (
+     assign_processes_by_arrival_time,
+     _legacy_assign_processes_by_arrival_time,
+     ARRIVAL_BUFFER_SECS,
++    SHIFT_FIRST_TRIP_BUFFER_SECS,
+     _time_to_seconds,
+     _to_operational_timeline_secs,
+     _seconds_to_hhmm,
+@@ -40,7 +41,7 @@ class TestHino2LaneWraparound:
+         )
+         row = result.loc[result["螻ｱ騾夂分"] == 1].iloc[0]
+         start_secs = _time_to_seconds(str(row["螳滄幕蟋区凾髢・]))
+-        floor_secs = _shift_start_secs(0) + 15 * 60
++        floor_secs = _shift_start_secs(0) + SHIFT_FIRST_TRIP_BUFFER_SECS
+         assert start_secs is not None
+         assert start_secs >= floor_secs
+         assert str(row["螳滄幕蟋区凾髢・]) == "06:40"
+@@ -67,7 +68,7 @@ class TestHino2LaneWraparound:
+         src = inspect.getsource(_legacy_assign_processes_by_arrival_time)
+         split_part = src.split("yama_split_units_map", 1)[1]
+         assert "if not set_flag:" in split_part
+-        assert "shift_floor = _shift_start_secs(shift_idx) + 15 * 60" in split_part
++        assert "shift_floor = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS" in split_part
+         assert "st = max(int(st), int(shift_floor))" in split_part
+ 
+     def test_hino_set_flag_true_uses_same_lane_previous_order_plus_buffer(self):
+===== D-4 add→commit→push（1ファイル限定）=====
+ tests/unit/test_hino_2lane.py | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+[refactor/extract-time-buffer-consts 7146ef6] test: hino clamp讀懈渊縺ｮ譛溷ｾ・枚蟄怜・繧貞ｮ壽焚蜷拘HIFT_FIRST_TRIP_BUFFER_SECS縺ｸ霑ｽ蠕・ 1 file changed, 3 insertions(+), 2 deletions(-)
+To https://github.com/Hiroyuki-Kawasaki20/CH.git
+   75a4317..7146ef6  refactor/extract-time-buffer-consts -> refactor/extract-time-buffer-consts
+7146ef6 test: hino clamp讀懈渊縺ｮ譛溷ｾ・枚蟄怜・繧貞ｮ壽焚蜷拘HIFT_FIRST_TRIP_BUFFER_SECS縺ｸ霑ｽ蠕・75a4317 refactor: 譎る俣繝舌ャ繝輔ぃ6螳壽焚繧団onstants.py縺ｸ謚ｽ蜃ｺ・域嫌蜍募､画峩縺ｪ縺暦ｼ・

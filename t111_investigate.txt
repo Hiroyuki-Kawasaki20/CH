@@ -1,0 +1,49 @@
+===== Z-1 コミット75a4317の中身（3ファイルだけのはず）=====
+commit 75a43175f8284ca5ba6e2a3c2318bf2d1146d5f7
+Author: Hiroyuki-Kawasaki20 <hiroyuki_kawasaki_ab@mail.toyota.co.jp>
+Date:   Thu Jul 30 08:12:50 2026 +0900
+
+    refactor: 譎る俣繝舌ャ繝輔ぃ6螳壽焚繧団onstants.py縺ｸ謚ｽ蜃ｺ・域嫌蜍募､画峩縺ｪ縺暦ｼ・    
+    SHIFT_FIRST_TRIP_BUFFER_SECS / FIRST_BIN_RELEASE_BUFFER_SECS / LUNCH_PRE_MARGIN_SECS / LUNCH_POST_RESUME_SECS / LUNCH_POST_LOCK_SECS / PICKUP_DEADLINE_BUFFER_SECS 繧呈眠險ｭ縲・RRIVAL_BUFFER_SECS 縺ｯ蜑堺ｾｿ+10蛻・・髢句ｧ倶ｸ矩剞蟆ら畑縺ｫ謨ｴ逅・ょ､縺ｯ蜈ｨ縺ｦ譌ｧ蛟､縺ｮ縺ｾ縺ｾ縲・
+M	src/models/constants.py
+M	src/services/process_assigner.py
+M	src/services/scheduler.py
+===== Z-2 コミットメッセージ（文字化け確認）=====
+refactor: 譎る俣繝舌ャ繝輔ぃ6螳壽焚繧団onstants.py縺ｸ謚ｽ蜃ｺ・域嫌蜍募､画峩縺ｪ縺暦ｼ・
+SHIFT_FIRST_TRIP_BUFFER_SECS / FIRST_BIN_RELEASE_BUFFER_SECS / LUNCH_PRE_MARGIN_SECS / LUNCH_POST_RESUME_SECS / LUNCH_POST_LOCK_SECS / PICKUP_DEADLINE_BUFFER_SECS 繧呈眠險ｭ縲・RRIVAL_BUFFER_SECS 縺ｯ蜑堺ｾｿ+10蛻・・髢句ｧ倶ｸ矩剞蟆ら畑縺ｫ謨ｴ逅・ょ､縺ｯ蜈ｨ縺ｦ譌ｧ蛟､縺ｮ縺ｾ縺ｾ縲・
+===== Z-3 基線時点の失敗テスト一覧（過去ログから）=====
+===== Z-4 作業ツリーでの単独再実行（現状の再確認）=====
+F                                                                        [100%]
+================================== FAILURES ===================================
+___ TestGrouping.test_regression_order_yama_continuity_real_20260706_091011 ___
+tests\unit\test_sorter.py:219: in test_regression_order_yama_continuity_real_20260706_091011
+    assert not all_det.empty
+E   assert not True
+E    +  where True = Empty DataFrame\nColumns: []\nIndex: [].empty
+=========================== short test summary info ===========================
+FAILED tests/unit/test_sorter.py::TestGrouping::test_regression_order_yama_continuity_real_20260706_091011
+1 failed in 2.98s
+===== Z-5 クリーン環境での3点比較（worktree使用）=====
+Preparing worktree (detached HEAD 75a4317)
+HEAD is now at 75a4317 refactor: 譎る俣繝舌ャ繝輔ぃ6螳壽焚繧団onstants.py縺ｸ謚ｽ蜃ｺ・域嫌蜍募､画峩縺ｪ縺暦ｼ・
+--- [1] コミット75a4317（今回のリファクタ込み・クリーン）---
+================================== FAILURES ===================================
+C:\Users\1588386\DIG_Project\CH_check_HEAD\tests\unit\test_sorter.py:219: assert not True
+=========================== short test summary info ===========================
+FAILED tests/unit/test_sorter.py::TestGrouping::test_regression_order_yama_continuity_real_20260706_091011
+1 failed in 2.73s
+Preparing worktree (detached HEAD 7ef557f)
+HEAD is now at 7ef557f Merge pull request #48 from Hiroyuki-Kawasaki20/feat/persist-lane-end-times-history
+--- [2] コミット7ef557f（リファクタ前＝main相当・クリーン）---
+================================== FAILURES ===================================
+C:\Users\1588386\DIG_Project\CH_check_BASE\tests\unit\test_sorter.py:219: assert not True
+=========================== short test summary info ===========================
+FAILED tests/unit/test_sorter.py::TestGrouping::test_regression_order_yama_continuity_real_20260706_091011
+1 failed in 2.45s
+"C:/Users/1588386/DIG_Project/CH\343\201\213\343\202\223\343\201\260\343\202\223\343\202\273\343\203\203\343\203\210" 75a4317 [refactor/extract-time-buffer-consts]
+C:/Users/1588386/DIG_Project/_tmp_wt_gitignore_cleanup                                                                82278be [chore/gitignore-cleanup]
+C:/Users/1588386/DIG_Project/_tmp_wt_idempotent_fix                                                                   254e9be [fix/add-table-exact-idempotent]
+C:/Users/1588386/DIG_Project/_tmp_wt_main_verify_pr10                                                                 0ff0579 (detached HEAD)
+===== Z-6 PRが作成済みか確認 =====
+49	refactor: 譎る俣繝舌ャ繝輔ぃ螳壽焚縺ｮ謚ｽ蜃ｺ・域嫌蜍募､画峩縺ｪ縺暦ｼ・refactor/extract-time-buffer-consts	OPEN	2026-07-29T23:12:59Z
+gh exit=0

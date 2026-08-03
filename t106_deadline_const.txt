@@ -1,0 +1,23 @@
+===== 手順1-A 前回(b)の反映再確認 =====
+43: SHIFT_FIRST_TRIP_BUFFER_SECS = 15 * 60
+45: FIRST_BIN_RELEASE_BUFFER_SECS = 15 * 60
+47: LUNCH_PRE_MARGIN_SECS = 10 * 60
+49: LUNCH_POST_RESUME_SECS = 15 * 60
+51: LUNCH_POST_LOCK_SECS = 15 * 60
+===== 手順1-B ARRIVAL_BUFFER_SECS の全用途（引き算/足し算の区別）=====
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\app\gui.py:48: _calc_work_end_with_breaks, ARRIVAL_BUFFER_SECS,
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\app\gui.py:1599: deadline_candidates.append(max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS))
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:29: ARRIVAL_BUFFER_SECS = 10 * 60  # 入車時間の10分前完了を締切とする
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:173: floor = int(prev_arrival_secs) + ARRIVAL_BUFFER_SECS
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:584: strict_deadline = max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS)
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:607: st = prev_secs + ARRIVAL_BUFFER_SECS
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:669: st = pickup_secs + ARRIVAL_BUFFER_SECS
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:685: st = prev_secs + ARRIVAL_BUFFER_SECS
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:711: st_prev = (prev_secs + ARRIVAL_BUFFER_SECS) if prev_secs is not None else 0
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:723: st = pickup_secs + ARRIVAL_BUFFER_SECS
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:748: effective_deadline = strict_deadline
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:819: strict_deadline = max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS)
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\process_assigner.py:926: effective_deadline = strict_deadline
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\scheduler.py:39: _ARRIVAL_BUFFER_SECS = 10 * 60
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\scheduler.py:670: strict_deadline = max(0, int(pickup_secs) - _ARRIVAL_BUFFER_SECS)
+C:\Users\1588386\DIG_Project\CHかんばんセット\src\services\scheduler.py:803: effective_deadline = strict_deadline

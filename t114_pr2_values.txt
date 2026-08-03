@@ -1,0 +1,63 @@
+===== E-1 worktree準備 =====
+From https://github.com/Hiroyuki-Kawasaki20/CH
+   7ef557f..6187f25  main       -> origin/main
+Preparing worktree (new branch 'feat/adjust-time-buffer-values')
+branch 'feat/adjust-time-buffer-values' set up to track 'origin/main'.
+Updating files:  80% (92/115)
+Updating files:  81% (94/115)
+Updating files:  82% (95/115)
+Updating files:  83% (96/115)
+Updating files:  84% (97/115)
+Updating files:  85% (98/115)
+Updating files:  86% (99/115)
+Updating files:  87% (101/115)
+Updating files:  88% (102/115)
+Updating files:  89% (103/115)
+Updating files:  90% (104/115)
+Updating files:  91% (105/115)
+Updating files:  92% (106/115)
+Updating files:  93% (107/115)
+Updating files:  94% (109/115)
+Updating files:  95% (110/115)
+Updating files:  96% (111/115)
+Updating files:  97% (112/115)
+Updating files:  98% (113/115)
+Updating files:  99% (114/115)
+Updating files: 100% (115/115)
+Updating files: 100% (115/115), done.
+HEAD is now at 6187f25 refactor: 譎る俣繝舌ャ繝輔ぃ6螳壽焚繧団onstants.py縺ｸ謚ｽ蜃ｺ・域嫌蜍募､画峩縺ｪ縺暦ｼ・(#49)
+6187f25 refactor: 譎る俣繝舌ャ繝輔ぃ6螳壽焚繧団onstants.py縺ｸ謚ｽ蜃ｺ・域嫌蜍募､画峩縺ｪ縺暦ｼ・(#49)
+7ef557f Merge pull request #48 from Hiroyuki-Kawasaki20/feat/persist-lane-end-times-history
+===== E-2 変更後の定数一覧 =====
+43: SHIFT_FIRST_TRIP_BUFFER_SECS = 35 * 60
+45: FIRST_BIN_RELEASE_BUFFER_SECS = 35 * 60
+47: LUNCH_PRE_MARGIN_SECS = 10 * 60
+49: LUNCH_POST_RESUME_SECS = 35 * 60
+51: LUNCH_POST_LOCK_SECS = 35 * 60
+54: PICKUP_DEADLINE_BUFFER_SECS = 20 * 60
+===== E-3 diff（constants.py 5行のみのはず）=====
+diff --git a/src/models/constants.py b/src/models/constants.py
+index 32907e5..bc1c569 100644
+--- a/src/models/constants.py
++++ b/src/models/constants.py
+@@ -40,18 +40,18 @@ BREAK_TIMES = [
+ 
+ # ===== 譎る俣繝舌ャ繝輔ぃ・育ｧ貞腰菴搾ｼ・=====
+ # 蜷・峩1萓ｿ逶ｮ縺ｮ蠑募叙髢句ｧ九ヰ繝・ヵ繧｡・育峩髢句ｧ区凾蛻ｻ + 縺薙・譎る俣・・-SHIFT_FIRST_TRIP_BUFFER_SECS = 15 * 60
++SHIFT_FIRST_TRIP_BUFFER_SECS = 35 * 60
+ # 1萓ｿ逶ｮ繧ｯ繝ｩ繧ｹ繧ｿ繝ｼ縺ｮ隗｣遖√ヰ繝・ヵ繧｡・医◎縺ｮ萓ｿ縺ｮ蜈･霆頑凾蛻ｻ + 縺薙・譎る俣・・-FIRST_BIN_RELEASE_BUFFER_SECS = 15 * 60
++FIRST_BIN_RELEASE_BUFFER_SECS = 35 * 60
+ # 髟ｷ莨第・・域仂莨第・・牙燕: 莨第・髢句ｧ九・菴募・蜑阪∪縺ｧ縺ｫ螻ｱ繧貞ｮ御ｺ・＆縺帙ｋ縺・ LUNCH_PRE_MARGIN_SECS = 10 * 60
+ # 髟ｷ莨第・蠕・ 菴懈･ｭ蜀埼幕縺ｾ縺ｧ縺ｮ繝舌ャ繝輔ぃ
+-LUNCH_POST_RESUME_SECS = 15 * 60
++LUNCH_POST_RESUME_SECS = 35 * 60
+ # 髟ｷ莨第・蠕・ 譁ｰ縺励＞螻ｱ縺ｮ髢句ｧ九ｒ繝ｭ繝・け縺吶ｋ譎る俣
+-LUNCH_POST_LOCK_SECS = 15 * 60
++LUNCH_POST_LOCK_SECS = 35 * 60
+ 
+ # 髮・差螳御ｺ・・邱蛻・ 蜷・ｾｿ縺ｮ蜈･霆頑凾蛻ｻ縺ｮ菴募・蜑阪∪縺ｧ縺ｫ螻ｱ繧貞ｮ御ｺ・＆縺帙ｋ縺・-PICKUP_DEADLINE_BUFFER_SECS = 10 * 60
++PICKUP_DEADLINE_BUFFER_SECS = 20 * 60
+ 
+ # ===== 豺ｷ霈峨・繝ｪ繧ｷ繝ｼ =====
+ SIZE_MIXING_POLICY = {
+===== E-4 フルスイート観測（落ちるテスト＝タスクJの作業範囲確定）=====

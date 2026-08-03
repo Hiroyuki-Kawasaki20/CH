@@ -1,0 +1,324 @@
+===== E-1 gui.py の未コミット差分の中身確認 =====
+diff --git a/src/app/gui.py b/src/app/gui.py
+index b03c7e7..b6b7dcc 100644
+--- a/src/app/gui.py
++++ b/src/app/gui.py
+@@ -129,7 +129,12 @@ class App(ctk.CTk):
+     def __init__(self):
+         super().__init__()
+         self.title("CH縺九ｓ縺ｰ繧薙そ繝・ヨ 窶・莉募・縺代・繧ｻ繝・ヨ繝懊・繝・)
+-        self.geometry("1500x920")
++        _sw = self.winfo_screenwidth()
++        _sh = self.winfo_screenheight()
++        _w = min(1600, max(1200, _sw - 40))
++        _h = min(980, max(760, _sh - 80))
++        self.geometry(f"{_w}x{_h}")
++        self.minsize(1200, 760)
+ 
+         # 繝・・繧ｿ隱ｭ縺ｿ霎ｼ縺ｿ
+         df_shipments, df_places = load_data()
+@@ -311,9 +316,9 @@ class App(ctk.CTk):
+         style.map("Treeview", background=[("selected", "#D0E2F4")], foreground=[("selected", "#1A1A2E")])
+ 
+         # 繧ｻ繝・ヨ繝懊・繝牙ｰら畑繧ｹ繧ｿ繧､繝ｫ・郁ｦ冶ｪ肴ｧ驥崎ｦ厄ｼ・-        style.configure("SetboardLane.Treeview", font=("Meiryo UI", 12), rowheight=34,
++        style.configure("SetboardLane.Treeview", font=("Meiryo UI", 14), rowheight=38,
+                 background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#1F2A44")
+-        style.configure("SetboardLane.Treeview.Heading", font=("Meiryo UI", 12, "bold"),
++        style.configure("SetboardLane.Treeview.Heading", font=("Meiryo UI", 13, "bold"),
+                 background="#D8DEE6", foreground="#10203A", relief="flat")
+         style.configure("SetboardDetail.Treeview", font=("Meiryo UI", 13), rowheight=40,
+                 background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#1F2A44")
+@@ -352,7 +357,7 @@ class App(ctk.CTk):
+         route_frame.pack(fill="x", pady=(0, 6))
+         route_sb = tk.Scrollbar(route_frame, orient="vertical")
+         self.route_list = tk.Listbox(route_frame, selectmode="extended", exportselection=False,
+-                                     font=("Meiryo UI", 13), height=8,
++                                     font=("Meiryo UI", 12), height=8,
+                                      bg="white", fg="#2B2D42",
+                                      selectbackground=C_ACCENT, selectforeground="white",
+                                      relief="flat", highlightthickness=1, highlightcolor="#D6DCE5",
+@@ -414,7 +419,7 @@ class App(ctk.CTk):
+         order_frame.pack(fill="x", pady=(0, 6))
+         order_sb = tk.Scrollbar(order_frame, orient="vertical")
+         self.order_list = tk.Listbox(order_frame, selectmode="extended", exportselection=False,
+-                                     font=("Meiryo UI", 12), height=6,
++                                     font=("Meiryo UI", 18, "bold"), height=8,
+                                      bg="white", fg="#2B2D42",
+                                      selectbackground=C_ACCENT, selectforeground="white",
+                                      relief="flat", highlightthickness=1, highlightcolor="#D6DCE5",
+@@ -426,47 +431,28 @@ class App(ctk.CTk):
+         self.order_list.bind("<Double-Button-1>", lambda e: self.add_selection())
+         self._on_summary_mode_changed()
+ 
+-        # 竭｣ 蜑榊屓譎ょ綾驕ｸ謚橸ｼ亥ｱ･豁ｴ邂｡逅・ｼ・-        shift_frame = ctk.CTkFrame(left_top, fg_color="transparent")
+-        shift_frame.pack(fill="x", pady=(6, 0))
+-        ctk.CTkLabel(shift_frame, text="蜑榊屓譎ょ綾驕ｸ謚・, font=self._label_bold).pack(side="left", padx=(0, 8))
+-        # 蛻晄悄蛟､・壼ｱ･豁ｴ縺檎ｩｺ縺ｪ縺ｮ縺ｧ縲梧悴險育ｮ励阪Λ繝吶Ν
+-        initial_values = [
+-            generate_lane_end_times_label(self.lane_end_times_history, "譛譁ｰ"),
+-            generate_lane_end_times_label(self.lane_end_times_history, "1縺､蜑・),
+-        ]
+-        self.history_combo = ttk.Combobox(shift_frame, values=initial_values, state="readonly",
+-                                     textvariable=self.selected_history_choice, width=20,
+-                                     font=("Meiryo UI", 11))
+-        # 縺薙％縺ｯ combobox 蛟､繧貞・譛溷喧蠕後↓ self.selected_history_choice 繧偵そ繝・ヨ
+-        # ・・ombobox蜀・・蛟､縺ｨ縺励※譛蛻昴・繝ｩ繝吶Ν縲梧怙譁ｰ (譛ｪ險育ｮ・縲阪ｒ繧ｻ繝・ヨ・・-        self.selected_history_choice.set(initial_values[0])
+-        self.history_combo.pack(side="left")
+-        if self.selected_history_choice.get() == "":
+-            self.selected_history_choice.set("譛譁ｰ")
+-
+         # 竭｢ 繝舌ャ繝・Μ繝ｼ莠､謠帙が繝励す繝ｧ繝ｳ
+         battery_frame = ctk.CTkFrame(left_top, fg_color="transparent")
+-        battery_frame.pack(fill="x", pady=(6, 0))
++        battery_frame.pack(fill="x", padx=8, pady=8)
+         ctk.CTkCheckBox(
+             battery_frame,
+             text="萩 繝舌ャ繝・Μ繝ｼ莠､謠帙ｒ螳滓命・医Γ繧､繝ｳ蟾･遞九↓蟾ｮ縺苓ｾｼ繧・・,
+             variable=self.enable_battery_change,
+             command=self._on_battery_change_toggled,
+-            font=self._label_bold,
++            font=ctk.CTkFont(family="Meiryo UI", size=15, weight="bold"),
+             fg_color=C_ACCENT,
+             hover_color=C_ACCENT_HOVER,
+         ).pack(anchor="w", pady=(0, 6))
+ 
+         # 荳矩Κ繧ｨ繝ｪ繧｢・亥ｮ溯｡・謫堺ｽ懊・繧ｿ繝ｳ・・-        left_bottom = ctk.CTkFrame(left, fg_color="transparent", height=120)
+-        left_bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
++        left_bottom = ctk.CTkFrame(left, fg_color="transparent", height=180)
++        left_bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 10), before=left_top)
+         left_bottom.pack_propagate(False)
+ 
+         self.progress_bar = ctk.CTkProgressBar(left_bottom, mode="indeterminate", progress_color=C_SUCCESS)
+         ctk.CTkButton(left_bottom, text="笆ｶ  莉募・縺托ｼ・そ繝・ヨ螳溯｡・, command=self.run,
+                       fg_color=C_SUCCESS, hover_color=C_SUCCESS_HOVER,
+-                      font=self._run_font, height=48, corner_radius=10,
++                      font=self._run_font, height=56, corner_radius=10,
+                       ).pack(side="bottom", fill="x", pady=(6, 0))
+ 
+         btns = ctk.CTkFrame(left_bottom, fg_color="transparent")
+@@ -492,15 +478,32 @@ class App(ctk.CTk):
+         ).pack(side="left", padx=4)
+         ctk.CTkLabel(auto_reload_cfg, text="蛻・, font=self._label_font,
+                      text_color=C_NEUTRAL).pack(side="left", padx=(2, 0))
+-        ctk.CTkButton(btns, text="CSV蜀崎ｪｭ霎ｼ", command=self.reload_shipments_data, width=88,
+-                  fg_color=C_WARN, hover_color=C_WARN_HOVER, font=self._btn_font,
+-                  corner_radius=8).pack(side="left", padx=2)
+-        ctk.CTkButton(btns, text="蠑慕ｶ吶け繝ｪ繧｢", command=self.clear_lane_time_carryover, width=86,
+-              fg_color=C_NEUTRAL, hover_color=C_NEUTRAL_HOVER, font=self._btn_font,
+-              corner_radius=8).pack(side="left", padx=2)
+-        ctk.CTkButton(btns, text="霑ｽ蜉", command=self.add_selection, width=60,
++        ctk.CTkButton(btns, text="CSV蜀崎ｪｭ霎ｼ", command=self.reload_shipments_data, width=132,
++                  height=40, fg_color=C_WARN, hover_color=C_WARN_HOVER, font=self._btn_font,
++                  corner_radius=8).pack(side="left", padx=(6, 4))
++        ctk.CTkButton(btns, text="蠑慕ｶ吶け繝ｪ繧｢", command=self.clear_lane_time_carryover, width=132,
++              height=40, fg_color=C_NEUTRAL, hover_color=C_NEUTRAL_HOVER, font=self._btn_font,
++              corner_radius=8).pack(side="left", padx=(4, 6))
++
++        # 竭｣ 蜑榊屓譎ょ綾驕ｸ謚橸ｼ亥ｱ･豁ｴ邂｡逅・ｼ・+        shift_label = ctk.CTkLabel(btns, text="蜑榊屓譎ょ綾驕ｸ謚・, font=self._label_bold)
++        shift_label.pack(side="left", padx=(12, 4))
++        # 蛻晄悄蛟､・壼ｱ･豁ｴ縺檎ｩｺ縺ｪ縺ｮ縺ｧ縲梧悴險育ｮ励阪Λ繝吶Ν
++        initial_values = [
++            generate_lane_end_times_label(self.lane_end_times_history, "譛譁ｰ"),
++            generate_lane_end_times_label(self.lane_end_times_history, "1縺､蜑・),
++        ]
++        self.history_combo = ttk.Combobox(btns, values=initial_values, state="readonly",
++                                          textvariable=self.selected_history_choice,
++                                          width=26, font=("Meiryo UI", 14), height=5)
++        self.selected_history_choice.set(initial_values[0])
++        self.history_combo.pack(side="left", padx=(0, 8))
++        if self.selected_history_choice.get() == "":
++            self.selected_history_choice.set("譛譁ｰ")
++
++        ctk.CTkButton(btns, text="霑ｽ蜉", command=self.add_selection, width=70,
+                       fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER, font=self._btn_font,
+-                      corner_radius=8).pack(side="left", padx=2)
++                      corner_radius=8).pack(side="left", padx=(8, 2))
+ 
+         # 蜿ｳ繝壹う繝ｳ: 繧ｿ繝・         self.notebook = ctk.CTkTabview(self, corner_radius=12,
+@@ -610,17 +613,17 @@ class App(ctk.CTk):
+                 w = 90
+             self.sb_main_tree.column(c, width=w, anchor="center")
+         self.sb_main_tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+-        self.sb_main_tree.tag_configure("mtn_even_summary", background="#D6E7FB", foreground="#0F274A")
+-        self.sb_main_tree.tag_configure("mtn_even_detail", background="#F4F8FF", foreground="#1F2A44")
+-        self.sb_main_tree.tag_configure("mtn_even_detail_alt", background="#E9F1FC", foreground="#1F2A44")
+-        self.sb_main_tree.tag_configure("mtn_odd_summary", background="#C7DCF5", foreground="#0F274A")
+-        self.sb_main_tree.tag_configure("mtn_odd_detail", background="#EAF3FF", foreground="#1F2A44")
+-        self.sb_main_tree.tag_configure("mtn_odd_detail_alt", background="#DCEBFF", foreground="#1F2A44")
+-        self.sb_main_tree.tag_configure("detail_break_main", background="#FFF3C4", foreground="#1F2A44")
+-        self.sb_main_tree.tag_configure("mtn_even_summary_delay", background="#D6E7FB", foreground="#C62828")
+-        self.sb_main_tree.tag_configure("mtn_odd_summary_delay", background="#C7DCF5", foreground="#C62828")
+-        self.sb_main_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18")
+-        self.sb_main_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A")
++        self.sb_main_tree.tag_configure("mtn_even_summary", background="#D6E7FB", foreground="#0F274A", font=("Meiryo UI", 14, "bold"))
++        self.sb_main_tree.tag_configure("mtn_even_detail", background="#F4F8FF", foreground="#1F2A44", font=("Meiryo UI", 13))
++        self.sb_main_tree.tag_configure("mtn_even_detail_alt", background="#E9F1FC", foreground="#1F2A44", font=("Meiryo UI", 13))
++        self.sb_main_tree.tag_configure("mtn_odd_summary", background="#C7DCF5", foreground="#0F274A", font=("Meiryo UI", 14, "bold"))
++        self.sb_main_tree.tag_configure("mtn_odd_detail", background="#EAF3FF", foreground="#1F2A44", font=("Meiryo UI", 13))
++        self.sb_main_tree.tag_configure("mtn_odd_detail_alt", background="#DCEBFF", foreground="#1F2A44", font=("Meiryo UI", 13))
++        self.sb_main_tree.tag_configure("detail_break_main", background="#FFF3C4", foreground="#1F2A44", font=("Meiryo UI", 13))
++        self.sb_main_tree.tag_configure("mtn_even_summary_delay", background="#D6E7FB", foreground="#C62828", font=("Meiryo UI", 14, "bold"))
++        self.sb_main_tree.tag_configure("mtn_odd_summary_delay", background="#C7DCF5", foreground="#C62828", font=("Meiryo UI", 14, "bold"))
++        self.sb_main_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 14, "bold"))
++        self.sb_main_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("Meiryo UI", 13))
+         self.sb_main_tree.tag_configure("mountain_sep", background="#B8CCE6", foreground="#B8CCE6")
+         self.sb_main_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("main"))
+ 
+@@ -654,17 +657,17 @@ class App(ctk.CTk):
+                 w = 90
+             self.sb_relief_tree.column(c, width=w, anchor="center")
+         self.sb_relief_tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+-        self.sb_relief_tree.tag_configure("mtn_even_summary", background="#F7DCEB", foreground="#5E173D")
+-        self.sb_relief_tree.tag_configure("mtn_even_detail", background="#FFF7FC", foreground="#3F1E33")
+-        self.sb_relief_tree.tag_configure("mtn_even_detail_alt", background="#FCEEF6", foreground="#3F1E33")
+-        self.sb_relief_tree.tag_configure("mtn_odd_summary", background="#F0CFE1", foreground="#5E173D")
+-        self.sb_relief_tree.tag_configure("mtn_odd_detail", background="#FAE9F3", foreground="#3F1E33")
+-        self.sb_relief_tree.tag_configure("mtn_odd_detail_alt", background="#F6DFEC", foreground="#3F1E33")
+-        self.sb_relief_tree.tag_configure("detail_break_relief", background="#FFF3C4", foreground="#3F1E33")
+-        self.sb_relief_tree.tag_configure("mtn_even_summary_delay", background="#F7DCEB", foreground="#C62828")
+-        self.sb_relief_tree.tag_configure("mtn_odd_summary_delay", background="#F0CFE1", foreground="#C62828")
+-        self.sb_relief_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18")
+-        self.sb_relief_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A")
++        self.sb_relief_tree.tag_configure("mtn_even_summary", background="#F7DCEB", foreground="#5E173D", font=("Meiryo UI", 14, "bold"))
++        self.sb_relief_tree.tag_configure("mtn_even_detail", background="#FFF7FC", foreground="#3F1E33", font=("Meiryo UI", 13))
++        self.sb_relief_tree.tag_configure("mtn_even_detail_alt", background="#FCEEF6", foreground="#3F1E33", font=("Meiryo UI", 13))
++        self.sb_relief_tree.tag_configure("mtn_odd_summary", background="#F0CFE1", foreground="#5E173D", font=("Meiryo UI", 14, "bold"))
++        self.sb_relief_tree.tag_configure("mtn_odd_detail", background="#FAE9F3", foreground="#3F1E33", font=("Meiryo UI", 13))
++        self.sb_relief_tree.tag_configure("mtn_odd_detail_alt", background="#F6DFEC", foreground="#3F1E33", font=("Meiryo UI", 13))
++        self.sb_relief_tree.tag_configure("detail_break_relief", background="#FFF3C4", foreground="#3F1E33", font=("Meiryo UI", 13))
++        self.sb_relief_tree.tag_configure("mtn_even_summary_delay", background="#F7DCEB", foreground="#C62828", font=("Meiryo UI", 14, "bold"))
++        self.sb_relief_tree.tag_configure("mtn_odd_summary_delay", background="#F0CFE1", foreground="#C62828", font=("Meiryo UI", 14, "bold"))
++        self.sb_relief_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 14, "bold"))
++        self.sb_relief_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("Meiryo UI", 13))
+         self.sb_relief_tree.tag_configure("mountain_sep", background="#E4CFE0", foreground="#E4CFE0")
+         self.sb_relief_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("relief"))
+ 
+@@ -698,15 +701,15 @@ class App(ctk.CTk):
+                 w = 90
+             self.sb_overflow_tree.column(c, width=w, anchor="center")
+         self.sb_overflow_tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+-        self.sb_overflow_tree.tag_configure("mtn_even_summary", background="#FFE0B2", foreground="#4E2A00")
+-        self.sb_overflow_tree.tag_configure("mtn_even_detail", background="#FFF8E8", foreground="#4E2A00")
+-        self.sb_overflow_tree.tag_configure("mtn_even_detail_alt", background="#FFF0D0", foreground="#4E2A00")
+-        self.sb_overflow_tree.tag_configure("mtn_odd_summary", background="#FFD180", foreground="#4E2A00")
+-        self.sb_overflow_tree.tag_configure("mtn_odd_detail", background="#FFF4DC", foreground="#4E2A00")
+-        self.sb_overflow_tree.tag_configure("mtn_odd_detail_alt", background="#FFECC0", foreground="#4E2A00")
+-        self.sb_overflow_tree.tag_configure("detail_break_overflow", background="#FFF3C4", foreground="#4E2A00")
+-        self.sb_overflow_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18")
+-        self.sb_overflow_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A")
++        self.sb_overflow_tree.tag_configure("mtn_even_summary", background="#FFE0B2", foreground="#4E2A00", font=("Meiryo UI", 14, "bold"))
++        self.sb_overflow_tree.tag_configure("mtn_even_detail", background="#FFF8E8", foreground="#4E2A00", font=("Meiryo UI", 13))
++        self.sb_overflow_tree.tag_configure("mtn_even_detail_alt", background="#FFF0D0", foreground="#4E2A00", font=("Meiryo UI", 13))
++        self.sb_overflow_tree.tag_configure("mtn_odd_summary", background="#FFD180", foreground="#4E2A00", font=("Meiryo UI", 14, "bold"))
++        self.sb_overflow_tree.tag_configure("mtn_odd_detail", background="#FFF4DC", foreground="#4E2A00", font=("Meiryo UI", 13))
++        self.sb_overflow_tree.tag_configure("mtn_odd_detail_alt", background="#FFECC0", foreground="#4E2A00", font=("Meiryo UI", 13))
++        self.sb_overflow_tree.tag_configure("detail_break_overflow", background="#FFF3C4", foreground="#4E2A00", font=("Meiryo UI", 13))
++        self.sb_overflow_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 14, "bold"))
++        self.sb_overflow_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("Meiryo UI", 13))
+         self.sb_overflow_tree.tag_configure("mountain_sep", background="#F5D5A0", foreground="#F5D5A0")
+         self.sb_overflow_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("overflow"))
+ 
+@@ -758,7 +761,7 @@ class App(ctk.CTk):
+         ctk.CTkLabel(
+             top,
+             text="驕ｸ謚樔ｸ隕ｧ・・elete繧ｭ繝ｼ縺ｧ蜑企勁・・,
+-            font=ctk.CTkFont(family="Meiryo UI", size=13, weight="bold"),
++            font=ctk.CTkFont(family="Meiryo UI", size=16, weight="bold"),
+             anchor="w",
+         ).pack(side="left")
+ 
+@@ -788,12 +791,16 @@ class App(ctk.CTk):
+         list_wrap = ctk.CTkFrame(tab, fg_color="transparent")
+         list_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+         sel_sb = tk.Scrollbar(list_wrap, orient="vertical")
++        style = ttk.Style()
++        style.configure("Selection.Treeview", font=("Meiryo UI", 14), rowheight=36)
++        style.configure("Selection.Treeview.Heading", font=("Meiryo UI", 14, "bold"))
+         self.sel_tree = ttk.Treeview(
+             list_wrap,
+             columns=("萓ｿ蜷・, "蜿怜・", "繧ｪ繝ｼ繝繝ｼ"),
+             show="headings",
+             height=18,
+             yscrollcommand=sel_sb.set,
++            style="Selection.Treeview",
+         )
+         sel_sb.configure(command=self.sel_tree.yview)
+         for c in ("萓ｿ蜷・, "蜿怜・", "繧ｪ繝ｼ繝繝ｼ"):
+@@ -1044,6 +1051,12 @@ class App(ctk.CTk):
+         # 竭｢ 螻･豁ｴ繧貞ｮ悟・縺ｫ繝ｪ繧ｻ繝・ヨ
+         self.lane_end_times_history = []
+         save_lane_end_times_history([])
++        cleared_values = [
++            generate_lane_end_times_label(self.lane_end_times_history, "譛譁ｰ"),
++            generate_lane_end_times_label(self.lane_end_times_history, "1縺､蜑・),
++        ]
++        self.history_combo['values'] = cleared_values
++        self.selected_history_choice.set(cleared_values[0])
+         messagebox.showinfo("蠑慕ｶ吶け繝ｪ繧｢", "蟾･遞句挨縺ｮ蠑輔″邯吶℃譎ょ綾繧偵け繝ｪ繧｢縺励∪縺励◆縲よｬ｡蝗槭・蛻晏屓蜍穂ｽ懊↓縺ｪ繧翫∪縺吶・)
+ 
+     def refresh_selection_tree(self):
+===== E-2 念のためのバックアップ（上書き前退避） =====
+backup done
+===== E-3 mainへ切替（未コミット変更は保持・衝突時は自動中断） =====
+Switched to branch 'main'
+D	"__pycache__/\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+D	"__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_JSON_\343\202\273\343\203\203\343\203\210\343\203\234\343\203\274\343\203\211.cpython-313.pyc"
+D	"__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+D	_archive/ch_kanban_settings.bak
+M	src/app/gui.py
+M	"\345\205\245\350\273\212\346\231\202\351\226\223\343\203\236\343\202\271\343\202\277.xlsx"
+Your branch is behind 'origin/main' by 2 commits, and can be fast-forwarded.
+  (use "git pull" to update your local branch)
+From https://github.com/Hiroyuki-Kawasaki20/CH
+ * branch            main       -> FETCH_HEAD
+Updating 7ef557f..156ac8a
+Fast-forward
+ src/models/constants.py                     | 15 ++++++++++++
+ src/services/process_assigner.py            | 23 ++++++++++--------
+ src/services/scheduler.py                   |  8 ++++---
+ tests/unit/test_hino13_normal_regression.py |  7 ++++--
+ tests/unit/test_hino_2lane.py               | 31 +++++++++++++------------
+ tests/unit/test_sorter.py                   | 36 ++++++++++++++---------------
+ 6 files changed, 72 insertions(+), 48 deletions(-)
+===== E-4 反映確認 =====
+156ac8a feat: 譎る俣繝舌ャ繝輔ぃ蛟､縺ｮ螟画峩・育峩髢句ｧ・譏ｼ莨第・譏弱￠ 15蛻・・35蛻・・寔闕ｷ邱蛻・10蛻・・20蛻・ｼ・#50)
+SHIFT_FIRST_TRIP_BUFFER_SECS = 35 * 60
+FIRST_BIN_RELEASE_BUFFER_SECS = 35 * 60
+LUNCH_PRE_MARGIN_SECS = 10 * 60
+LUNCH_POST_RESUME_SECS = 35 * 60
+LUNCH_POST_LOCK_SECS = 35 * 60
+PICKUP_DEADLINE_BUFFER_SECS = 20 * 60
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	deleted:    "__pycache__/\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+	deleted:    "__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_JSON_\343\202\273\343\203\203\343\203\210\343\203\234\343\203\274\343\203\211.cpython-313.pyc"
+	deleted:    "__pycache__/\350\207\252\345\213\225\344\273\225\345\210\206\343\201\221_\344\272\272\345\267\245\350\277\275\345\217\212.cpython-313.pyc"
+	deleted:    _archive/ch_kanban_settings.bak
+	modified:   src/app/gui.py
+	modified:   "\345\205\245\350\273\212\346\231\202\351\226\223\343\203\236\343\202\271\343\202\277.xlsx"
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	_archive/gui_20260730_frozen.py.bak
+	_archive/gui_pre_switch_20260730.py.bak
+	"_archive/\345\205\245\350\273\212\346\231\202\351\226\223\343\203\236\343\202\271\343\202\277_pre_switch_20260730.xlsx.bak"
+	t103_state_check.txt
+	t104_branch.txt
+	t105_extract_consts.txt
+	t106_deadline_const.txt
+	t107_verify.txt
+	t108_dedup.txt
+	t109_import_fix.txt
+	t110_commit_pr1.txt
+	t111_investigate.txt
+	t112_certify.txt
+	t113_test_fix.txt
+	t114_pr2_values.txt
+	t124_deploy_pr2.txt
+	t124b_deploy_pr2_fix.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")
