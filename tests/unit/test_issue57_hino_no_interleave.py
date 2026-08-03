@@ -149,18 +149,21 @@ class TestHinoNoFrontPackIntoIdleGap:
         assert result is not None and not result.empty
         proc = _proc(result)
 
-        # 日野02と日野03が両方メインにいる場合、山3 の開始時刻が
-        # 山1 と 山2 の間（= 窓の中）に入っていないことを確認
-        if proc.get(3) == PROC_MAIN:
-            s1 = _time_to_seconds(_start(result, 1))
-            s2 = _time_to_seconds(_start(result, 2))
-            s3 = _time_to_seconds(_start(result, 3))
-            if s1 is not None and s2 is not None and s3 is not None:
-                if s1 < s2:  # 山1, 山2 に明確な順序がある場合
-                    assert not (s1 < s3 < s2), (
-                        f"日野03（山3）が日野02（山1, 山2）の間の窓に差し込まれた "
-                        f"[山1={s1}秒, 山3={s3}秒, 山2={s2}秒]"
-                    )
+        # 前提確認: 山3(日野03)がメインに割り当てられていること
+        if proc.get(3) != PROC_MAIN:
+            pytest.fail(
+                f"前提条件不成立: 山3(日野03)はメインであるべき (proc={proc})。"
+                "テストシナリオでメインに割り当てられる設定を確認してください。"
+            )
+
+        yama3_row = result.loc[result["山通番"] == 3].iloc[0]
+        # 日野03（山3）が前倒し採用（front-pack/prefetch）されていないことを確認
+        # 前倒し=True なら日野02の隙間に別便が差し込まれた証拠（禁止違反）
+        assert not bool(yama3_row["前倒し"]), (
+            f"日野03（山3）が前倒し採用された - "
+            f"日野別便の入れ込み禁止ガードが機能していない "
+            f"[実開始時間={yama3_row['実開始時間']}]"
+        )
 
     def test_non_hino_is_packed_into_gap_between_hino_mountains(self):
         """非日野（武部）山は日野山の間の空き窓に front-pack できること（従来動作維持）。
