@@ -10,6 +10,7 @@ from ..models.constants import (
     DEFAULT_HEIGHT_CAP, DEFAULT_MIXING_KEY,
     SPECIAL_HINBAN, SPECIAL_HEIGHT_CAP,
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
+    SIZE5_TYPE, SIZE5_MAX_PALLETS_PER_YAMA,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -93,9 +94,21 @@ def _effective_height_cap_for_hinbans(hinbans, cap: float) -> float:
     return float(cap)
 
 
-def assign_groups_sequential(heights: pd.Series, cap: float, hinbans=None) -> list:
+def assign_groups_sequential(heights: pd.Series, cap: float, hinbans=None, max_pallets: Optional[int] = None) -> list:
+    """グループを連続割当（ファーストフィット）。
+    
+    Args:
+        heights: 高さのSeries
+        cap: 高さ上限
+        hinbans: 品番（種類1の特例判定用）
+        max_pallets: 1山最大パレット数。Noneなら高さのみで判定（従来動作）。
+    
+    Returns:
+        グループ番号のリスト
+    """
     cur_g, cur_h = 1, 0.0
     cur_hinbans = []
+    cur_pallet_count = 0  # 現在の山のパレット数
     current_mountain_logged_special = False
     out = []
     heights_list = heights.astype(float).to_list()
@@ -110,10 +123,16 @@ def assign_groups_sequential(heights: pd.Series, cap: float, hinbans=None) -> li
 
     for h, hinban in zip(heights_list, hinban_list):
         next_cap = _effective_height_cap_for_hinbans(cur_hinbans + [hinban], cap)
-        if cur_h + h <= next_cap:
+        # 判定: 高さ制約 AND パレット数制約
+        height_ok = cur_h + h <= next_cap
+        pallet_ok = max_pallets is None or cur_pallet_count < max_pallets
+        
+        if height_ok and pallet_ok:
+            # 現在の山に追加
             out.append(cur_g)
             cur_h += h
             cur_hinbans.append(hinban)
+            cur_pallet_count += 1
             if not current_mountain_logged_special and next_cap < float(cap):
                 logger.debug(
                     "種類1通常積み: 山%dに特例品番%sを含むため高さ上限を%dに設定",
@@ -123,9 +142,11 @@ def assign_groups_sequential(heights: pd.Series, cap: float, hinbans=None) -> li
                 )
                 current_mountain_logged_special = True
         else:
+            # 新しい山を開始
             cur_g += 1
             cur_h = h
             cur_hinbans = [hinban]
+            cur_pallet_count = 1
             current_mountain_logged_special = False
             out.append(cur_g)
             next_cap = _effective_height_cap_for_hinbans(cur_hinbans, cap)
@@ -364,6 +385,8 @@ def run_pipeline(
                     if str(size_type) == "1":
                         part_hinbans = part["HINBAN"] if "HINBAN" in part.columns else None
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap, hinbans=part_hinbans)
+                    elif str(size_type) == SIZE5_TYPE:
+                        part_groups = assign_groups_sequential(part["高さ"], cap=height_cap, max_pallets=SIZE5_MAX_PALLETS_PER_YAMA)
                     else:
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap)
                     group_numbers.loc[part.index] = [g + base_group for g in part_groups]
@@ -375,6 +398,10 @@ def run_pipeline(
                     hinbans = df_sorted["HINBAN"] if "HINBAN" in df_sorted.columns else None
                     df_sorted["グループ番号"] = assign_groups_sequential(
                         df_sorted["高さ"], cap=height_cap, hinbans=hinbans
+                    )
+                elif str(size_type) == SIZE5_TYPE:
+                    df_sorted["グループ番号"] = assign_groups_sequential(
+                        df_sorted["高さ"], cap=height_cap, max_pallets=SIZE5_MAX_PALLETS_PER_YAMA
                     )
                 else:
                     df_sorted["グループ番号"] = assign_groups_sequential(df_sorted["高さ"], cap=height_cap)
