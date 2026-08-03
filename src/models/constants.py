@@ -10,6 +10,17 @@ BASE_ONE_TIME = 187.64                  # 基礎一回工数
 MIDDLE_WORK = 3.247                     # 中間作業工数
 BASE_PER_PAL = 52                       # パレット単位工数
 
+# サイズ17特例: 全出荷先で高さ2500まで積載可（最大3パレット）。
+# 通常の高さ上限DEFAULT_HEIGHT_CAP(2450)に対する特例。
+# 複数出荷先が共通でサイズ17パレットを引き取るため。2026/06 Kawasaki氏確認。
+SIZE17_MERGE_HEIGHT_CAP = 2500.0
+SIZE17_TYPE = "17"
+
+# サイズ5特例: 1山最大2枚に制限。
+# 高さが収まっても3〜4枚積めないようにする職場ルール。2026/08 Kawasaki氏指示。
+SIZE5_TYPE = "5"
+SIZE5_MAX_PALLETS_PER_YAMA = 2
+
 # ===== 工程定数（CH固有: メイン/リリーフ/あふれの3工程） =====
 PROC_MAIN = "メイン"
 PROC_RELIEF = "リリーフ"
