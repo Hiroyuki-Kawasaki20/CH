@@ -30,6 +30,11 @@ SHIFT_START_SECS = [6 * 3600 + 25 * 60, 16 * 3600 + 40 * 60]
 ARRIVAL_BUFFER_SECS = 10 * 60  # 前便入車+10分の開始下限バッファ
 DAY_SECS = 24 * 3600
 TIMELINE_WRAP_BOUNDARY_SECS = 3 * 3600  # 時刻補正境界: 03:00 未満のみ +24h
+
+# テスト用フック: Trueにすると _serialize_lanes_final を skip してA/Bテストが可能
+# 運用コードでは必ず False のまま使用すること
+_SKIP_SERIALIZE_FINAL_FOR_TEST: bool = False
+
 # セットあり便のメイン工程許容上限（1直:15:20, 2直:01:35(=25:35)）
 SET_FLAG_MAIN_LIMIT_SECS = [15 * 3600 + 20 * 60, DAY_SECS + 1 * 3600 + 35 * 60]
 
@@ -1810,7 +1815,8 @@ def _legacy_assign_processes_by_arrival_time(
         _reapply_overflow_for_relief(results)
 
     _finalize_inspection_delay_flags(results)
-    _serialize_lanes_final(results)
+    if not _SKIP_SERIALIZE_FINAL_FOR_TEST:
+        _serialize_lanes_final(results)
 
     for r in results:
         r.pop("_is_anchored", None)
