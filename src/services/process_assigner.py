@@ -225,6 +225,13 @@ def _can_keep_primary_deadline(
     return primary_end <= primary_deadline
 
 
+def _are_hino_interleave_forbidden(m1: dict, m2: dict) -> bool:
+    """m1, m2 がともに日野山かつ便番号セットが交わらない（別便）なら入れ込み禁止。"""
+    s1: set = m1.get("日野便番号セット") or set()
+    s2: set = m2.get("日野便番号セット") or set()
+    return bool(s1) and bool(s2) and s1.isdisjoint(s2)
+
+
 def _pick_next_main_mountain(
     unscheduled: List[dict],
     main_end_time: int,
@@ -279,6 +286,10 @@ def _pick_next_main_mountain(
 
         # 候補山自身の締切を守れない前倒しは不可
         if cand_deadline is not None and cand_end > cand_deadline:
+            continue
+
+        # Issue #57: 日野別便同士の前倒し採用を禁止
+        if _are_hino_interleave_forbidden(primary, cand):
             continue
 
         # 候補山を先に処理しても主対象山の締切を守れる場合のみ採用候補
@@ -560,6 +571,7 @@ def _legacy_assign_processes_by_arrival_time(
         deadline_secs = None
         start_time_secs = None
         prev_arrival_floor_secs = None
+        hino_bins_for_mountain: set = set()  # Issue #57
 
         for _, row in sub.iterrows():
             # 納入先が空の場合は OData_納入先 → SYUKKASAKI の順でフォールバック
@@ -573,6 +585,9 @@ def _legacy_assign_processes_by_arrival_time(
             order2 = nony[-2:] if len(nony) >= 2 else ""
             if not vendor or not order2:
                 continue
+            # Issue #57: 日野オーダーの便番号（末尾2桁）を収集
+            if _is_hino_2lane_target(vendor):
+                hino_bins_for_mountain.add(order2)
             # KVCのみ: UKEIRE値でマスタキーの納入先部分を分割 (KVC-B7 / KVC-B3)
             if vendor == "KVC":
                 _ukeire = str(row.get("UKEIRE", "")).strip()
@@ -776,6 +791,7 @@ def _legacy_assign_processes_by_arrival_time(
             "締め切り_秒": deadline_secs,
             "開始時間_秒": start_time_secs,
             "引取開始時間_秒": pickup_start_time_secs,
+            "日野便番号セット": hino_bins_for_mountain,  # Issue #57
         })
         mtn_prev_arrival_floor_map[yama_int] = int(prev_arrival_floor_secs or 0)
 
@@ -1064,6 +1080,7 @@ def _legacy_assign_processes_by_arrival_time(
     mtn_deadline_map = {m["山通番"]: m["締め切り_秒"] for m in mountain_info}
     mtn_work_map    = {m["山通番"]: m["引取工数_秒"]  for m in mountain_info}
     mtn_start_floor_map = {m["山通番"]: m.get("開始時間_秒") for m in mountain_info}
+    mtn_hino_bins_map   = {m["山通番"]: m.get("日野便番号セット", set()) for m in mountain_info}  # Issue #57
 
     shift_candidates = [
         mtn_deadline_map[r["山通番"]] - r["_raw_end"]
@@ -1662,12 +1679,13 @@ def _legacy_assign_processes_by_arrival_time(
             return False
 
         main_points.sort(key=lambda x: (x[1], x[0]))
-        gaps: List[Tuple[int, int]] = []
+        # gaps: (gap_start, gap_end, prev_yama_no, next_yama_no)
+        gaps: List[Tuple[int, int, int, int]] = []
         for i in range(len(main_points) - 1):
             prev_end = int(main_points[i][2])
             next_start = int(main_points[i + 1][1])
             if next_start > prev_end:
-                gaps.append((prev_end, next_start))
+                gaps.append((prev_end, next_start, main_points[i][0], main_points[i + 1][0]))
         if not gaps:
             return False
 
@@ -1684,7 +1702,15 @@ def _legacy_assign_processes_by_arrival_time(
 
         # 締切の厳しい山から順に、空き窓限定の最速前詰めを試す。
         for yy, _ in sorted(candidates, key=lambda x: (x[1], x[0])):
-            for gap_start, gap_end in gaps:
+            for gap_start, gap_end, gap_prev_yama, gap_next_yama in gaps:
+                # Issue #57: 日野別便が隣接する窓への差し込みを禁止
+                _cand_bins = mtn_hino_bins_map.get(yy, set())
+                if _cand_bins:
+                    _prev_bins = mtn_hino_bins_map.get(gap_prev_yama, set())
+                    _next_bins = mtn_hino_bins_map.get(gap_next_yama, set())
+                    if (_prev_bins and _cand_bins.isdisjoint(_prev_bins)) or \
+                       (_next_bins and _cand_bins.isdisjoint(_next_bins)):
+                        continue
                 fit = _fits_idle_gap_on_main(yy, gap_start, gap_end)
                 if fit is None:
                     continue
