@@ -20,3 +20,10 @@ test_output.txt
 # 前回仕分け終了時刻の履歴（端末ごとの作業結果なので共有しない）
 config/lane_end_times_history.json
 lane_end_times_history.json
+
+# AI作業ログ・一時ファイル（ローカル作業時の中間生成物）
+/t1[0-9][0-9]*_*.txt
+/t1[0-9][0-9]*_*.py
+/_tmp_*
+/temp_*
+/.gh_issue_body.txt
