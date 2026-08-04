@@ -566,6 +566,25 @@ class App(ctk.CTk):
             self.notebook.pack_forget()
             self.notebook.pack(side="left", fill="both", expand=True, padx=(8, 8), pady=8)
 
+    def _configure_sb_columns(self, tree):
+        column_settings = {
+            "開始時間": {"width": 90, "minwidth": 70, "anchor": "w", "stretch": False},
+            "納入先": {"width": 120, "minwidth": 100, "anchor": "center", "stretch": False},
+            "ストア": {"width": 150, "minwidth": 120, "anchor": "center", "stretch": False},
+            "オーダー": {"width": 100, "minwidth": 90, "anchor": "center", "stretch": True},
+            "受入": {"width": 60, "minwidth": 50, "anchor": "center", "stretch": False},
+        }
+        for column_name in tree["columns"]:
+            tree.heading(column_name, text=column_name)
+            settings = column_settings[column_name]
+            tree.column(
+                column_name,
+                width=settings["width"],
+                minwidth=settings["minwidth"],
+                anchor=settings["anchor"],
+                stretch=settings["stretch"],
+            )
+
     def _build_setboard_tab(self, tab):
         """セットボード: メイン/リリーフ/あふれの3レーン表示"""
         header_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -579,6 +598,7 @@ class App(ctk.CTk):
         lanes_frame.columnconfigure(0, weight=1)
         lanes_frame.columnconfigure(1, weight=1)
         lanes_frame.columnconfigure(2, weight=1)
+        lanes_frame.rowconfigure(0, weight=1)
 
         # メインレーン
         main_frame = ctk.CTkFrame(lanes_frame, fg_color=COLOR_MAIN, corner_radius=10)
@@ -592,23 +612,14 @@ class App(ctk.CTk):
         self.sb_main_tree = ttk.Treeview(
             main_frame,
             columns=self._sb_lane_columns,
-            show="headings", height=18, style="SetboardLane.Treeview")
-        for c in self.sb_main_tree["columns"]:
-            self.sb_main_tree.heading(c, text=c)
-            if c == "納入先":
-                w = 150
-            elif c == "ストア":
-                w = 280
-            elif c == "オーダー":
-                w = 150
-            elif c == "受入":
-                w = 70
-            elif c == "開始時間":
-                w = 100
-            else:
-                w = 90
-            self.sb_main_tree.column(c, width=w, anchor="center")
-        self.sb_main_tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+            show="headings", height=8, style="SetboardLane.Treeview")
+        self._configure_sb_columns(self.sb_main_tree)
+        # スクロールバー設定
+        main_sb = tk.Scrollbar(main_frame, orient="vertical")
+        self.sb_main_tree.pack(side="left", fill="both", expand=True, padx=6, pady=(0, 8))
+        main_sb.pack(side="right", fill="y", pady=(0, 8))
+        self.sb_main_tree.configure(yscrollcommand=main_sb.set)
+        main_sb.config(command=self.sb_main_tree.yview)
         self.sb_main_tree.bind("<Double-Button-1>", self._on_setboard_toggle_done)
         self.sb_main_tree.tag_configure("mtn_even_summary", background="#D6E7FB", foreground="#0F274A", font=("Meiryo UI", 15, "bold"))
         self.sb_main_tree.tag_configure("mtn_even_detail", background="#F4F8FF", foreground="#1F2A44", font=("MS Gothic", 18, "bold"))
@@ -621,7 +632,7 @@ class App(ctk.CTk):
         self.sb_main_tree.tag_configure("mtn_odd_summary_delay", background="#C7DCF5", foreground="#C62828", font=("Meiryo UI", 15, "bold"))
         self.sb_main_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 15, "bold"))
         self.sb_main_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("MS Gothic", 18, "bold"))
-        self.sb_main_tree.tag_configure("mountain_sep", background="#000000", foreground="#000000")
+        self.sb_main_tree.tag_configure("mountain_sep", foreground="#000000", background="#000000")
         self.sb_main_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("main"))
 
         # リリーフレーン
@@ -633,23 +644,14 @@ class App(ctk.CTk):
         self.sb_relief_tree = ttk.Treeview(
             relief_frame,
             columns=self._sb_lane_columns,
-            show="headings", height=18, style="SetboardLane.Treeview")
-        for c in self.sb_relief_tree["columns"]:
-            self.sb_relief_tree.heading(c, text=c)
-            if c == "納入先":
-                w = 150
-            elif c == "ストア":
-                w = 280
-            elif c == "オーダー":
-                w = 150
-            elif c == "受入":
-                w = 70
-            elif c == "開始時間":
-                w = 100
-            else:
-                w = 90
-            self.sb_relief_tree.column(c, width=w, anchor="center")
-        self.sb_relief_tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+            show="headings", height=8, style="SetboardLane.Treeview")
+        self._configure_sb_columns(self.sb_relief_tree)
+        # スクロールバー設定
+        relief_sb = tk.Scrollbar(relief_frame, orient="vertical")
+        self.sb_relief_tree.pack(side="left", fill="both", expand=True, padx=6, pady=(0, 8))
+        relief_sb.pack(side="right", fill="y", pady=(0, 8))
+        self.sb_relief_tree.configure(yscrollcommand=relief_sb.set)
+        relief_sb.config(command=self.sb_relief_tree.yview)
         self.sb_relief_tree.bind("<Double-Button-1>", self._on_setboard_toggle_done)
         self.sb_relief_tree.tag_configure("mtn_even_summary", background="#F7DCEB", foreground="#5E173D", font=("Meiryo UI", 15, "bold"))
         self.sb_relief_tree.tag_configure("mtn_even_detail", background="#FFF7FC", foreground="#3F1E33", font=("MS Gothic", 18, "bold"))
@@ -662,7 +664,7 @@ class App(ctk.CTk):
         self.sb_relief_tree.tag_configure("mtn_odd_summary_delay", background="#F0CFE1", foreground="#C62828", font=("Meiryo UI", 15, "bold"))
         self.sb_relief_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 15, "bold"))
         self.sb_relief_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("MS Gothic", 18, "bold"))
-        self.sb_relief_tree.tag_configure("mountain_sep", background="#E4CFE0", foreground="#E4CFE0")
+        self.sb_relief_tree.tag_configure("mountain_sep", foreground="#000000", background="#000000")
         self.sb_relief_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("relief"))
 
         # あふれレーン
@@ -674,23 +676,14 @@ class App(ctk.CTk):
         self.sb_overflow_tree = ttk.Treeview(
             overflow_frame,
             columns=self._sb_lane_columns,
-            show="headings", height=18, style="SetboardLane.Treeview")
-        for c in self.sb_overflow_tree["columns"]:
-            self.sb_overflow_tree.heading(c, text=c)
-            if c == "納入先":
-                w = 150
-            elif c == "ストア":
-                w = 280
-            elif c == "オーダー":
-                w = 150
-            elif c == "受入":
-                w = 70
-            elif c == "開始時間":
-                w = 100
-            else:
-                w = 90
-            self.sb_overflow_tree.column(c, width=w, anchor="center")
-        self.sb_overflow_tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
+            show="headings", height=8, style="SetboardLane.Treeview")
+        self._configure_sb_columns(self.sb_overflow_tree)
+        # スクロールバー設定
+        overflow_sb = tk.Scrollbar(overflow_frame, orient="vertical")
+        self.sb_overflow_tree.pack(side="left", fill="both", expand=True, padx=6, pady=(0, 8))
+        overflow_sb.pack(side="right", fill="y", pady=(0, 8))
+        self.sb_overflow_tree.configure(yscrollcommand=overflow_sb.set)
+        overflow_sb.config(command=self.sb_overflow_tree.yview)
         self.sb_overflow_tree.bind("<Double-Button-1>", self._on_setboard_toggle_done)
         self.sb_overflow_tree.tag_configure("mtn_even_summary", background="#FFE0B2", foreground="#4E2A00", font=("Meiryo UI", 15, "bold"))
         self.sb_overflow_tree.tag_configure("mtn_even_detail", background="#FFF8E8", foreground="#4E2A00", font=("MS Gothic", 18, "bold"))
@@ -701,7 +694,7 @@ class App(ctk.CTk):
         self.sb_overflow_tree.tag_configure("detail_break_overflow", background="#FFF3C4", foreground="#4E2A00", font=("Meiryo UI", 13))
         self.sb_overflow_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 15, "bold"))
         self.sb_overflow_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("MS Gothic", 18, "bold"))
-        self.sb_overflow_tree.tag_configure("mountain_sep", background="#F5D5A0", foreground="#F5D5A0")
+        self.sb_overflow_tree.tag_configure("mountain_sep", foreground="#000000", background="#000000")
         self.sb_overflow_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("overflow"))
 
     def _build_master_tab(self, tab):
@@ -1734,6 +1727,11 @@ class App(ctk.CTk):
             tag = ("proc_main" if lab == PROC_MAIN else "proc_relief",)
             self.kb_summary.insert("", "end", values=vals, tags=tag)
 
+    @staticmethod
+    def _shorten_order(order) -> str:
+        s = str(order) if order is not None else ""
+        return s[-6:] if len(s) > 6 else s
+
     def update_setboard_views(self):
         """セットボードの3レーンを更新"""
         for tree in (self.sb_main_tree, self.sb_relief_tree, self.sb_overflow_tree):
@@ -1818,12 +1816,12 @@ class App(ctk.CTk):
             
             # 完了判定を追加
             done_key = (proc, int(yama))
-            header_label = f"✅ {section_label} {start_time}" if done_key in self._done_yamas else f"{section_label} {start_time}"
+            header_label = f"✅ {start_time}" if done_key in self._done_yamas else f"{start_time}"
             if done_key in self._done_yamas:
                 summary_tags = ("done_yama",)
             
             target_tree.insert("", "end", iid=f"sb:{proc}:{yama}",
-                values=(header_label, dests, "", order_disp, ""),
+                values=(header_label, dests, "", self._shorten_order(order_disp), ""),
                 tags=summary_tags)
             # 山配下の各パレット明細を同時表示
             sub2 = sub.copy()
@@ -1867,7 +1865,7 @@ class App(ctk.CTk):
                 # 【変更F-2】納入先変更による dest_change_band 適用
                 row_dest = str(row.get("納入先", row.get("OData_納入先", ""))).strip()
                 if prev_row_dest is not None and row_dest and row_dest != prev_row_dest:
-                    detail_tags = ("dest_change_band",)
+                    detail_tags = detail_tags + ("dest_change_band",)
                 if row_dest:
                     prev_row_dest = row_dest
                 
@@ -1890,11 +1888,9 @@ class App(ctk.CTk):
                     "", "end", iid=f"sbd:{proc}:{yama}:{idx}",
                     values=(
                         f"└{idx}",
-                        start_time,
                         str(row.get("納入先", row.get("OData_納入先", ""))),
                         store_text,
-                        order_text,
-                        "",
+                        self._shorten_order(order_text),
                         str(row.get("UKEIRE", "")),
                     ),
                     tags=detail_tags,
@@ -1904,8 +1900,10 @@ class App(ctk.CTk):
 
             sep = tuple([""] * len(self._sb_lane_columns))
             target_tree.insert("", "end", values=sep, tags=("mountain_sep",))
-            target_tree.tag_configure("mountain_sep", background="#000000", foreground="#000000")
+            target_tree.tag_configure("mountain_sep", background="#000000")
             target_tree.tag_configure("done_yama", foreground="#9e9e9e", background="#f5f5f5")
+            target_tree.tag_configure("mixed_summary", background="#FFF3C4")
+            target_tree.tag_configure("mixed_detail", background="#FFF3C4")
             target_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("main"))
 
     def _on_setboard_select(self, source: str):
