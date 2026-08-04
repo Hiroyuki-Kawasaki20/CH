@@ -40,6 +40,7 @@ from src.services.data_loader import (
 from src.services.sorter import (
     run_pipeline, build_all_mountain_details, create_battery_change_mountain,
     compute_basic_groups, compute_mixed_groups, compute_dest_by_mountain,
+    get_dest_list_for_group,
 )
 from src.services.process_assigner import (
     compute_proc_details, assign_processes_by_arrival_time,
@@ -316,7 +317,7 @@ class App(ctk.CTk):
         style.map("Treeview", background=[("selected", "#D0E2F4")], foreground=[("selected", "#1A1A2E")])
 
         # セットボード専用スタイル（視認性重視）
-        style.configure("SetboardLane.Treeview", font=("Meiryo UI", 14), rowheight=38,
+        style.configure("SetboardLane.Treeview", font=("Meiryo UI", 14), rowheight=48,
                 background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#1F2A44")
         style.configure("SetboardLane.Treeview.Heading", font=("Meiryo UI", 13, "bold"),
                 background="#D8DEE6", foreground="#10203A", relief="flat")
@@ -586,8 +587,7 @@ class App(ctk.CTk):
                      font=ctk.CTkFont(family="Meiryo UI", size=13, weight="bold"),
                      text_color="#1E3A5F").pack(pady=(8, 4))
         self._sb_lane_columns = (
-            "区分", "開始時間", "納入先", "ストア", "オーダー", "引取工数",
-            "受入"
+            "開始時間", "納入先", "ストア", "オーダー", "受入"
         )
         self.sb_main_tree = ttk.Treeview(
             main_frame,
@@ -595,36 +595,33 @@ class App(ctk.CTk):
             show="headings", height=18, style="SetboardLane.Treeview")
         for c in self.sb_main_tree["columns"]:
             self.sb_main_tree.heading(c, text=c)
-            if c == "区分":
-                w = 52
-            elif c == "納入先":
-                w = 140
+            if c == "納入先":
+                w = 150
             elif c == "ストア":
-                w = 120
+                w = 280
             elif c == "オーダー":
-                w = 130
+                w = 150
             elif c == "受入":
-                w = 76
-            elif c == "引取工数":
-                w = 86
+                w = 70
             elif c == "開始時間":
-                w = 92
+                w = 100
             else:
                 w = 90
             self.sb_main_tree.column(c, width=w, anchor="center")
         self.sb_main_tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
-        self.sb_main_tree.tag_configure("mtn_even_summary", background="#D6E7FB", foreground="#0F274A", font=("Meiryo UI", 14, "bold"))
-        self.sb_main_tree.tag_configure("mtn_even_detail", background="#F4F8FF", foreground="#1F2A44", font=("Meiryo UI", 13))
-        self.sb_main_tree.tag_configure("mtn_even_detail_alt", background="#E9F1FC", foreground="#1F2A44", font=("Meiryo UI", 13))
-        self.sb_main_tree.tag_configure("mtn_odd_summary", background="#C7DCF5", foreground="#0F274A", font=("Meiryo UI", 14, "bold"))
-        self.sb_main_tree.tag_configure("mtn_odd_detail", background="#EAF3FF", foreground="#1F2A44", font=("Meiryo UI", 13))
-        self.sb_main_tree.tag_configure("mtn_odd_detail_alt", background="#DCEBFF", foreground="#1F2A44", font=("Meiryo UI", 13))
+        self.sb_main_tree.bind("<Double-Button-1>", self._on_setboard_toggle_done)
+        self.sb_main_tree.tag_configure("mtn_even_summary", background="#D6E7FB", foreground="#0F274A", font=("Meiryo UI", 15, "bold"))
+        self.sb_main_tree.tag_configure("mtn_even_detail", background="#F4F8FF", foreground="#1F2A44", font=("MS Gothic", 18, "bold"))
+        self.sb_main_tree.tag_configure("mtn_even_detail_alt", background="#E9F1FC", foreground="#1F2A44", font=("MS Gothic", 18, "bold"))
+        self.sb_main_tree.tag_configure("mtn_odd_summary", background="#C7DCF5", foreground="#0F274A", font=("Meiryo UI", 15, "bold"))
+        self.sb_main_tree.tag_configure("mtn_odd_detail", background="#EAF3FF", foreground="#1F2A44", font=("MS Gothic", 18, "bold"))
+        self.sb_main_tree.tag_configure("mtn_odd_detail_alt", background="#DCEBFF", foreground="#1F2A44", font=("MS Gothic", 18, "bold"))
         self.sb_main_tree.tag_configure("detail_break_main", background="#FFF3C4", foreground="#1F2A44", font=("Meiryo UI", 13))
-        self.sb_main_tree.tag_configure("mtn_even_summary_delay", background="#D6E7FB", foreground="#C62828", font=("Meiryo UI", 14, "bold"))
-        self.sb_main_tree.tag_configure("mtn_odd_summary_delay", background="#C7DCF5", foreground="#C62828", font=("Meiryo UI", 14, "bold"))
-        self.sb_main_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 14, "bold"))
-        self.sb_main_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("Meiryo UI", 13))
-        self.sb_main_tree.tag_configure("mountain_sep", background="#B8CCE6", foreground="#B8CCE6")
+        self.sb_main_tree.tag_configure("mtn_even_summary_delay", background="#D6E7FB", foreground="#C62828", font=("Meiryo UI", 15, "bold"))
+        self.sb_main_tree.tag_configure("mtn_odd_summary_delay", background="#C7DCF5", foreground="#C62828", font=("Meiryo UI", 15, "bold"))
+        self.sb_main_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 15, "bold"))
+        self.sb_main_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("MS Gothic", 18, "bold"))
+        self.sb_main_tree.tag_configure("mountain_sep", background="#000000", foreground="#000000")
         self.sb_main_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("main"))
 
         # リリーフレーン
@@ -639,35 +636,32 @@ class App(ctk.CTk):
             show="headings", height=18, style="SetboardLane.Treeview")
         for c in self.sb_relief_tree["columns"]:
             self.sb_relief_tree.heading(c, text=c)
-            if c == "区分":
-                w = 52
-            elif c == "納入先":
-                w = 140
+            if c == "納入先":
+                w = 150
             elif c == "ストア":
-                w = 120
+                w = 280
             elif c == "オーダー":
-                w = 130
+                w = 150
             elif c == "受入":
-                w = 76
-            elif c == "引取工数":
-                w = 86
+                w = 70
             elif c == "開始時間":
-                w = 92
+                w = 100
             else:
                 w = 90
             self.sb_relief_tree.column(c, width=w, anchor="center")
         self.sb_relief_tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
-        self.sb_relief_tree.tag_configure("mtn_even_summary", background="#F7DCEB", foreground="#5E173D", font=("Meiryo UI", 14, "bold"))
-        self.sb_relief_tree.tag_configure("mtn_even_detail", background="#FFF7FC", foreground="#3F1E33", font=("Meiryo UI", 13))
-        self.sb_relief_tree.tag_configure("mtn_even_detail_alt", background="#FCEEF6", foreground="#3F1E33", font=("Meiryo UI", 13))
-        self.sb_relief_tree.tag_configure("mtn_odd_summary", background="#F0CFE1", foreground="#5E173D", font=("Meiryo UI", 14, "bold"))
-        self.sb_relief_tree.tag_configure("mtn_odd_detail", background="#FAE9F3", foreground="#3F1E33", font=("Meiryo UI", 13))
-        self.sb_relief_tree.tag_configure("mtn_odd_detail_alt", background="#F6DFEC", foreground="#3F1E33", font=("Meiryo UI", 13))
+        self.sb_relief_tree.bind("<Double-Button-1>", self._on_setboard_toggle_done)
+        self.sb_relief_tree.tag_configure("mtn_even_summary", background="#F7DCEB", foreground="#5E173D", font=("Meiryo UI", 15, "bold"))
+        self.sb_relief_tree.tag_configure("mtn_even_detail", background="#FFF7FC", foreground="#3F1E33", font=("MS Gothic", 18, "bold"))
+        self.sb_relief_tree.tag_configure("mtn_even_detail_alt", background="#FCEEF6", foreground="#3F1E33", font=("MS Gothic", 18, "bold"))
+        self.sb_relief_tree.tag_configure("mtn_odd_summary", background="#F0CFE1", foreground="#5E173D", font=("Meiryo UI", 15, "bold"))
+        self.sb_relief_tree.tag_configure("mtn_odd_detail", background="#FAE9F3", foreground="#3F1E33", font=("MS Gothic", 18, "bold"))
+        self.sb_relief_tree.tag_configure("mtn_odd_detail_alt", background="#F6DFEC", foreground="#3F1E33", font=("MS Gothic", 18, "bold"))
         self.sb_relief_tree.tag_configure("detail_break_relief", background="#FFF3C4", foreground="#3F1E33", font=("Meiryo UI", 13))
-        self.sb_relief_tree.tag_configure("mtn_even_summary_delay", background="#F7DCEB", foreground="#C62828", font=("Meiryo UI", 14, "bold"))
-        self.sb_relief_tree.tag_configure("mtn_odd_summary_delay", background="#F0CFE1", foreground="#C62828", font=("Meiryo UI", 14, "bold"))
-        self.sb_relief_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 14, "bold"))
-        self.sb_relief_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("Meiryo UI", 13))
+        self.sb_relief_tree.tag_configure("mtn_even_summary_delay", background="#F7DCEB", foreground="#C62828", font=("Meiryo UI", 15, "bold"))
+        self.sb_relief_tree.tag_configure("mtn_odd_summary_delay", background="#F0CFE1", foreground="#C62828", font=("Meiryo UI", 15, "bold"))
+        self.sb_relief_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 15, "bold"))
+        self.sb_relief_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("MS Gothic", 18, "bold"))
         self.sb_relief_tree.tag_configure("mountain_sep", background="#E4CFE0", foreground="#E4CFE0")
         self.sb_relief_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("relief"))
 
@@ -683,33 +677,30 @@ class App(ctk.CTk):
             show="headings", height=18, style="SetboardLane.Treeview")
         for c in self.sb_overflow_tree["columns"]:
             self.sb_overflow_tree.heading(c, text=c)
-            if c == "区分":
-                w = 52
-            elif c == "納入先":
-                w = 140
+            if c == "納入先":
+                w = 150
             elif c == "ストア":
-                w = 120
+                w = 280
             elif c == "オーダー":
-                w = 130
+                w = 150
             elif c == "受入":
-                w = 76
-            elif c == "引取工数":
-                w = 86
+                w = 70
             elif c == "開始時間":
-                w = 92
+                w = 100
             else:
                 w = 90
             self.sb_overflow_tree.column(c, width=w, anchor="center")
         self.sb_overflow_tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
-        self.sb_overflow_tree.tag_configure("mtn_even_summary", background="#FFE0B2", foreground="#4E2A00", font=("Meiryo UI", 14, "bold"))
-        self.sb_overflow_tree.tag_configure("mtn_even_detail", background="#FFF8E8", foreground="#4E2A00", font=("Meiryo UI", 13))
-        self.sb_overflow_tree.tag_configure("mtn_even_detail_alt", background="#FFF0D0", foreground="#4E2A00", font=("Meiryo UI", 13))
-        self.sb_overflow_tree.tag_configure("mtn_odd_summary", background="#FFD180", foreground="#4E2A00", font=("Meiryo UI", 14, "bold"))
-        self.sb_overflow_tree.tag_configure("mtn_odd_detail", background="#FFF4DC", foreground="#4E2A00", font=("Meiryo UI", 13))
-        self.sb_overflow_tree.tag_configure("mtn_odd_detail_alt", background="#FFECC0", foreground="#4E2A00", font=("Meiryo UI", 13))
+        self.sb_overflow_tree.bind("<Double-Button-1>", self._on_setboard_toggle_done)
+        self.sb_overflow_tree.tag_configure("mtn_even_summary", background="#FFE0B2", foreground="#4E2A00", font=("Meiryo UI", 15, "bold"))
+        self.sb_overflow_tree.tag_configure("mtn_even_detail", background="#FFF8E8", foreground="#4E2A00", font=("MS Gothic", 18, "bold"))
+        self.sb_overflow_tree.tag_configure("mtn_even_detail_alt", background="#FFF0D0", foreground="#4E2A00", font=("MS Gothic", 18, "bold"))
+        self.sb_overflow_tree.tag_configure("mtn_odd_summary", background="#FFD180", foreground="#4E2A00", font=("Meiryo UI", 15, "bold"))
+        self.sb_overflow_tree.tag_configure("mtn_odd_detail", background="#FFF4DC", foreground="#4E2A00", font=("MS Gothic", 18, "bold"))
+        self.sb_overflow_tree.tag_configure("mtn_odd_detail_alt", background="#FFECC0", foreground="#4E2A00", font=("MS Gothic", 18, "bold"))
         self.sb_overflow_tree.tag_configure("detail_break_overflow", background="#FFF3C4", foreground="#4E2A00", font=("Meiryo UI", 13))
-        self.sb_overflow_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 14, "bold"))
-        self.sb_overflow_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("Meiryo UI", 13))
+        self.sb_overflow_tree.tag_configure("mtn_overflow_summary", background="#FFD6CC", foreground="#8C1D18", font=("Meiryo UI", 15, "bold"))
+        self.sb_overflow_tree.tag_configure("mtn_overflow_detail", background="#FFF2EE", foreground="#5A1E1A", font=("MS Gothic", 18, "bold"))
         self.sb_overflow_tree.tag_configure("mountain_sep", background="#F5D5A0", foreground="#F5D5A0")
         self.sb_overflow_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("overflow"))
 
@@ -1657,6 +1648,7 @@ class App(ctk.CTk):
                 self.mountain_proc["山通番"].astype(int),
                 self.mountain_proc["照合追加180秒"].fillna(False).astype(bool)
             ))
+
         spo_df = build_spo_export_df(
             self.proc_details,
             self.mountain_proc_map,
@@ -1767,6 +1759,11 @@ class App(ctk.CTk):
                 self.mountain_proc["照合追加180秒"].fillna(False).astype(bool)
             ))
 
+        if not hasattr(self, "_done_yamas"):
+            self._done_yamas = set()
+        prev_yama_dest = None
+        prev_yama_order = None
+
         for yama in yama_list:
             sub = display_df[display_df["山通番"] == yama]
             pal = int(sub.shape[0])
@@ -1783,6 +1780,10 @@ class App(ctk.CTk):
             dests = "/".join(get_dest_list_for_group(sub))
             start_time = _to_display_hhmm_24h(self.mountain_start_times.get(int(yama), ""))
             proc = self.mountain_proc_map.get(int(yama), PROC_MAIN)
+            
+            orders_in_yama = sub["NONYUHIBIN"].astype(str).str.strip().replace("", np.nan).dropna().unique().tolist()
+            is_mixed = len(orders_in_yama) > 1
+            dests_in_yama = sub["納入先"].astype(str).str.strip().unique().tolist() if "納入先" in sub.columns else []
 
             # レーン振り分け
             if proc == PROC_OVERFLOW:
@@ -1792,6 +1793,12 @@ class App(ctk.CTk):
             else:
                 target_tree = self.sb_relief_tree
 
+            if prev_yama_order is not None and not is_mixed and orders_in_yama and orders_in_yama[0] != prev_yama_order:
+                target_tree.insert("", "end", values=("", f"⚠ オーダー変更 {prev_yama_order} → {orders_in_yama[0]}", "", "", ""), tags=("change_banner",))
+            if prev_yama_dest is not None and dests_in_yama and prev_yama_dest not in dests_in_yama:
+                target_tree.insert("", "end", values=("", f"⚠ 納入先変更", "", "", ""), tags=("change_banner",))
+            prev_yama_order = orders_in_yama[0] if orders_in_yama else prev_yama_order
+            prev_yama_dest = dests_in_yama[0] if dests_in_yama else prev_yama_dest
             parity = "even" if (int(yama) % 2 == 0) else "odd"
             is_inspection_delayed = bool(inspection_delay_map.get(int(yama), False))
             is_overflow = (proc == PROC_OVERFLOW)
@@ -1806,12 +1813,18 @@ class App(ctk.CTk):
                 pick_cost_text = f"{pick_cost} +180" if is_inspection_delayed else str(pick_cost)
             section_label = "あふれ" if is_overflow else "山"
 
-            target_tree.insert(
-                "", "end", iid=f"sb:{proc}:{yama}",
-                values=(section_label, start_time, dests, "", "", pick_cost_text, ""),
-                tags=(summary_tag,)
-            )
-
+            order_disp = f"🔀 混載({len(orders_in_yama)})" if is_mixed else (orders_in_yama[0] if orders_in_yama else "")
+            summary_tags = ("mixed_summary",) if is_mixed else (summary_tag,)
+            
+            # 完了判定を追加
+            done_key = (proc, int(yama))
+            header_label = f"✅ {section_label} {start_time}" if done_key in self._done_yamas else f"{section_label} {start_time}"
+            if done_key in self._done_yamas:
+                summary_tags = ("done_yama",)
+            
+            target_tree.insert("", "end", iid=f"sb:{proc}:{yama}",
+                values=(header_label, dests, "", order_disp, ""),
+                tags=summary_tags)
             # 山配下の各パレット明細を同時表示
             sub2 = sub.copy()
             sub2["工程内No"] = pd.to_numeric(sub2.get("工程内No", 0), errors="coerce").fillna(0).astype(int)
@@ -1840,18 +1853,39 @@ class App(ctk.CTk):
             )
             display_rows = list(sub2.iterrows())
             prev_key = None
+            prev_row_dest = None
             for idx, (_, row) in enumerate(display_rows, start=1):
                 store_text = str(row.get("ストア", row.get("SYUKKASAKI", ""))).strip()
                 order_text = str(row.get("NONYUHIBIN", "")).strip()
-                base_detail_tag = detail_tag if (idx % 2 == 1) else f"mtn_{parity}_detail_alt"
-                tags = [base_detail_tag]
+                
+                # 【変更F-1】mixed/通常による detail_tags 決定
+                if is_mixed:
+                    detail_tags = ("mixed_detail",)
+                else:
+                    detail_tags = (detail_tag,)
+                
+                # 【変更F-2】納入先変更による dest_change_band 適用
+                row_dest = str(row.get("納入先", row.get("OData_納入先", ""))).strip()
+                if prev_row_dest is not None and row_dest and row_dest != prev_row_dest:
+                    detail_tags = ("dest_change_band",)
+                if row_dest:
+                    prev_row_dest = row_dest
+                
                 current_key = (store_text, order_text)
                 if prev_key is not None and current_key != prev_key:
                     break_tag = "detail_break_overflow" if proc == PROC_OVERFLOW else (
                         "detail_break_main" if proc == PROC_MAIN else "detail_break_relief"
                     )
-                    tags.append(break_tag)
+                    # 【修正1】break_tag を detail_tags に統合
+                    detail_tags = detail_tags + (break_tag,)
                 prev_key = current_key
+                
+                # 完了判定を追加
+                done_key = (proc, int(yama))
+                if done_key in self._done_yamas:
+                    detail_tags = ("done_yama",)
+                
+                # 【変更F-3】detail_tags を使用
                 target_tree.insert(
                     "", "end", iid=f"sbd:{proc}:{yama}:{idx}",
                     values=(
@@ -1863,17 +1897,44 @@ class App(ctk.CTk):
                         "",
                         str(row.get("UKEIRE", "")),
                     ),
-                    tags=tuple(tags),
+                    tags=detail_tags,
                 )
 
             sub2 = sub2.drop(columns=["_store_key", "_order_key"], errors="ignore")
 
             sep = tuple([""] * len(self._sb_lane_columns))
             target_tree.insert("", "end", values=sep, tags=("mountain_sep",))
+            target_tree.tag_configure("mountain_sep", background="#000000", foreground="#000000")
+            target_tree.tag_configure("done_yama", foreground="#9e9e9e", background="#f5f5f5")
+            target_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("main"))
 
     def _on_setboard_select(self, source: str):
         # 同時表示レイアウトのため、選択で他ビュー更新は行わない
         return
+
+    def _on_setboard_toggle_done(self, event):
+        """Setboard のヘッダ行をダブルクリックして完了状態をトグルする"""
+        iid = event.widget.identify_row(event.y)
+        if not iid or not iid.startswith("sb:"):
+            return
+        
+        # iid から proc と yama を抽出
+        parts = iid.split(":")
+        if len(parts) < 3:
+            return
+        proc = parts[1]
+        try:
+            yama = int(parts[2])
+        except (ValueError, IndexError):
+            return
+        
+        done_key = (proc, yama)
+        if done_key in self._done_yamas:
+            self._done_yamas.discard(done_key)
+        else:
+            self._done_yamas.add(done_key)
+        
+        self.update_setboard_views()
 
     # ===== 入車時間マスタ管理 =====
     def _initial_load_master(self):
