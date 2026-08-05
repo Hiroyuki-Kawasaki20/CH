@@ -1791,9 +1791,8 @@ def _legacy_assign_processes_by_arrival_time(
 
     def _serialize_lanes_final(target_rows: List[dict]):
         # Issue #36: 出力直前の最終直列化。探索・前詰め試行(trial_rows評価)には
-        # 一切関与しない独立ステップ。山工程・照合追加180秒フラグは不変とし、
+        # 一切関与しない独立ステップ。山工程は不変とし、
         # 同一レーン内で重複する山だけを運用タイムライン秒上で後ろ倒しして解消する。
-        # Issue #52 fix: 後ろ倒しで締切を超過する場合は後ろ倒しを適用しない。
         def _op_start(rr: dict):
             st = _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", ""))))
             return (st is None, st if st is not None else float("inf"), int(rr.get("山通番", 0)))
@@ -1808,15 +1807,19 @@ def _legacy_assign_processes_by_arrival_time(
             lane_rows = [rr for rr in target_rows if rr.get("山工程") == proc_label]
             lane_rows.sort(key=_op_start)
             prev_end = None
+            valid_idx = 0
             for rr in lane_rows:
                 current_start = _to_operational_timeline_secs(
                     _time_to_seconds(str(rr.get("実開始時間", "")))
                 )
                 if current_start is None:
+                    rr["照合追加180秒"] = False
+                    rr["締切超過"] = False
                     continue
                 yama_no = int(rr["山通番"])
                 work_dur = int(mtn_work_map.get(yama_no, 0))
-                inspection_delay = 180 if bool(rr.get("照合追加180秒")) else 0
+                inspection_delay = 180 if (valid_idx >= 2 and valid_idx % 2 == 0) else 0
+                rr["照合追加180秒"] = bool(inspection_delay)
 
                 candidate = int(current_start)
                 if prev_end is not None:
@@ -1824,20 +1827,6 @@ def _legacy_assign_processes_by_arrival_time(
 
                 if candidate > int(current_start):
                     new_start = int(_adjust_start_for_breaks(candidate, work_dur))
-                    # Issue #52 fix: 後ろ倒しで締切超過するなら後ろ倒しをスキップ。
-                    # 条件: OVERFLOW 以外 かつ 現在は締切内 かつ 後ろ倒し後は締切超過。
-                    ddl = mtn_deadline_map.get(yama_no)
-                    if ddl is not None and proc_label != PROC_OVERFLOW:
-                        cur_end = int(_calc_work_end_with_breaks(int(current_start), work_dur))
-                        cur_ddl_eval = _deadline_for_eval(ddl, int(current_start))
-                        currently_ok = cur_ddl_eval is None or cur_end <= int(cur_ddl_eval)
-                        if currently_ok:
-                            new_end = int(_calc_work_end_with_breaks(new_start, work_dur))
-                            new_ddl_eval = _deadline_for_eval(ddl, new_start)
-                            if new_ddl_eval is not None and new_end > int(new_ddl_eval):
-                                # 後ろ倒しで締切超過 → 元の時刻を維持。重複は許容する。
-                                prev_end = cur_end
-                                continue
                     rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
                     end_secs = int(_calc_work_end_with_breaks(new_start, work_dur))
                     rr["_end_secs"] = end_secs
@@ -1845,7 +1834,21 @@ def _legacy_assign_processes_by_arrival_time(
                         rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
                 else:
                     new_start = int(current_start)
-                prev_end = int(_calc_work_end_with_breaks(new_start, work_dur))
+                    end_secs = int(_calc_work_end_with_breaks(new_start, work_dur))
+                    rr["_end_secs"] = end_secs
+                    if "実終了時間" in rr:
+                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
+
+                ddl = mtn_deadline_map.get(yama_no)
+                ddl_for_eval = _deadline_for_eval(ddl, new_start) if ddl is not None else None
+                rr["締切超過"] = bool(
+                    ddl is not None
+                    and ddl_for_eval is not None
+                    and int(end_secs) > int(ddl_for_eval)
+                )
+
+                prev_end = int(end_secs)
+                valid_idx += 1
     for _ in range(3):
         _finalize_inspection_delay_flags(results)
         _try_front_pack_to_main_idle_gap(results)

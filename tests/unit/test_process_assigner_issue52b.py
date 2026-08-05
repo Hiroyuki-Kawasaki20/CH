@@ -11,28 +11,24 @@
 """
 
 import sys
-import copy
 import logging
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from src.services.process_assigner import (
     _legacy_assign_processes_by_arrival_time,
     compute_proc_details,
     _time_to_seconds,
     _calc_work_end_with_breaks,
-    _adjust_start_for_breaks,
     _to_operational_timeline_secs,
     _seconds_to_hhmm,
     PICKUP_DEADLINE_BUFFER_SECS,
-    ARRIVAL_BUFFER_SECS,
+    DAY_SECS,
 )
 from src.models.constants import (
-    PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW,
+    PROC_MAIN, PROC_OVERFLOW,
     BASE_ONE_TIME, BASE_PER_PAL, MIDDLE_WORK,
 )
 
@@ -132,122 +128,67 @@ def _work_secs(move_cost: float, pals: int) -> int:
     return int(round(move_cost + BASE_ONE_TIME + (pals - 1) * MIDDLE_WORK + pals * BASE_PER_PAL, 0))
 
 
-def _simulate_serialize_lanes(rows: list, work_map: dict) -> list:
-    """_serialize_lanes_final と同じロジック（テスト用再実装）。バグの発火を示すために使用する。"""
-    rows = copy.deepcopy(rows)
-    lane_labels: list = []
-    for rr in rows:
-        lb = rr.get("山工程")
-        if lb not in lane_labels:
-            lane_labels.append(lb)
+def _deadline_for_eval_for_test(deadline_val: int, start_secs: int) -> int:
+    ddl = int(deadline_val)
+    st = int(start_secs)
+    if st >= DAY_SECS and ddl < DAY_SECS:
+        return ddl + DAY_SECS
+    return ddl
 
-    for proc_label in lane_labels:
-        lane_rows = [rr for rr in rows if rr.get("山工程") == proc_label]
-        lane_rows.sort(key=lambda rr: (
-            _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", "")))) or float("inf"),
-            int(rr.get("山通番", 0)),
-        ))
-        prev_end = None
-        for rr in lane_rows:
-            current_start = _to_operational_timeline_secs(
-                _time_to_seconds(str(rr.get("実開始時間", "")))
-            )
-            if current_start is None:
-                continue
-            yama_no = int(rr["山通番"])
-            work_dur = int(work_map.get(yama_no, 0))
-            inspection_delay = 180 if bool(rr.get("照合追加180秒")) else 0
-            candidate = int(current_start)
-            if prev_end is not None:
-                candidate = max(candidate, int(prev_end) + inspection_delay)
 
-            if candidate > int(current_start):
-                new_start = int(_adjust_start_for_breaks(candidate, work_dur))
-                rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
-                rr["実終了時間"] = _seconds_to_hhmm(
-                    int(_calc_work_end_with_breaks(new_start, work_dur)) % 86400
-                )
-                prev_end = int(_calc_work_end_with_breaks(new_start, work_dur))
-            else:
-                prev_end = int(_calc_work_end_with_breaks(int(current_start), work_dur))
+def _overflow_col_name(df: pd.DataFrame) -> str:
+    if "締切超過" in df.columns:
+        return "締切超過"
+    if "締 切超過" in df.columns:
+        return "締 切超過"
+    raise AssertionError(f"締切超過列が見つかりません: {list(df.columns)}")
+
+
+def _work_map_from_details(detail_rows: list[dict]) -> dict[int, int]:
+    work_map: dict[int, int] = {}
+    for yama, sub in pd.DataFrame(detail_rows).groupby("山通番"):
+        yno = int(yama)
+        pals = len(sub)
+        max_cost = float(sub["移動工数"].max())
+        work_map[yno] = _work_secs(max_cost, pals)
+    return work_map
+
+
+def _build_issue52_synthetic_detail_rows() -> list[dict]:
+    rows = []
+    for yno in [201, 202, 203, 204, 205]:
+        rows += _rows(yno, "日野", "2026072013", 240.0, 1)
     return rows
 
 
-def _simulate_fix_after_serialize(rows: list, work_map: dict, deadline_map: dict) -> list:
-    """直列化後の締切超過を再チェックし、超過山をリリーフ→オーバーフローと段階的に降格する。
+def _build_issue52_synthetic_master_rows_for_overlap_and_180() -> list[dict]:
+    return [
+        {"OData_納入先": "日野", "NONYUHIBIN": "13", "入車時間": "23:59", "セットありフラグ": ""},
+    ]
 
-    実装は process_assigner._enforce_main_deadline_strict +
-    _reapply_overflow_for_relief の最小限の再現。
-    """
-    rows = copy.deepcopy(rows)
-    for _ in range(3):
-        # MAIN 超過を検出しリリーフへ降格
-        late_main = []
-        for rr in rows:
-            if rr.get("山工程") != PROC_MAIN:
-                continue
-            yno = int(rr["山通番"])
-            ddl = deadline_map.get(yno)
-            if ddl is None:
-                continue
-            st = _time_to_seconds(str(rr.get("実開始時間", "")))
-            if st is None:
-                continue
-            if int(_calc_work_end_with_breaks(st, work_map.get(yno, 0))) > ddl:
-                late_main.append(yno)
 
-        if late_main:
-            late_set = set(late_main)
-            for rr in rows:
-                if int(rr["山通番"]) in late_set and rr.get("山工程") == PROC_MAIN:
-                    rr["山工程"] = PROC_RELIEF
-                    rr["実開始時間"] = ""
-                    rr["照合追加180秒"] = False
-            # RELIEF を締切優先で再スケジュール
-            relief_rows = [rr for rr in rows if rr.get("山工程") == PROC_RELIEF]
-            relief_rows.sort(key=lambda rr: (
-                deadline_map.get(int(rr["山通番"])) or float("inf"),
-                int(rr["山通番"]),
-            ))
-            prev_end = 0
-            for rr in relief_rows:
-                yno = int(rr["山通番"])
-                ddl = deadline_map.get(yno)
-                wk = work_map.get(yno, 0)
-                if ddl is not None:
-                    latest_start = max(0, ddl - wk)
-                    candidate = max(int(prev_end), int(latest_start))
-                else:
-                    candidate = int(prev_end)
-                start = int(_adjust_start_for_breaks(candidate, wk))
-                rr["実開始時間"] = _seconds_to_hhmm(start)
-                prev_end = int(_calc_work_end_with_breaks(start, wk))
+def _build_issue52_synthetic_master_rows_for_deadline_overflow() -> list[dict]:
+    return [
+        {"OData_納入先": "日野", "NONYUHIBIN": "13", "入車時間": "17:55", "セットありフラグ": ""},
+    ]
 
-        # RELIEF 超過をオーバーフローへ降格
-        late_relief = []
-        for rr in rows:
-            if rr.get("山工程") != PROC_RELIEF:
-                continue
-            yno = int(rr["山通番"])
-            ddl = deadline_map.get(yno)
-            if ddl is None:
-                continue
-            st = _time_to_seconds(str(rr.get("実開始時間", "")))
-            if st is None:
-                continue
-            if int(_calc_work_end_with_breaks(st, work_map.get(yno, 0))) > ddl:
-                late_relief.append(yno)
 
-        if late_relief:
-            late_set = set(late_relief)
-            for rr in rows:
-                if int(rr["山通番"]) in late_set and rr.get("山工程") == PROC_RELIEF:
-                    rr["山工程"] = PROC_OVERFLOW
+def _run_e2e(detail_rows: list[dict], master_rows: list[dict]) -> pd.DataFrame:
+    details = pd.DataFrame(detail_rows)
+    proc_details = compute_proc_details(details)
+    master_df = pd.DataFrame(master_rows)
+    return _legacy_assign_processes_by_arrival_time(proc_details, master_df)
 
-        if not late_main and not late_relief:
-            break
 
-    return rows
+def _sorted_main_lane_rows(result: pd.DataFrame) -> list[dict]:
+    main_rows = result[result["山工程"] == PROC_MAIN].copy()
+    out_rows = main_rows.to_dict("records")
+    out_rows.sort(key=lambda rr: (
+        _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", "")))) is None,
+        _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", "")))) or float("inf"),
+        int(rr.get("山通番", 0)),
+    ))
+    return out_rows
 
 
 def _check_violations(rows: list, work_map: dict, deadline_map: dict,
@@ -291,6 +232,7 @@ def test_issue52b_real_data_ab_comparison():
     master_df = pd.DataFrame(HINO13_MASTER_ROWS)
 
     result = _legacy_assign_processes_by_arrival_time(proc_details, master_df)
+    assert "締切超過" in result.columns
 
     rows = result.to_dict("records")
     work_map = {}
@@ -329,90 +271,92 @@ def test_issue52b_real_data_ab_comparison():
 # ─────────────────────────────────────────────────────────────────────────────
 # テスト2: 合成データ — バグ機構の実証 + 修正ロジックの確認
 # ─────────────────────────────────────────────────────────────────────────────
-def test_issue52b_synthetic_overlap_deadline_violation():
-    """合成データで Issue #52 バグの機構と修正を実証する。
+def test_issue52b_synthetic_lane_has_no_overlap_after_honest_serialize():
+    detail_rows = _build_issue52_synthetic_detail_rows()
+    master_rows = _build_issue52_synthetic_master_rows_for_overlap_and_180()
+    result = _run_e2e(detail_rows, master_rows)
+    work_map = _work_map_from_details(detail_rows)
 
-    Part 1: _simulate_serialize_lanes でバグ（直列化 → 締切違反）を発火
-    Part 2: _simulate_fix_after_serialize で修正（降格 → 再スケジュール → 違反0件）を確認
-    """
-    work_map = {
-        9:  _work_secs(72.916, 2),   # ≈ 368s
-        10: _work_secs(72.911, 3),   # ≈ 423s
-        11: _work_secs(72.904, 2),   # ≈ 368s
-        12: _work_secs(72.917, 1),   # ≈ 313s
-    }
-    deadline_map = {yno: HINO13_DEADLINE_SECS for yno in (9, 10, 11, 12)}
+    lane_rows = _sorted_main_lane_rows(result)
+    assert len(lane_rows) >= 2
 
-    START_OVERLAP = "12:10"
-    rows_a = [
-        {"山通番": 9,  "山工程": PROC_MAIN, "実開始時間": START_OVERLAP, "照合追加180秒": False},
-        {"山通番": 10, "山工程": PROC_MAIN, "実開始時間": START_OVERLAP, "照合追加180秒": True},
-        {"山通番": 11, "山工程": PROC_MAIN, "実開始時間": START_OVERLAP, "照合追加180秒": False},
-        {"山通番": 12, "山工程": PROC_MAIN, "実開始時間": START_OVERLAP, "照合追加180秒": True},
-    ]
+    prev_end = None
+    for rr in lane_rows:
+        yno = int(rr["山通番"])
+        st = _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", ""))))
+        assert st is not None, f"実開始時間が取得できません: 山{yno}, row={rr}"
 
-    rows_b = _simulate_serialize_lanes(rows_a, work_map)
-    b_violations = _check_violations(rows_b, work_map, deadline_map)
+        end_txt = rr.get("実終了時間")
+        end_raw = _time_to_seconds(str(end_txt)) if pd.notna(end_txt) else None
+        assert end_raw is not None, f"実終了時間が取得できません: 山{yno}, row={rr}"
+        end_oper = _to_operational_timeline_secs(end_raw)
+        assert end_oper is not None, f"実終了時間の運用秒化に失敗: 山{yno}, row={rr}"
 
-    rows_c = _simulate_fix_after_serialize(rows_b, work_map, deadline_map)
-    c_violations = _check_violations(rows_c, work_map, deadline_map)
+        if prev_end is not None:
+            assert int(st) >= int(prev_end), f"重複発生: 前山終了{prev_end} > 山{yno}開始{st}"
+        prev_end = int(end_oper)
 
-    report_lines = [
-        "=" * 70,
-        "Issue #52 t135: 合成データ A/B/C 比較",
-        "  A = 重複あり (直列化前)",
-        "  B = 直列化後  (バグ発火)",
-        "  C = 直列化後 + 再チェック降格 (修正後)",
-        "=" * 70,
-        "",
-        f"日野13便 締切: 12:25 ({HINO13_DEADLINE_SECS}秒)",
-        f"全山 {START_OVERLAP} 開始（意図的重複）",
-        "",
-        "【Part 1: バグ発火（直列化のみ）】",
-    ]
-    for rr_b in sorted(rows_b, key=lambda r: r["山通番"]):
-        yno = int(rr_b["山通番"])
-        ddl = deadline_map.get(yno)
-        st_b = _time_to_seconds(str(rr_b.get("実開始時間", "")))
-        en_b = int(_calc_work_end_with_breaks(st_b, work_map[yno])) if st_b else None
-        over = (en_b - ddl) if (en_b and ddl and en_b > ddl) else 0
-        flag = "★" if over > 0 else "OK"
-        report_lines.append(
-            f"  山{yno}: {START_OVERLAP} → {rr_b.get('実開始時間', '?')}  "
-            f"締切{_seconds_to_hhmm(ddl) if ddl else 'なし'}  +{over}秒 {flag}"
+
+def test_issue52b_synthetic_3rd_and_5th_need_180sec_gap():
+    detail_rows = _build_issue52_synthetic_detail_rows()
+    master_rows = _build_issue52_synthetic_master_rows_for_overlap_and_180()
+    result = _run_e2e(detail_rows, master_rows)
+
+    lane_rows = _sorted_main_lane_rows(result)
+    assert len(lane_rows) == 5, f"期待メイン山数5に対して {len(lane_rows)}"
+
+    for idx, rr in enumerate(lane_rows):
+        expected = bool(idx >= 2 and idx % 2 == 0)
+        assert bool(rr.get("照合追加180秒", False)) is expected, (
+            f"照合追加180秒不一致: idx={idx}, 山{rr.get('山通番')}, "
+            f"actual={rr.get('照合追加180秒')}, expected={expected}"
         )
 
-    report_lines += ["", "【Part 2: 修正後（直列化 + 再チェック降格）】"]
-    for rr_c in sorted(rows_c, key=lambda r: r["山通番"]):
-        yno = int(rr_c["山通番"])
-        ddl = deadline_map.get(yno)
-        st_c = _time_to_seconds(str(rr_c.get("実開始時間", "")))
-        en_c = int(_calc_work_end_with_breaks(st_c, work_map[yno])) if st_c else None
-        over = (en_c - ddl) if (en_c and ddl and en_c > ddl) else 0
-        flag = "★" if over > 0 else "OK"
-        report_lines.append(
-            f"  山{yno}({rr_c.get('山工程', '?')}): {rr_c.get('実開始時間', '?')}  "
-            f"締切{_seconds_to_hhmm(ddl) if ddl else 'なし'}  +{over}秒 {flag}"
+    for idx in (2, 4):
+        prev_rr = lane_rows[idx - 1]
+        curr_rr = lane_rows[idx]
+        prev_end = _to_operational_timeline_secs(_time_to_seconds(str(prev_rr.get("実終了時間", ""))))
+        curr_start = _to_operational_timeline_secs(_time_to_seconds(str(curr_rr.get("実開始時間", ""))))
+        assert prev_end is not None, f"実終了時間が取得できません: 山{prev_rr.get('山通番')}, row={prev_rr}"
+        assert curr_start is not None, f"実開始時間が取得できません: 山{curr_rr.get('山通番')}, row={curr_rr}"
+        assert int(curr_start) >= int(prev_end) + 180, (
+            f"180秒ギャップ不足: idx={idx}, 前山{prev_rr.get('山通番')}終了{prev_end}, "
+            f"現山{curr_rr.get('山通番')}開始{curr_start}"
         )
 
-    report_lines += [
-        "",
-        f"【判定】バグ発火: {len(b_violations)}件  /  修正後: {len(c_violations)}件",
-    ]
 
-    report = "\n".join(report_lines)
-    print("\n" + report)
+def test_issue52b_synthetic_deadline_overflow_flag_true_false_is_consistent():
+    detail_rows = _build_issue52_synthetic_detail_rows()
+    master_rows = _build_issue52_synthetic_master_rows_for_deadline_overflow()
+    result = _run_e2e(detail_rows, master_rows)
+    overflow_col = _overflow_col_name(result)
+    work_map = _work_map_from_details(detail_rows)
 
-    with open("t133b_issue52_repro.txt", "w", encoding="utf-8") as f:
-        f.write(report)
+    lane_rows = _sorted_main_lane_rows(result)
+    assert lane_rows, "メイン工程レーンの行がありません"
 
-    assert len(b_violations) >= 1, (
-        f"Part1（バグ発火確認）で違反0件 — 直列化ロジックを確認\n工数={work_map}"
-    )
-    assert len(c_violations) == 0, (
-        f"Part2（修正後）でも違反が {len(c_violations)}件:\n"
-        + "\n".join(f"  山{v['山通番']}({v['工程']}): +{v['超過秒']}秒" for v in c_violations)
-    )
+    deadline_raw = _time_to_seconds("17:55")
+    assert deadline_raw is not None
+    deadline_secs = int(deadline_raw) - int(PICKUP_DEADLINE_BUFFER_SECS)
+
+    manual_flags = []
+    actual_flags = []
+    for rr in lane_rows:
+        yno = int(rr["山通番"])
+        start_secs = _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", ""))))
+        assert start_secs is not None, f"実開始時間が取得できません: 山{yno}, row={rr}"
+        end_secs = int(_calc_work_end_with_breaks(int(start_secs), int(work_map[yno])))
+        manual = bool(end_secs > _deadline_for_eval_for_test(deadline_secs, int(start_secs)))
+        actual = bool(rr.get(overflow_col, False))
+        manual_flags.append(manual)
+        actual_flags.append(actual)
+        assert actual == manual, (
+            f"締切超過フラグ不一致: 山{yno}, actual={actual}, manual={manual}, "
+            f"start={start_secs}, end={end_secs}, deadline={deadline_secs}"
+        )
+
+    assert any(actual_flags), f"締切超過=True が存在しません: {actual_flags}"
+    assert any(not x for x in actual_flags), f"締切超過=False が存在しません: {actual_flags}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
