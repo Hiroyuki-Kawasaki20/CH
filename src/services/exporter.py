@@ -252,6 +252,7 @@ def build_spo_export_df(
     mountain_start_times: dict = None,
     overflow_yamas: Optional[Set[int]] = None,
     inspection_delay_map: Optional[Dict[int, bool]] = None,
+    deadline_exceeded_map: Optional[Dict[int, bool]] = None,
 ) -> pd.DataFrame:
     """SPOアップロード用の1山=1行DataFrame"""
     if mountain_start_times is None:
@@ -260,11 +261,13 @@ def build_spo_export_df(
         overflow_yamas = set()
     if inspection_delay_map is None:
         inspection_delay_map = {}
+    if deadline_exceeded_map is None:
+        deadline_exceeded_map = {}
     cols_out = [
         "タイトル", "工程", "groupdata", "GroupedData",
         "Max移動工数", "グループ番号", "パレット数", "引取工数",
         "引取開始時間", "id", "済", "実施者", "順番",
-        "照合日", "照合済", "割込み作業名", "更新日時", "登録日時"
+        "照合日", "照合済", "割込み作業名", "更新日時", "登録日時", "締切超過"
     ]
     if proc_details is None or proc_details.empty:
         return pd.DataFrame(columns=cols_out)
@@ -348,8 +351,10 @@ def build_spo_export_df(
             "済": "", "実施者": "", "順番": 0,
             "照合日": "", "照合済": "", "割込み作業名": "",
             "更新日時": now_iso, "登録日時": now_iso,
+            "締切超過": bool(deadline_exceeded_map.get(int(yama), False)),
         })
     out = pd.DataFrame(rows, columns=cols_out)
+    out["締切超過"] = out["締切超過"].fillna(False).astype(bool)
     for c in ("Max移動工数", "グループ番号", "パレット数", "引取工数", "id", "順番"):
         if c in out.columns:
             if c == "Max移動工数":

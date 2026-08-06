@@ -897,6 +897,53 @@ class TestExporter:
         assert int(row2["引取工数"]) == base_pick + 180
         assert int(row3["引取工数"]) == base_pick
 
+    def test_spo_has_deadline_exceeded_column_at_tail_with_default_false(self):
+        proc_details = pd.DataFrame({
+            "山通番": [1, 2],
+            "移動工数": [0, 0],
+            "納入先": ["A", "B"],
+            "NONYUHIBIN": ["01", "02"],
+            "UKEIRE": ["100", "200"],
+            "ストア": ["S1", "S2"],
+        })
+        mountain_proc_map = {1: PROC_MAIN, 2: PROC_RELIEF}
+        start_times = {1: "08:00", 2: "08:10"}
+
+        spo_df = build_spo_export_df(
+            proc_details,
+            mountain_proc_map,
+            start_times,
+        )
+
+        assert spo_df.columns[-1] == "締切超過"
+        assert list(spo_df["締切超過"].astype(bool)) == [False, False]
+        assert spo_df["締切超過"].dtype == bool
+
+    def test_spo_deadline_exceeded_column_reflects_map_and_bool_dtype(self):
+        proc_details = pd.DataFrame({
+            "山通番": [1, 2],
+            "移動工数": [0, 0],
+            "納入先": ["A", "B"],
+            "NONYUHIBIN": ["01", "02"],
+            "UKEIRE": ["100", "200"],
+            "ストア": ["S1", "S2"],
+        })
+        mountain_proc_map = {1: PROC_MAIN, 2: PROC_RELIEF}
+        start_times = {1: "08:00", 2: "08:10"}
+
+        spo_df = build_spo_export_df(
+            proc_details,
+            mountain_proc_map,
+            start_times,
+            deadline_exceeded_map={2: True},
+        )
+
+        row1 = spo_df.loc[spo_df["グループ番号"] == 1].iloc[0]
+        row2 = spo_df.loc[spo_df["グループ番号"] == 2].iloc[0]
+        assert bool(row1["締切超過"]) is False
+        assert bool(row2["締切超過"]) is True
+        assert spo_df["締切超過"].dtype == bool
+
 
 class TestClusterByStore:
     """cluster_by_store: 同梱パレットのストア単位クラスター化テスト"""
