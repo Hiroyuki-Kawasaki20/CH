@@ -141,3 +141,56 @@ class TestLaneEndTimesVerification:
         history = push_lane_end_times([], dict(lane_end_times))
         restored = select_lane_end_times(history, "最新")
         assert restored == lane_end_times
+
+
+class TestRegression20260805:
+    """Issue #67 ②: 2026-08-05 実運用パターンの簡略化回帰テスト
+
+    旧実装（PR #65 以前）は締切超過時に山を重ね置きし、過小な終了時刻
+    （実際23:09のところ20:12）を履歴へ保存していた（履歴汚染）。
+    現行実装では常に後ろ倒しされ、pushされる終了時刻は正直な最終完了時刻になる。
+    """
+
+    def test_no_compressed_end_times_under_heavy_evening_load(self):
+        """夜間高負荷（山が締切に収まらない状況）でも、
+        ①レーン内で山が重ならない ②pushされる終了時刻が圧縮されない。"""
+        mountains = [
+            (1, "01", 1800, 4),
+            (2, "02", 1800, 4),
+            (3, "03", 1800, 4),
+            (4, "04", 1800, 4),
+        ]
+        arrivals = {"01": "21:30", "02": "21:50", "03": "22:10", "04": "22:30"}
+        out_df, lane_end_times, work_map = _run(mountains, arrivals)
+
+        for lane in (PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW):
+            items = _lane_rows_in_start_order(out_df, lane, work_map)
+            # ① 重ね置き（旧バグ）の再発防止
+            for idx in range(1, len(items)):
+                assert items[idx][0] >= items[idx - 1][1], (
+                    f"{lane}: 山が時間的に重なっている（旧バグの再発）"
+                )
+            # ② pushされる終了時刻 = 実際の最終完了時刻（圧縮なし）
+            if items:
+                assert lane_end_times[lane] == max(en for _, en, _ in items), (
+                    f"{lane}: 履歴へ渡る終了時刻が実際の最終完了時刻と不一致（履歴汚染の温床）"
+                )
+
+    def test_previous_end_time_floor_is_respected(self):
+        """前回終了時刻（previous_lane_end_times）より前にメイン工程の山が
+        開始しないこと（回またぎ割り込みの直接検証）。
+
+        ※ このテストが失敗した場合、最適化フェーズで前回終了時刻の床値が
+           失われる実装バグの可能性がある。テストを弱めず失敗内容を報告すること。
+        """
+        prev_main_end = 23 * 3600 + 9 * 60  # 23:09（2026-08-05 の実測最終完了時刻）
+        mountains = [(1, "01", 60, 1)]
+        arrivals = {"01": "23:50"}
+        out_df, lane_end_times, work_map = _run(
+            mountains, arrivals, prev={PROC_MAIN: prev_main_end},
+        )
+        items = _lane_rows_in_start_order(out_df, PROC_MAIN, work_map)
+        assert items, "前提: 山1がメイン工程に配置されること"
+        assert items[0][0] >= prev_main_end, (
+            f"山1が前回終了時刻 23:09 より前（{items[0]}秒）に割り込んでいる"
+        )
