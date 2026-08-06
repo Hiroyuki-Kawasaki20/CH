@@ -29,7 +29,7 @@ from src.models.constants import (
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, PROC_MAIN_LABEL, PROC_RELIEF_LABEL, PROC_OVERFLOW_LABEL,
     COLOR_MAIN, COLOR_RELIEF, COLOR_OVERFLOW, COLOR_VIOLATION,
-    VIRTUAL_YAMA_NO, is_virtual_yama,
+    VIRTUAL_YAMA_NO, is_virtual_yama, SPLIT_UKEIRE_ROUTES,
 )
 from src.services.data_loader import (
     load_data, DataManager,
@@ -802,16 +802,24 @@ class App(ctk.CTk):
         display_routes = []
 
         for r in routes:
-            if r == "KVC" and self.master_data is not None and not self.master_data.empty:
-                # KVCの場合、master_data から "KVC-B7", "KVC-B3" を抽出
-                kvc_vendors = sorted(
-                    self.master_data[self.master_data["OData_納入先"].str.startswith("KVC-")]["OData_納入先"].unique().tolist()
+            if r in SPLIT_UKEIRE_ROUTES and self.master_data is not None and not self.master_data.empty:
+                # 分割対象拠点は、master_data の "{route}-" で始まる行名を表示候補にする。
+                prefix = f"{r}-"
+                split_vendors = sorted(
+                    self.master_data[
+                        self.master_data["OData_納入先"].astype(str).str.startswith(prefix)
+                    ]["OData_納入先"].astype(str).unique().tolist()
                 )
-                for vendor in kvc_vendors:
-                    display_routes.append(vendor)
-                    # "KVC-B7" -> {"route": "KVC", "ukeire": "B7"}
-                    ukeire = vendor.replace("KVC-", "").strip() if "-" in vendor else None
-                    self._route_display_to_internal[vendor] = {"route": "KVC", "ukeire": ukeire}
+                if split_vendors:
+                    for vendor in split_vendors:
+                        display_routes.append(vendor)
+                        # "元町-1W" -> {"route": "元町", "ukeire": "1W"}
+                        ukeire = vendor[len(prefix):].strip() if vendor.startswith(prefix) else None
+                        self._route_display_to_internal[vendor] = {"route": r, "ukeire": ukeire}
+                else:
+                    # マスタ未整備時でも拠点が候補から消えないよう素名を残す。
+                    display_routes.append(r)
+                    self._route_display_to_internal[r] = {"route": r, "ukeire": None}
             else:
                 display_routes.append(r)
                 self._route_display_to_internal[r] = {"route": r, "ukeire": None}  # 辞書化
@@ -1604,7 +1612,15 @@ class App(ctk.CTk):
                 order2 = nony[-2:] if len(nony) >= 2 else ""
                 if not vendor or not order2:
                     continue
-                pickup = master_map.get((vendor, order2), "")
+                lookup_vendor = vendor
+                if vendor in SPLIT_UKEIRE_ROUTES:
+                    _ukeire = str(drow.get("UKEIRE", "")).strip()
+                    if _ukeire:
+                        lookup_vendor = f"{vendor}-{_ukeire}"
+                pickup = master_map.get((lookup_vendor, order2), "")
+                if (not pickup) and (lookup_vendor != vendor):
+                    # 安全網: 分割照合で未ヒット時のみ素名で1回フォールバックする。
+                    pickup = master_map.get((vendor, order2), "")
                 pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup)) if pickup else None
                 if pickup_secs is None:
                     continue

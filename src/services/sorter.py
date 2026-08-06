@@ -11,6 +11,7 @@ from ..models.constants import (
     SPECIAL_HINBAN, SPECIAL_HEIGHT_CAP,
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     SIZE5_TYPE, SIZE5_MAX_PALLETS_PER_YAMA,
+    SPLIT_UKEIRE_ROUTES,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -65,11 +66,11 @@ def _add_arrival_time_column(df: pd.DataFrame, master_df: pd.DataFrame) -> pd.Da
 
     def _lookup(row):
         vendor = _normalize_dest_name(str(row.get("納入先", row.get("SYUKKASAKI", ""))))
-        # KVCのみ: UKEIRE値でマスタキーの納入先部分を分割 (KVC-B7 / KVC-B3)
-        if vendor == "KVC":
+        # 分割対象拠点は UKEIRE を連結したマスタキーで照合する。
+        if vendor in SPLIT_UKEIRE_ROUTES:
             ukeire = str(row.get("UKEIRE", "")).strip()
             if ukeire:
-                vendor = f"KVC-{ukeire}"
+                vendor = f"{vendor}-{ukeire}"
         nony = str(row.get("NONYUHIBIN", "")).strip().translate(_ZEN2HAN_DIGIT_COLON)
         order2 = nony[-2:] if len(nony) >= 2 else ""
         return master_map.get((vendor, order2), "")

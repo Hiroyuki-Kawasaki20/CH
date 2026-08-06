@@ -297,3 +297,29 @@ class TestSize1MixedMergeByArrivalVendorException:
 
         _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
         assert details["山通番"].nunique() == 1
+
+
+def test_motomachi_split_ukeire_arrival_lookup_uses_combined_vendor_key():
+    master_df = _make_master([
+        {"OData_納入先": "元町-1W", "NONYUHIBIN": "04", "入車時間": "10:10"},
+        {"OData_納入先": "元町-9P", "NONYUHIBIN": "04", "入車時間": "12:20"},
+    ])
+    shipment_df = _make_shipment([
+        {
+            "納入先": "元町", "NONYUHIBIN": "2026070104", "UKEIRE": "1W",
+            "高さ": 500.0, "移動工数": 5.0, "PLANKANBANSU": 1,
+            "サイズ種類": "1", "SYUKKASAKI": "元町",
+        },
+        {
+            "納入先": "元町", "NONYUHIBIN": "2026070104", "UKEIRE": "9P",
+            "高さ": 500.0, "移動工数": 5.0, "PLANKANBANSU": 1,
+            "サイズ種類": "1", "SYUKKASAKI": "元町",
+        },
+    ])
+
+    result = _add_arrival_time_column(shipment_df, master_df)
+    arrival_1w = result.loc[result["UKEIRE"] == "1W", "入車時間"].iloc[0]
+    arrival_9p = result.loc[result["UKEIRE"] == "9P", "入車時間"].iloc[0]
+
+    assert arrival_1w == "10:10"
+    assert arrival_9p == "12:20"
