@@ -1050,6 +1050,32 @@ class App(ctk.CTk):
             a, b, c = s["便名"].strip(), s["受入"].strip(), s["オーダー"].strip()
             self.sel_tree.insert("", "end", iid=f"{a}|{b}|{c}", values=(a, b, c))
 
+    def _confirm_previous_lane_end_times(self, previous_lane_end_times) -> bool:
+        """Issue #67: 2026-08-05 の履歴汚染事故（実際23:09に対し履歴20:12）の再発防止策。"""
+        previous_lane_end_times = previous_lane_end_times or {}
+
+        lane_pairs = [
+            (PROC_MAIN, "メイン"),
+            (PROC_RELIEF, "リリーフ"),
+            (PROC_OVERFLOW, "あふれ"),
+        ]
+        all_unset = True
+        lines = ["前回終了時刻を次回の開始下限として使用します。", ""]
+        for lane_key, lane_name in lane_pairs:
+            secs = int(previous_lane_end_times.get(lane_key, 0) or 0)
+            if secs > 0:
+                all_unset = False
+            hhmm = _seconds_to_hhmm(secs) if secs > 0 else "00:00"
+            lines.append(f"{lane_name}: {hhmm}")
+
+        if all_unset:
+            lines.append("")
+            lines.append("（引き継ぎ時刻なし・初回動作として実行します）")
+
+        lines.append("")
+        lines.append("この内容で実行しますか？")
+        return messagebox.askyesno("前回終了時刻の確認", "\n".join(lines))
+
     # ===== 実行 =====
     def run(self):
         if not self.selections:
@@ -1060,6 +1086,8 @@ class App(ctk.CTk):
             self.lane_end_times_history,
             normalize_choice_label(self.selected_history_choice.get())
         )
+        if not self._confirm_previous_lane_end_times(previous_lane_end_times):
+            return
         self.progress_bar.pack(fill="x", pady=(0, 4))
         self.progress_bar.start()
         self.title("実行中... CHかんばんセット")
@@ -1641,6 +1669,12 @@ class App(ctk.CTk):
                 self.mountain_proc["山通番"].astype(int),
                 self.mountain_proc["照合追加180秒"].fillna(False).astype(bool)
             ))
+        deadline_exceeded_map = {}
+        if self.mountain_proc is not None and not self.mountain_proc.empty and "締切超過" in self.mountain_proc.columns:
+            deadline_exceeded_map = dict(zip(
+                self.mountain_proc["山通番"].astype(int),
+                self.mountain_proc["締切超過"].fillna(False).astype(bool)
+            ))
 
         spo_df = build_spo_export_df(
             self.proc_details,
@@ -1648,6 +1682,7 @@ class App(ctk.CTk):
             start_times,
             overflow_yamas=overflow_yamas,
             inspection_delay_map=delay_map,
+            deadline_exceeded_map=deadline_exceeded_map,
         )
         master_df = pd.DataFrame()
         try:
