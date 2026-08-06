@@ -1826,10 +1826,10 @@ class App(ctk.CTk):
             else:
                 target_tree = self.sb_relief_tree
 
-            if prev_yama_order is not None and not is_mixed and orders_in_yama and orders_in_yama[0] != prev_yama_order:
-                target_tree.insert("", "end", values=("", f"⚠ オーダー変更 {prev_yama_order} → {orders_in_yama[0]}", "", "", ""), tags=("change_banner",))
-            if prev_yama_dest is not None and dests_in_yama and prev_yama_dest not in dests_in_yama:
-                target_tree.insert("", "end", values=("", f"⚠ 納入先変更", "", "", ""), tags=("change_banner",))
+            if prev_yama_order is not None and not is_mixed and orders_in_yama and orders_in_yama[0] != prev_yama_order:  
+                target_tree.insert("", "end", values=("", "⚠オーダー", "", "", ""), tags=("change_banner",))  
+            if prev_yama_dest is not None and dests_in_yama and prev_yama_dest not in dests_in_yama:  
+                target_tree.insert("", "end", values=("", "⚠納入先", "", "", ""), tags=("change_banner",))  
             prev_yama_order = orders_in_yama[0] if orders_in_yama else prev_yama_order
             prev_yama_dest = dests_in_yama[0] if dests_in_yama else prev_yama_dest
             parity = "even" if (int(yama) % 2 == 0) else "odd"
@@ -1897,15 +1897,16 @@ class App(ctk.CTk):
                 else:
                     detail_tags = (detail_tag,)
                 
-                # 【変更F-2】納入先変更による dest_change_band 適用
-                row_dest = str(row.get("納入先", row.get("OData_納入先", ""))).strip()
-                if prev_row_dest is not None and row_dest and row_dest != prev_row_dest:
-                    detail_tags = detail_tags + ("dest_change_band",)
-                if row_dest:
-                    prev_row_dest = row_dest
-                
-                current_key = (store_text, order_text)
-                if prev_key is not None and current_key != prev_key:
+                # 【変更F-2】納入先変更による dest_change_band 適用  
+                # 混載の山は山全体を黄色・同一フォントで統一するため、行単位の帯タグは付けない  
+                row_dest = str(row.get("納入先", row.get("OData_納入先", ""))).strip()  
+                if (not is_mixed) and prev_row_dest is not None and row_dest and row_dest != prev_row_dest:  
+                    detail_tags = detail_tags + ("dest_change_band",)  
+                if row_dest:  
+                    prev_row_dest = row_dest  
+                  
+                current_key = (store_text, order_text)  
+                if (not is_mixed) and prev_key is not None and current_key != prev_key:  
                     break_tag = "detail_break_overflow" if proc == PROC_OVERFLOW else (
                         "detail_break_main" if proc == PROC_MAIN else "detail_break_relief"
                     )
@@ -1937,8 +1938,9 @@ class App(ctk.CTk):
             target_tree.insert("", "end", values=sep, tags=("mountain_sep",))
             target_tree.tag_configure("mountain_sep", background="#000000")
             target_tree.tag_configure("done_yama", foreground="#9e9e9e", background="#f5f5f5")
-            target_tree.tag_configure("mixed_summary", background="#FFF3C4")
-            target_tree.tag_configure("mixed_detail", background="#FFF3C4")
+            target_tree.tag_configure("mixed_summary", background="#FFF3C4", font=("Meiryo UI", 15, "bold"))  
+            target_tree.tag_configure("mixed_detail", background="#FFF3C4", font=("MS Gothic", 18, "bold"))  
+            target_tree.tag_configure("change_banner", foreground="#C62828", font=("Meiryo UI", 15, "bold"))  
             target_tree.bind("<<TreeviewSelect>>", lambda e: self._on_setboard_select("main"))
 
     def _on_setboard_select(self, source: str):
