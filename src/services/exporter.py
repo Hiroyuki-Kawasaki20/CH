@@ -223,10 +223,18 @@ def build_groupeddata_json_for_mountain(sub_rows: pd.DataFrame) -> str:
     else:
         df["移動工数"] = float("nan")
 
-    # 番号採番ルール: 移動工数の昇順を最優先キーとする。
-    # 同値の場合は SEBANGO 昇順（存在すれば）、なければ 工程内No 昇順 で安定化。
-    sort_by = ["移動工数"]
-    sort_asc = [True]
+    # 番号採番ルール:
+    #   0) サイズ21は常に先頭（番号1側）に置く。
+    #      apps側は実物かんばんの積み順の関係で「番号の遅い順」に表示するため、
+    #      21を番号1にすると画面上は「サイズ1 →（最後に）21」の順で表示される。
+    #   1) それ以外は従来どおり移動工数の昇順を最優先キーとする。
+    #   2) 同値の場合は SEBANGO 昇順（存在すれば）、なければ 工程内No 昇順 で安定化。
+    if "サイズ種類" in df.columns:
+        df["_not21"] = (~df["サイズ種類"].astype(str).str.strip().eq("21")).astype(int)
+    else:
+        df["_not21"] = 1
+    sort_by = ["_not21", "移動工数"]
+    sort_asc = [True, True]
     if "SEBANGO" in df.columns:
         sort_by.append("SEBANGO")
         sort_asc.append(True)
@@ -235,6 +243,7 @@ def build_groupeddata_json_for_mountain(sub_rows: pd.DataFrame) -> str:
         sort_asc.append(True)
 
     df = df.sort_values(by=sort_by, ascending=sort_asc, na_position="last")
+    df = df.drop(columns=["_not21"])
     df = df.reset_index(drop=True)
     df["番号"] = np.arange(1, len(df) + 1)
     cols = ["OData__x30b9__x30c8__x30a2_", "NONYUHIBIN", "UKEIRE",
