@@ -1198,8 +1198,8 @@ class TestSize1And21Stacking:
         assert details["山通番"].nunique() == 2
         assert len(details["山通番"].astype(int).unique()) == 2
 
-    def test_match_units_no_size1_on_size21_unit(self):
-        """_has_size21=True の山には _has_size1=True の山を積まない。"""
+    def test_match_units_allows_size1_on_size21_unit_for_non_hino(self):
+        """非日野では _has_size21=True の山と _has_size1=True の山を統合できる。"""
         units = pd.DataFrame([
             {
                 "山ID": 1,
@@ -1221,8 +1221,7 @@ class TestSize1And21Stacking:
 
         id_map = _match_units_with_layer_rules(units, height_cap=2450)
 
-        assert id_map.get(2) != 1
-        assert (2, 1) not in id_map.items()
+        assert id_map.get(2) == 1
 
 
 
