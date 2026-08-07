@@ -27,3 +27,6 @@ lane_end_times_history.json
 /_tmp_*
 /temp_*
 /.gh_issue_body.txt
+
+# 入車時間マスタ（データはGit管理外）
+入車時間マスタ.xlsx

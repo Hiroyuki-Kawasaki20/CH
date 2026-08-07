@@ -11,7 +11,7 @@ from ..models.constants import (
     SPECIAL_HINBAN, SPECIAL_HEIGHT_CAP,
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     SIZE5_TYPE, SIZE5_MAX_PALLETS_PER_YAMA,
-    SPLIT_UKEIRE_ROUTES,
+    SPLIT_UKEIRE_ROUTES, HINO_VENDOR_PREFIX,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -201,6 +201,21 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
 
     used, id_map = set(), {}
     all_true = pd.Series(True, index=units.index)
+    special_hinban_mask = units.get("_has_special_hinban", pd.Series(False, index=units.index)).astype(bool)
+
+    def _cross_role_allowed(base_row: pd.Series, candidate_units: pd.DataFrame) -> pd.Series:
+        """base_row と candidate_units のペアが 1×21 のクロス統合として許可されるかを返す。"""
+        base_has1 = bool(base_row.get("_has_size1", False))
+        base_has21 = bool(base_row.get("_has_size21", False))
+        base_vendor = str(base_row.get("納入先", "")).strip()
+        base_bin = str(base_row.get("NONYUHIBIN", "")).strip()
+        units_vendor = candidate_units["納入先"].astype(str).str.strip()
+        units_bin = candidate_units["NONYUHIBIN"].astype(str).str.strip()
+
+        cross = ((base_has1 & candidate_units["_has_size21"]) | (base_has21 & candidate_units["_has_size1"]))
+        hino_both = units_vendor.str.startswith(HINO_VENDOR_PREFIX) & base_vendor.startswith(HINO_VENDOR_PREFIX)
+        same_vendor_same_bin = units_vendor.eq(base_vendor) & units_bin.eq(base_bin)
+        return (~cross) | (~hino_both) | same_vendor_same_bin
 
     def _forbidden_same_vendor_diff_bin(base_row: pd.Series) -> pd.Series:
         base_vendor = str(base_row.get("納入先", "")).strip()
@@ -237,28 +252,13 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         has21_g1 = bool(g1.get("_has_size21", False))
         has1_g1 = bool(g1.get("_has_size1", False))
         has_special_g1 = bool(g1.get("_has_special_hinban", False))
-        
-        # 【特例品番フィルタ：631426010000】
-        # (1) g1 または g2 が size21 を含む場合：g3 から 631426010000 を除外
-        # (2) g1 または g2 が 631426010000 を含む場合：g3 から size21 を除外
+        cond_layer2 = _cross_role_allowed(g1, units)
         if has21_g1:
-            # 後方互換: 旧フォーマットでは size21 山に size1 を載せない
-            cond_layer2 = ~units["_has_size1"]
-            # g1=size21 → g2 から 631426010000 を追加除外
-            if "_has_special_hinban" in units.columns:
-                special_hinban_series = units.get("_has_special_hinban", pd.Series(False, index=units.index))
-                special_hinban_units = units[special_hinban_series]
-                cond_layer2 &= ~units["山ID"].isin(special_hinban_units["山ID"])
-        elif has1_g1:
-            # 対称ルール: size1 を含む山には size21 を載せない
-            cond_layer2 = ~units["_has_size21"]
-        elif has_special_g1:
-            # g1=631426010000 → g2 から size21 を除外
-            size21_series = units.get("_has_size21", pd.Series(False, index=units.index))
-            size21_units = units[size21_series]
-            cond_layer2 = ~units["山ID"].isin(size21_units["山ID"])
-        else:
-            cond_layer2 = all_true
+            # 維持ルール: 特例品番631426010000はsize21山に載せない
+            cond_layer2 &= ~special_hinban_mask
+        if has_special_g1:
+            # 維持ルール: 特例品番入り山にsize21を載せない
+            cond_layer2 &= ~units["_has_size21"]
         cond_mix2_final = cond_mix2 & cond_layer2
         
         cand2 = units[
@@ -286,28 +286,12 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         has_special_g1 = bool(g1.get("_has_special_hinban", False))
         has_special_g2 = bool(g2.get("_has_special_hinban", False))
         has_special_merged = has_special_g1 | has_special_g2
-        has1_merged = bool(g1.get("_has_size1", False)) | bool(g2.get("_has_size1", False))
 
-        # 【特例品番フィルタ：631426010000】
-        # (1) g1 または g2 が size21 を含む場合：g3 から 631426010000 を除外
-        # (2) g1 または g2 が 631426010000 を含む場合：g3 から size21 を除外
-        
+        cond_layer3 = _cross_role_allowed(g1, units) & _cross_role_allowed(g2, units)
         if has21_merged:
-            # 後方互換: 旧フォーマットでは size21 山に size1 を載せない
-            cond_layer3 = ~units["_has_size1"]
-            if "_has_special_hinban" in units.columns:
-                special_hinban_series = units.get("_has_special_hinban", pd.Series(False, index=units.index))
-                special_hinban_units = units[special_hinban_series]
-                cond_layer3 &= ~units["山ID"].isin(special_hinban_units["山ID"])
-        elif has1_merged:
-            # 対称ルール: size1 を含む山には size21 を載せない
-            cond_layer3 = ~units["_has_size21"]
-        elif has_special_merged:
-            size21_series = units.get("_has_size21", pd.Series(False, index=units.index))
-            size21_units = units[size21_series]
-            cond_layer3 = ~units["山ID"].isin(size21_units["山ID"])
-        else:
-            cond_layer3 = all_true
+            cond_layer3 &= ~special_hinban_mask
+        if has_special_merged:
+            cond_layer3 &= ~units["_has_size21"]
         cond_mix3_final = cond_mix3_1 & cond_mix3_2 & cond_layer3
 
         cand3 = units[
@@ -629,8 +613,11 @@ def _build_size1_mixed(expanded, height_cap, mixing_key):
         size1_mixed_summary["混載キー種類数"] = 0
         size1_mixed_summary["混載フラグ"] = False
 
-    size1_mixed_details = size1_with_mountain.sort_values(
-        by=["山通番", "移動工数"], ascending=[True, False]
+    stack_order = size1_with_mountain["サイズ種類"].astype(str).str.strip().eq("21").astype(int)
+    size1_mixed_details = (
+        size1_with_mountain.assign(_stack_order=stack_order)
+        .sort_values(by=["山通番", "_stack_order", "移動工数"], ascending=[True, True, False])
+        .drop(columns=["_stack_order"])
     )
     return size1_mixed_summary, size1_mixed_details
 
@@ -832,9 +819,15 @@ def build_all_mountain_details(group_details: dict, size1_mixed_details: pd.Data
         renum_map = {int(old): i + 1 for i, old in enumerate(old_yamas_sorted)}
         all_df["山通番"] = all_df["山通番"].map(renum_map).astype(int)
 
-    if {"山通番", "移動工数"}.issubset(all_df.columns):
+    if {"山通番", "移動工数", "サイズ種類"}.issubset(all_df.columns):
         all_df["移動工数"] = pd.to_numeric(all_df["移動工数"], errors="coerce")
-        all_df = all_df.sort_values(["山通番", "移動工数"], ascending=[True, False]).reset_index(drop=True)
+        stack_order = all_df["サイズ種類"].astype(str).str.strip().eq("21").astype(int)
+        all_df = (
+            all_df.assign(_stack_order=stack_order)
+            .sort_values(["山通番", "_stack_order", "移動工数"], ascending=[True, True, False])
+            .drop(columns=["_stack_order"])
+            .reset_index(drop=True)
+        )
     return all_df
 
 

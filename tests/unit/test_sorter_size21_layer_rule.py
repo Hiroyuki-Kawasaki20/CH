@@ -4,7 +4,7 @@ from src.models.constants import DEFAULT_HEIGHT_CAP
 from src.services.sorter import _build_size1_mixed
 
 
-def test_size21_stack_must_not_include_size1_even_without_special_hinban():
+def test_size1_and_size21_stack_are_merged_with_size1_before_size21():
     expanded = pd.DataFrame(
         [
             {
@@ -52,7 +52,8 @@ def test_size21_stack_must_not_include_size1_even_without_special_hinban():
 
     _, details = _build_size1_mixed(expanded, DEFAULT_HEIGHT_CAP, mixing_key=None)
 
-    by_mountain = details.groupby("山通番")["サイズ種類"].apply(lambda s: set(s.astype(str).str.strip()))
-    for yama_no, size_set in by_mountain.items():
-        if "21" in size_set:
-            assert "1" not in size_set, f"山通番 {yama_no} で size21 と size1 が同居: {size_set}"
+    assert details["山通番"].nunique() == 1
+    assert len(details) == 4
+
+    size_types = details["サイズ種類"].astype(str).str.strip().tolist()
+    assert size_types == ["1", "1", "21", "21"]
