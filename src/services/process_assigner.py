@@ -22,6 +22,7 @@ from ..models.constants import (
     SHIFT_FIRST_TRIP_BUFFER_SECS, FIRST_BIN_RELEASE_BUFFER_SECS,
     LUNCH_PRE_MARGIN_SECS, LUNCH_POST_RESUME_SECS, LUNCH_POST_LOCK_SECS,
     PICKUP_DEADLINE_BUFFER_SECS,
+    SPLIT_UKEIRE_ROUTES,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -588,10 +589,10 @@ def _legacy_assign_processes_by_arrival_time(
             # Issue #57: 日野オーダーの便番号（末尾2桁）を収集
             if _is_hino_2lane_target(vendor):
                 hino_bins_for_mountain.add(order2)
-            # KVCのみ: UKEIRE値でマスタキーの納入先部分を分割 (KVC-B7 / KVC-B3)
-            if vendor == "KVC":
+            # 分割対象拠点は UKEIRE を連結したマスタキーで照合する。
+            if vendor in SPLIT_UKEIRE_ROUTES:
                 _ukeire = str(row.get("UKEIRE", "")).strip()
-                lookup_vendor = f"KVC-{_ukeire}" if _ukeire else vendor
+                lookup_vendor = f"{vendor}-{_ukeire}" if _ukeire else vendor
             else:
                 lookup_vendor = vendor
             pickup = master_map.get((lookup_vendor, order2), "")
@@ -826,10 +827,10 @@ def _legacy_assign_processes_by_arrival_time(
                 }
             units[key]["rows"].append(row)
 
-            # KVCのみ: UKEIRE値でマスタキーの納入先部分を分割 (KVC-B7 / KVC-B3)
-            if vendor == "KVC":
+            # 分割対象拠点は UKEIRE を連結したマスタキーで照合する。
+            if vendor in SPLIT_UKEIRE_ROUTES:
                 _ukeire = str(row.get("UKEIRE", "")).strip()
-                lookup_vendor = f"KVC-{_ukeire}" if _ukeire else vendor
+                lookup_vendor = f"{vendor}-{_ukeire}" if _ukeire else vendor
             else:
                 lookup_vendor = vendor
             pickup = master_map.get((lookup_vendor, order2), "")

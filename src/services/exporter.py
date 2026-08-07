@@ -14,7 +14,7 @@ import numpy as np
 from ..models.constants import (
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, PROC_MAIN_LABEL, PROC_RELIEF_LABEL, PROC_OVERFLOW_LABEL,
-    is_virtual_yama,
+    is_virtual_yama, SPLIT_UKEIRE_ROUTES,
 )
 from ..utils.excel_utils import (
     _ensure_columns, _protect_excel_injection, _add_table_exact,
@@ -514,6 +514,7 @@ def attach_pickup_start_time(
     master["入車時間"] = master["入車時間"].astype(str).str.strip()
     master = master[(master["OData_納入先"] != "") & (master["NONYUHIBIN"] != "")]
     master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in master.iterrows()}
+    master_vendor_keys = {k[0] for k in master_map.keys()}
 
     # 武部等のグループ処理
     vendor_time_groups: Dict[str, Dict[int, list]] = {}
@@ -572,11 +573,18 @@ def attach_pickup_start_time(
             if not isinstance(it, dict):
                 continue
             vendor = str(it.get("OData_納入先") or it.get("OData__x7d0d__x5165__x5148_", "")).strip()
+            ukeire = str(it.get("UKEIRE", "")).strip()
             nony = str(it.get("NONYUHIBIN", "")).strip().translate(_ZEN2HAN_DIGIT_COLON)
             order2 = nony[-2:] if len(nony) >= 2 else ""
             if not vendor or not order2:
                 continue
-            key = (vendor, order2)
+            lookup_vendor = vendor
+            if vendor in SPLIT_UKEIRE_ROUTES and ukeire:
+                combined = f"{vendor}-{ukeire}"
+                if combined in master_vendor_keys:
+                    lookup_vendor = combined
+
+            key = (lookup_vendor, order2)
             if key in seen_keys:
                 continue
             seen_keys.add(key)
@@ -586,8 +594,8 @@ def attach_pickup_start_time(
                 if mins is None:
                     continue
                 candidate_min = mins + 10
-                if vendor == "武部":
-                    prev_group_time = _get_prev_group_time(vendor, mins)
+                if lookup_vendor == "武部":
+                    prev_group_time = _get_prev_group_time(lookup_vendor, mins)
                     if prev_group_time is not None:
                         candidate_min = prev_group_time + 10
                 else:
@@ -595,7 +603,7 @@ def attach_pickup_start_time(
                         current_bin = int(order2)
                         if current_bin > 1:
                             prev_bin = f"{current_bin - 1:02d}"
-                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             if prev_pickup:
                                 prev_mins = _to_minutes(prev_pickup)
                                 if prev_mins is not None:
@@ -608,7 +616,7 @@ def attach_pickup_start_time(
                     best_time = _minutes_to_time(candidate_min)
             else:
                 if unmatched_csv_path is not None:
-                    unmatched_rows.append({"index": idx, "vendor": vendor, "order2": order2})
+                    unmatched_rows.append({"index": idx, "vendor": lookup_vendor, "order2": order2})
 
         existing = str(out.at[idx, "引取開始時間"]) if "引取開始時間" in out.columns else ""
         if existing and existing.strip() and existing.strip() != "nan" and ":" in existing:
