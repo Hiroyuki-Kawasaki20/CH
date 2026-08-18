@@ -29,7 +29,7 @@ from src.services.process_assigner import (
 from src.services.exporter import build_spo_export_df, build_groupeddata_json_for_mountain
 from src.models.constants import (
     PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, BASE_ONE_TIME, BASE_PER_PAL,
-    DEFAULT_HEIGHT_CAP, SPECIAL_HINBAN, SPECIAL_HEIGHT_CAP,
+    DEFAULT_HEIGHT_CAP, SPECIAL_HINBAN,
 )
 from src.utils.normalizer import _normalize_hhmm, _normalize_dest_name
 
@@ -67,16 +67,22 @@ class TestGrouping:
         result = assign_groups_sequential(heights, cap=2450)
         assert result == [1, 2, 3]
 
-    def test_sequential_special_hinban_uses_lower_cap_and_logs(self, caplog):
-        heights = pd.Series([1300, 900])
-        hinbans = pd.Series([SPECIAL_HINBAN, "999999999999"])
-        with caplog.at_level("DEBUG"):
-            result = assign_groups_sequential(heights, cap=DEFAULT_HEIGHT_CAP, hinbans=hinbans)
-        assert result == [1, 2]
-        assert any(
-            SPECIAL_HINBAN in record.message and str(SPECIAL_HEIGHT_CAP) in record.message
-            for record in caplog.records
-        )
+    def test_sequential_special_hinban_uses_default_cap(self):
+        """631426010000を含む山も、通常上限DEFAULT_HEIGHT_CAP(2450)で判定する（特例は解除済み）。"""
+        # #1: 2200mm(2450以内) -> 1山にまとまる
+        heights_within = pd.Series([1300, 900])
+        result_within = assign_groups_sequential(heights_within, cap=DEFAULT_HEIGHT_CAP)
+        assert result_within == [1, 1]
+
+        # #2: 2600mm(2450超過) -> 変わらず2山（無制限ではない）
+        heights_over = pd.Series([1400, 1200])
+        result_over = assign_groups_sequential(heights_over, cap=DEFAULT_HEIGHT_CAP)
+        assert result_over == [1, 2]
+
+        # #3: 2450mmちょうど -> 1山(上限は「以下」で判定)
+        heights_exact = pd.Series([1300, 1150])
+        result_exact = assign_groups_sequential(heights_exact, cap=DEFAULT_HEIGHT_CAP)
+        assert result_exact == [1, 1]
 
     def test_size1_same_bin_only_is_single_mountain(self):
         """同じNONYUHIBINのみの場合は通常積みで1山になる。"""
