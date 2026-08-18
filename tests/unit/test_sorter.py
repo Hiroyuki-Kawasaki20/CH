@@ -29,7 +29,7 @@ from src.services.process_assigner import (
 from src.services.exporter import build_spo_export_df, build_groupeddata_json_for_mountain
 from src.models.constants import (
     PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, BASE_ONE_TIME, BASE_PER_PAL,
-    DEFAULT_HEIGHT_CAP, SPECIAL_HINBAN,
+    DEFAULT_HEIGHT_CAP, SPECIAL_HINBAN, SPECIAL_HINBAN_HEIGHT_CAP,
 )
 from src.utils.normalizer import _normalize_hhmm, _normalize_dest_name
 
@@ -83,6 +83,80 @@ class TestGrouping:
         heights_exact = pd.Series([1300, 1150])
         result_exact = assign_groups_sequential(heights_exact, cap=DEFAULT_HEIGHT_CAP)
         assert result_exact == [1, 1]
+
+    def test_special_hinban_yama_uses_2500_cap_others_stay_2450(self):
+        """Issue #79 仕様#1/#3: 特例品番を含む山のみSPECIAL_HINBAN_HEIGHT_CAP(2500)まで許容する。"""
+        def _row(hinban, height, move_cost, nonyuhibin="07", vendor="店A"):
+            return {
+                "HINBAN": hinban, "サイズ種類": "1", "NONYUHIBIN": nonyuhibin,
+                "納入先": vendor, "SYUKKASAKI": vendor,
+                "高さ": height, "移動工数": move_cost, "PLANKANBANSU": 1,
+            }
+
+        # #1: 通常品番のみ、2460mm(DEFAULT_HEIGHT_CAP=2450超過) -> 2山
+        expanded_normal = pd.DataFrame([
+            _row("111111111111", 1300, 10, nonyuhibin="07"),
+            _row("222222222222", 1160, 9, nonyuhibin="07"),
+        ])
+        _, details_normal = _build_size1_mixed(expanded_normal, DEFAULT_HEIGHT_CAP, mixing_key=None)
+        assert details_normal["山通番"].nunique() == 2
+
+        # #3: 特例品番を含む、2460mm(SPECIAL_HINBAN_HEIGHT_CAP=2500以内) -> 1山
+        expanded_special = pd.DataFrame([
+            _row(SPECIAL_HINBAN, 1300, 10, nonyuhibin="08", vendor="店B"),
+            _row("333333333333", 1160, 9, nonyuhibin="08", vendor="店B"),
+        ])
+        _, details_special = _build_size1_mixed(expanded_special, DEFAULT_HEIGHT_CAP, mixing_key=None)
+        assert details_special["山通番"].nunique() == 1
+
+    def test_special_hinban_yama_exact_2500_cap_is_single_mountain(self):
+        """Issue #79 仕様#4: 特例品番を含む山で合計2500mmちょうど -> 1山（≦判定）。"""
+        def _row(hinban, height, move_cost, nonyuhibin="07", vendor="店A"):
+            return {
+                "HINBAN": hinban, "サイズ種類": "1", "NONYUHIBIN": nonyuhibin,
+                "納入先": vendor, "SYUKKASAKI": vendor,
+                "高さ": height, "移動工数": move_cost, "PLANKANBANSU": 1,
+            }
+
+        expanded = pd.DataFrame([
+            _row(SPECIAL_HINBAN, 1300, 10, nonyuhibin="10", vendor="店C"),
+            _row("444444444444", int(SPECIAL_HINBAN_HEIGHT_CAP) - 1300, 9, nonyuhibin="10", vendor="店C"),
+        ])
+        _, details = _build_size1_mixed(expanded, DEFAULT_HEIGHT_CAP, mixing_key=None)
+        assert details["山通番"].nunique() == 1
+
+    def test_special_hinban_yama_over_2500_cap_splits(self):
+        """Issue #79 仕様#5: 特例品番を含む山でもSPECIAL_HINBAN_HEIGHT_CAP(2500)は超えられないこと。"""
+        def _row(hinban, height, move_cost, nonyuhibin="07", vendor="店A"):
+            return {
+                "HINBAN": hinban, "サイズ種類": "1", "NONYUHIBIN": nonyuhibin,
+                "納入先": vendor, "SYUKKASAKI": vendor,
+                "高さ": height, "移動工数": move_cost, "PLANKANBANSU": 1,
+            }
+
+        expanded = pd.DataFrame([
+            _row(SPECIAL_HINBAN, 1300, 10, nonyuhibin="11", vendor="店D"),
+            _row("555555555555", int(SPECIAL_HINBAN_HEIGHT_CAP) - 1300 + 10, 9, nonyuhibin="11", vendor="店D"),
+        ])
+        _, details = _build_size1_mixed(expanded, DEFAULT_HEIGHT_CAP, mixing_key=None)
+        assert details["山通番"].nunique() == 2
+
+    def test_special_hinban_one_pallet_mixed_with_normal_applies_2500_cap(self):
+        """Issue #79 仕様#6: 特例品番1件＋通常品番の混載でも、山全体にcap=2500が適用されて合流すること（異なる便・納入先でのクロス統合パス）。"""
+        def _row(hinban, height, move_cost, nonyuhibin, vendor):
+            return {
+                "HINBAN": hinban, "サイズ種類": "1", "NONYUHIBIN": nonyuhibin,
+                "納入先": vendor, "SYUKKASAKI": vendor,
+                "高さ": height, "移動工数": move_cost, "PLANKANBANSU": 1,
+            }
+
+        # 特例品番側(店E/便12)と通常側(店F/便13)を別便・別納入先で用意し、統合段階でのマージを検証する。
+        expanded = pd.DataFrame([
+            _row(SPECIAL_HINBAN, 1300, 10, nonyuhibin="12", vendor="店E"),
+            _row("666666666666", 1160, 9, nonyuhibin="13", vendor="店F"),
+        ])
+        _, details = _build_size1_mixed(expanded, DEFAULT_HEIGHT_CAP, mixing_key=None)
+        assert details["山通番"].nunique() == 1
 
     def test_size1_same_bin_only_is_single_mountain(self):
         """同じNONYUHIBINのみの場合は通常積みで1山になる。"""

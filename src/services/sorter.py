@@ -8,7 +8,7 @@ import numpy as np
 
 from ..models.constants import (
     DEFAULT_HEIGHT_CAP, DEFAULT_MIXING_KEY,
-    SPECIAL_HINBAN,
+    SPECIAL_HINBAN, SPECIAL_HINBAN_HEIGHT_CAP,
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     SIZE5_TYPE, SIZE5_MAX_PALLETS_PER_YAMA,
     SPLIT_UKEIRE_ROUTES, HINO_VENDOR_PREFIX,
@@ -160,6 +160,11 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
     all_true = pd.Series(True, index=units.index)
     special_hinban_mask = units.get("_has_special_hinban", pd.Series(False, index=units.index)).astype(bool)
 
+    def _cap_for_merge(base_has_special: bool, candidates: pd.DataFrame, normal_cap: float):
+        """統合対象(g1やg1+g2)または候補が特例品番を含むならSPECIAL_HINBAN_HEIGHT_CAP、それ以外は通常capを返す（候補ごとのSeries）。"""
+        combined = candidates.get("_has_special_hinban", pd.Series(False, index=candidates.index)).astype(bool) | bool(base_has_special)
+        return np.where(combined, float(SPECIAL_HINBAN_HEIGHT_CAP), float(normal_cap))
+
     def _cross_role_allowed(base_row: pd.Series, candidate_units: pd.DataFrame) -> pd.Series:
         """base_row と candidate_units のペアが 1×21 のクロス統合として許可されるかを返す。"""
         base_has1 = bool(base_row.get("_has_size1", False))
@@ -202,13 +207,13 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         if id1 in used:
             continue
 
-        margin2 = float(height_cap) - float(g1["高さ合計"])
-        cond_same_dest_diff_bin = _forbidden_same_vendor_diff_bin(g1)
-        cond_mix2 = ~cond_same_dest_diff_bin
-
         has21_g1 = bool(g1.get("_has_size21", False))
         has1_g1 = bool(g1.get("_has_size1", False))
         has_special_g1 = bool(g1.get("_has_special_hinban", False))
+        margin2 = _cap_for_merge(has_special_g1, units, height_cap) - float(g1["高さ合計"])
+        cond_same_dest_diff_bin = _forbidden_same_vendor_diff_bin(g1)
+        cond_mix2 = ~cond_same_dest_diff_bin
+
         cond_layer2 = _cross_role_allowed(g1, units)
         if has21_g1:
             # 維持ルール: 特例品番631426010000はsize21山に載せない
@@ -231,10 +236,6 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         g2 = cand2.iloc[0]
         id2 = int(g2["山ID"])
 
-        margin3 = float(height_cap) - float(g1["高さ合計"]) - float(g2["高さ合計"])
-        cond_mix3_1 = ~_forbidden_same_vendor_diff_bin(g1)
-        cond_mix3_2 = ~_forbidden_same_vendor_diff_bin(g2)
-
         # 【特例品番フィルタ：層3用】g1 + g2 の統合フラグで判定
         has21_g1 = bool(g1.get("_has_size21", False))
         has21_g2 = bool(g2.get("_has_size21", False))
@@ -243,6 +244,10 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         has_special_g1 = bool(g1.get("_has_special_hinban", False))
         has_special_g2 = bool(g2.get("_has_special_hinban", False))
         has_special_merged = has_special_g1 | has_special_g2
+
+        margin3 = _cap_for_merge(has_special_merged, units, height_cap) - float(g1["高さ合計"]) - float(g2["高さ合計"])
+        cond_mix3_1 = ~_forbidden_same_vendor_diff_bin(g1)
+        cond_mix3_2 = ~_forbidden_same_vendor_diff_bin(g2)
 
         cond_layer3 = _cross_role_allowed(g1, units) & _cross_role_allowed(g2, units)
         if has21_merged:
@@ -418,8 +423,21 @@ def _build_size1_mixed(expanded, height_cap, mixing_key):
 
     packed_list = []
     for _, sub in size1_df.groupby(local_group_cols, sort=False):
-        sub_sorted = sub.sort_values(by=["移動工数"], ascending=[False]).copy()
-        sub_sorted["ローカルグループ番号"] = assign_groups_sequential(sub_sorted["高さ"], cap=height_cap)
+        # 特例品番(SPECIAL_HINBAN)行は通常行と分けて別capで積む（山に混在すればcap=2500になるのは後段の統合判定で処理）。
+        sub_special = sub[sub["_has_special_hinban"]].sort_values(by=["移動工数"], ascending=[False]).copy()
+        sub_normal = sub[~sub["_has_special_hinban"]].sort_values(by=["移動工数"], ascending=[False]).copy()
+        base_group = 0
+        parts = []
+        if not sub_special.empty:
+            special_groups = assign_groups_sequential(sub_special["高さ"], cap=float(SPECIAL_HINBAN_HEIGHT_CAP))
+            sub_special["ローカルグループ番号"] = [g + base_group for g in special_groups]
+            parts.append(sub_special)
+            base_group += max(special_groups)
+        if not sub_normal.empty:
+            normal_groups = assign_groups_sequential(sub_normal["高さ"], cap=height_cap)
+            sub_normal["ローカルグループ番号"] = [g + base_group for g in normal_groups]
+            parts.append(sub_normal)
+        sub_sorted = pd.concat(parts, axis=0) if parts else sub.iloc[0:0].copy()
         packed_list.append(sub_sorted)
     size1_packed = pd.concat(packed_list, axis=0).reset_index(drop=True) if packed_list else size1_df.copy()
 

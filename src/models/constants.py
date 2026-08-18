@@ -5,8 +5,10 @@
 DEFAULT_MIXING_KEY = "UKEIRE"           # 混載キーのデフォルト列名
 DEFAULT_HEIGHT_CAP = 2450               # 高さ上限（mm）
 # 2026/08 高さ特例（2165mm）は解除済み（Kawasaki指示）。
-# 本定数はサイズ21混載排除（_has_special_hinban）でのみ使用。
+# Issue #79: 特例品番を含む山はSPECIAL_HINBAN_HEIGHT_CAP(2500mm)まで許容し、
+# それ以外の通常山はDEFAULT_HEIGHT_CAP(2450mm)のまま（#78のDEFAULT一律2500案は不採用）。
 SPECIAL_HINBAN = "631426010000"         # 種類1の特例対象品番
+SPECIAL_HINBAN_HEIGHT_CAP = 2500         # 特例品番を1件でも含む山の高さ上限（mm）
 BASE_ONE_TIME = 187.64                  # 基礎一回工数
 MIDDLE_WORK = 3.247                     # 中間作業工数
 BASE_PER_PAL = 52                       # パレット単位工数
