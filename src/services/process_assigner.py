@@ -1199,7 +1199,10 @@ def _legacy_assign_processes_by_arrival_time(
                 if existing_start is not None:
                     r["実開始時間"] = _seconds_to_hhmm(existing_start)
                     r["照合追加180秒"] = bool(inspection_delay)
-                    prev_end = max(prev_end, _calc_work_end_with_breaks(existing_start, work_dur))
+                    # Issue #83: レーン床のみを下限にクランプする。旧実装はアンカー山の終了時刻へ
+                    # prev_end を下方リセットしており、床0（引継ぎなし）ではその挙動を厳密に維持する
+                    # 必要がある（max(prev_end, ...) は床0でも挙動を変え、issue52b の回帰を生んだ）。
+                    prev_end = max(int(lane_floor_secs or 0), _calc_work_end_with_breaks(existing_start, work_dur))
                     continue
 
             # リリーフ先頭は、単独山を含めて最早開始（start_floor/seq_floor）を優先する。
