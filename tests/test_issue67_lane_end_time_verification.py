@@ -182,15 +182,29 @@ class TestRegression20260805:
 
         ※ このテストが失敗した場合、最適化フェーズで前回終了時刻の床値が
            失われる実装バグの可能性がある。テストを弱めず失敗内容を報告すること。
+
+        ※ Issue #83 修正で前回終了時刻が探索フェーズにも正しく反映されるようになった。
+           本フィクスチャは床23:09を守る限りどのレーンでも締切23:30に間に合わない
+           （休憩跨ぎで終了23:45）ため、旧アサーションの「メイン配置」は探索が床を
+           無視していたバグによってのみ成立していた。本来の検証意図（前回終了時刻の
+           床の尊重）に合わせ、全レーン床＋レーン不問の開始下限検証へ更新した。
         """
         prev_main_end = 23 * 3600 + 9 * 60  # 23:09（2026-08-05 の実測最終完了時刻）
         mountains = [(1, "01", 60, 1)]
         arrivals = {"01": "23:50"}
         out_df, lane_end_times, work_map = _run(
-            mountains, arrivals, prev={PROC_MAIN: prev_main_end},
+            mountains, arrivals,
+            prev={
+                PROC_MAIN: prev_main_end,
+                PROC_RELIEF: prev_main_end,
+                PROC_OVERFLOW: prev_main_end,
+            },
         )
-        items = _lane_rows_in_start_order(out_df, PROC_MAIN, work_map)
-        assert items, "前提: 山1がメイン工程に配置されること"
-        assert items[0][0] >= prev_main_end, (
-            f"山1が前回終了時刻 23:09 より前（{items[0]}秒）に割り込んでいる"
-        )
+        assert not out_df.empty
+        for _, row in out_df.iterrows():
+            start = _to_operational_timeline_secs(_time_to_seconds(str(row["実開始時間"])))
+            assert start >= prev_main_end, (
+                f"山{int(row['山通番'])}({row['山工程']})が前回終了(23:09)より前に開始: "
+                f"{row['実開始時間']}"
+            )
+            assert bool(row.get("締切超過", False))
