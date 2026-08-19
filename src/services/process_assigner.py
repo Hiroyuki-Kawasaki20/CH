@@ -479,6 +479,13 @@ def _legacy_assign_processes_by_arrival_time(
     prev_main_end = int(prev_lane_end.get(PROC_MAIN, 0) or 0)
     prev_relief_end = int(prev_lane_end.get(PROC_RELIEF, 0) or 0)
     prev_overflow_end = int(prev_lane_end.get(PROC_OVERFLOW, 0) or 0)
+    # Issue #83: レーン別の前回終了時刻。初期割当だけでなく、後段の
+    # 再スケジュール(_schedule_proc_rows)でも開始下限として一貫参照する。
+    prev_lane_floor: Dict[str, int] = {
+        PROC_MAIN: prev_main_end,
+        PROC_RELIEF: prev_relief_end,
+        PROC_OVERFLOW: prev_overflow_end,
+    }
 
     # 入車時間マスタからマッピングを作成
     master = master_df.copy()
@@ -1142,6 +1149,7 @@ def _legacy_assign_processes_by_arrival_time(
         proc_label: str,
         prefer_deadline_order: bool = False,
         respect_existing_start: bool = True,
+        lane_floor_secs: Optional[int] = None,
     ):
         if not proc_rows:
             return
@@ -1169,7 +1177,12 @@ def _legacy_assign_processes_by_arrival_time(
                 )
             )
 
-        prev_end = 0
+        # Issue #83: 前回仕分けの同一レーン終了時刻を開始下限に反映する。
+        # 従来は prev_end=0 固定で、初期割当に入れた前回終了時刻が
+        # T0シフト・探索(_reschedule_rows)の再計算で失われていた。
+        if lane_floor_secs is None:
+            lane_floor_secs = prev_lane_floor.get(proc_label, 0)
+        prev_end = int(lane_floor_secs or 0)
         for order_idx, r in enumerate(proc_rows):
             yama_no = int(r["山通番"])
             work_dur = int(mtn_work_map.get(yama_no, 0))
@@ -1186,7 +1199,7 @@ def _legacy_assign_processes_by_arrival_time(
                 if existing_start is not None:
                     r["実開始時間"] = _seconds_to_hhmm(existing_start)
                     r["照合追加180秒"] = bool(inspection_delay)
-                    prev_end = _calc_work_end_with_breaks(existing_start, work_dur)
+                    prev_end = max(prev_end, _calc_work_end_with_breaks(existing_start, work_dur))
                     continue
 
             # リリーフ先頭は、単独山を含めて最早開始（start_floor/seq_floor）を優先する。
@@ -1500,7 +1513,8 @@ def _legacy_assign_processes_by_arrival_time(
                 int(r["山通番"]),
             )
         )
-        cur_end = 0
+        # Issue #83: 分割救済の基準時刻も前回リリーフ終了時刻から開始する。
+        cur_end = int(prev_lane_floor.get(PROC_RELIEF, 0) or 0)
         for br in base_relief:
             y = int(br["山通番"])
             w = int(mtn_work_map.get(y, 0))
