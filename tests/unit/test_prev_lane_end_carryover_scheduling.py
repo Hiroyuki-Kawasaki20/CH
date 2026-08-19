@@ -137,7 +137,13 @@ def test_relief_lane_respects_previous_relief_end_time():
 
 
 def test_no_carryover_keeps_existing_behavior():
-    """前回終了時刻なし（初回実行）では従来どおり全山メインに収まる。"""
+    """後方互換: 前回終了時刻を全レーン0で渡した結果は、引数省略時と完全一致する。
+
+    （注: 当初は「全山メインに収まる」を期待していたが、現行の探索は
+    メインに収まる場合でも山をリリーフへ分散させることがあると判明。
+    これは #83 とは無関係の既存挙動のため、本テストは「床0の明示指定が
+    既存挙動を一切変えない」ことの等価比較に改めた）
+    """
     master = _master(
         [
             (_VENDOR, "01", "10:00"),
@@ -148,7 +154,18 @@ def test_no_carryover_keeps_existing_behavior():
     cost = max(60, 840 - base)
     proc = _proc_details([(1, "02", cost), (2, "02", cost)])
 
-    out = assign_processes_by_arrival_time(proc, master)
+    out_default = assign_processes_by_arrival_time(proc.copy(), master.copy())
+    out_zero = assign_processes_by_arrival_time(
+        proc.copy(),
+        master.copy(),
+        previous_lane_end_times={
+            PROC_MAIN: 0,
+            PROC_RELIEF: 0,
+            PROC_OVERFLOW: 0,
+        },
+    )
 
-    assert not out.empty
-    assert set(out["山工程"].astype(str)) == {PROC_MAIN}
+    key_cols = ["山通番", "山工程", "実開始時間"]
+    a = out_default[key_cols].sort_values("山通番").reset_index(drop=True)
+    b = out_zero[key_cols].sort_values("山通番").reset_index(drop=True)
+    pd.testing.assert_frame_equal(a, b)
