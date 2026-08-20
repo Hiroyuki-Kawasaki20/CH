@@ -71,6 +71,8 @@ LUNCH_POST_LOCK_SECS = 35 * 60
 
 # 集荷完了の締切: 各便の入車時刻の何分前までに山を完了させるか
 PICKUP_DEADLINE_BUFFER_SECS = 20 * 60
+# EDFの休憩境界スワップ探索上限
+EDF_SWAP_MAX_ITERATIONS = 200
 
 # ===== 混載ポリシー =====
 SIZE_MIXING_POLICY = {
