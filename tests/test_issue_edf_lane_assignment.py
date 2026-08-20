@@ -23,7 +23,11 @@ def test_issue_edf_20260820_keeps_urgent_mountains_before_lunch_lock():
     )
 
     rows = {int(row["yama_no"]): row for row in result["rows"]}
-    assert result["late_count"] <= 1
+    late_rows = [row for row in result["rows"] if row["late"]]
+    assert len(late_rows) <= 1
+    for row in late_rows:
+        over = int(row["end_secs"]) - int(row["deadline_secs"])
+        assert over <= 120, f"山{row['yama_no']} の超過 {over} 秒は許容(120秒)を超過"
     assert rows[7]["end_secs"] <= 10 * 3600 + 30 * 60
     assert rows[8]["end_secs"] <= 10 * 3600 + 30 * 60
     assert rows[17]["end_secs"] <= 10 * 3600 + 30 * 60
