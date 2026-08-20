@@ -1,0 +1,26 @@
+{
+  "lane_floors": {
+    "メイン": 34440,
+    "リリーフ": 36240,
+    "あふれ": 36240
+  },
+  "mountains": [
+    {"name": "山1", "yama_no": 1, "work_secs": 660, "deadline_secs": 36600},
+    {"name": "山2", "yama_no": 2, "work_secs": 900, "deadline_secs": 36600},
+    {"name": "山3", "yama_no": 3, "work_secs": 300, "deadline_secs": 36600},
+    {"name": "山4", "yama_no": 4, "work_secs": 480, "deadline_secs": 36600},
+    {"name": "山5", "yama_no": 5, "work_secs": 480, "deadline_secs": 42000},
+    {"name": "山6", "yama_no": 6, "work_secs": 480, "deadline_secs": 42000},
+    {"name": "山7", "yama_no": 7, "work_secs": 423, "deadline_secs": 42000},
+    {"name": "山8", "yama_no": 8, "work_secs": 603, "deadline_secs": 42000},
+    {"name": "山9", "yama_no": 9, "work_secs": 300, "deadline_secs": 43800},
+    {"name": "山10", "yama_no": 10, "work_secs": 600, "deadline_secs": 44700},
+    {"name": "山11", "yama_no": 11, "work_secs": 480, "deadline_secs": 44700},
+    {"name": "山12", "yama_no": 12, "work_secs": 360, "deadline_secs": 46920},
+    {"name": "山1R", "yama_no": 13, "work_secs": 720, "deadline_secs": 44700},
+    {"name": "山2R", "yama_no": 14, "work_secs": 420, "deadline_secs": 44700},
+    {"name": "山1あ", "yama_no": 15, "work_secs": 360, "deadline_secs": 44700},
+    {"name": "山2あ", "yama_no": 16, "work_secs": 540, "deadline_secs": 44700},
+    {"name": "山3あ", "yama_no": 17, "work_secs": 664, "deadline_secs": 42000}
+  ]
+}
