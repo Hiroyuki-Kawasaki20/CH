@@ -1,4 +1,9 @@
-"""Issue #85/PR #86: public assign_processes_by_arrival_time が EDF 候補を劣化させないことを検証。"""
+"""Issue #85/#87: public assign_processes_by_arrival_time が EDF 候補を劣化させないことを検証。
+
+フィクスチャは 8/20 の実バッチから捕捉した実 proc_details・実 入車時間マスタ・
+_legacy 内部の edf_input（実工数／実解禁床／実締切）。比較対象の EDF 候補も同じ実入力から
+生成するため、公開 API と同条件の比較になる。
+"""
 
 import json
 from pathlib import Path
@@ -8,7 +13,7 @@ import pandas as pd
 from src.models.constants import PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW
 from src.services.process_assigner import _edf_list_schedule, assign_processes_by_arrival_time
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "issue_edf_20260820.json"
+_FIXTURE = Path(__file__).parent / "fixtures" / "issue_edf_20260820_v2.json"
 
 
 def _load_case():
@@ -17,7 +22,7 @@ def _load_case():
 
 def _hhmm_to_secs(value):
     s = str(value).strip()
-    if not s:
+    if not s or s.lower() == "nan":
         return 0
     hh, mm = s.split(":")
     return int(hh) * 3600 + int(mm) * 60
@@ -33,11 +38,10 @@ def _score_case(result_df, case):
         row = by_yama.get(yama_no)
         if row is None:
             continue
-        start = _hhmm_to_secs(row.get("実開始時間", "00:00"))
         end = _hhmm_to_secs(row.get("実終了時間", "00:00"))
-        deadline = int(mountain["deadline_secs"])
+        deadline = mountain["deadline_secs"]
         finish_secs = max(finish_secs, end)
-        if end > deadline:
+        if deadline is not None and end > int(deadline):
             late_count += 1
     return late_count, finish_secs
 
@@ -63,47 +67,37 @@ def _secs_to_hhmm(value):
     return f"{hh:02d}:{mm:02d}"
 
 
-def _build_master_from_fixture_deadlines(case):
-    rows = []
-    for mountain in sorted(case["mountains"], key=lambda m: int(m["yama_no"])):
-        yama_no = int(mountain["yama_no"])
-        pickup_secs = int(mountain["deadline_secs"]) + 20 * 60
-        rows.append(
-            {
-                "OData_納入先": "TEST",
-                "NONYUHIBIN": f"{yama_no:02d}",
-                "入車時間": _secs_to_hhmm(pickup_secs),
-            }
-        )
-    return pd.DataFrame(rows)
+def _build_master(case):
+    return pd.DataFrame(case["master_rows"])
+
+
+def _build_proc_details(case):
+    return pd.DataFrame(case["proc_rows"])
+
+
+def _lane_floors(case):
+    return {lane: int(case["lane_floors"][lane]) for lane in (PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW)}
+
+
+def _edf_yamas(case):
+    return [
+        {**m, "日野便番号セット": set(m.get("日野便番号セット") or [])}
+        for m in case["mountains"]
+    ]
 
 
 def test_assign_processes_by_arrival_time_should_not_worsen_edf_candidate():
     case = _load_case()
-    proc_rows = [
-        {
-            "山通番": int(m["yama_no"]),
-            "納入先": "TEST",
-            "NONYUHIBIN": f"{int(m['yama_no']):02d}",
-            "移動工数": int(m["work_secs"]),
-        }
-        for m in case["mountains"]
-    ]
-    master_df = _build_master_from_fixture_deadlines(case)
 
     result = assign_processes_by_arrival_time(
-        pd.DataFrame(proc_rows),
-        master_df,
-        previous_lane_end_times={
-            PROC_MAIN: int(case["lane_floors"][PROC_MAIN]),
-            PROC_RELIEF: int(case["lane_floors"][PROC_RELIEF]),
-            PROC_OVERFLOW: int(case["lane_floors"][PROC_OVERFLOW]),
-        },
+        _build_proc_details(case),
+        _build_master(case),
+        previous_lane_end_times=_lane_floors(case),
     )
 
     edf_candidate = _edf_list_schedule(
-        case["mountains"],
-        case["lane_floors"],
+        _edf_yamas(case),
+        _lane_floors(case),
         enabled_lanes=(PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW),
     )
 
@@ -119,25 +113,11 @@ def test_assign_processes_by_arrival_time_should_not_worsen_edf_candidate():
 def test_assign_processes_by_arrival_time_meets_absolute_criteria():
     """公開 API の出力が絶対合格基準を満たすことを検証。"""
     case = _load_case()
-    proc_rows = [
-        {
-            "山通番": int(m["yama_no"]),
-            "納入先": "TEST",
-            "NONYUHIBIN": f"{int(m['yama_no']):02d}",
-            "移動工数": int(m["work_secs"]),
-        }
-        for m in case["mountains"]
-    ]
-    master_df = _build_master_from_fixture_deadlines(case)
 
     result = assign_processes_by_arrival_time(
-        pd.DataFrame(proc_rows),
-        master_df,
-        previous_lane_end_times={
-            PROC_MAIN: int(case["lane_floors"][PROC_MAIN]),
-            PROC_RELIEF: int(case["lane_floors"][PROC_RELIEF]),
-            PROC_OVERFLOW: int(case["lane_floors"][PROC_OVERFLOW]),
-        },
+        _build_proc_details(case),
+        _build_master(case),
+        previous_lane_end_times=_lane_floors(case),
     )
 
     rows = result.to_dict(orient="records")
@@ -151,8 +131,8 @@ def test_assign_processes_by_arrival_time_meets_absolute_criteria():
         if row is None:
             continue
         end = _hhmm_to_secs(row.get("実終了時間", "00:00"))
-        deadline = int(mountain["deadline_secs"])
-        if end > deadline:
+        deadline = mountain["deadline_secs"]
+        if deadline is not None and end > int(deadline):
             late_count += 1
 
     assert late_count <= 2, f"締切超過件数が基準を超過: {late_count} > 2"
@@ -176,11 +156,7 @@ def test_assign_processes_by_arrival_time_meets_absolute_criteria():
     assert relief_count >= 1, f"リリーフレーンが空: {relief_count} 山"
 
     # (4) 各レーンの開始時刻が床以上
-    lane_floors = {
-        PROC_MAIN: 34440,
-        PROC_RELIEF: 36240,
-        PROC_OVERFLOW: 36240,
-    }
+    lane_floors = _lane_floors(case)
     for lane in (PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW):
         lane_rows = [r for r in rows if str(r.get("山工程", "")) == lane]
         floor = lane_floors[lane]
