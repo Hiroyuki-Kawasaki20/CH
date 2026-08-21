@@ -2186,7 +2186,7 @@ def _legacy_assign_processes_by_arrival_time(
     _serialize_lanes_final(results)
 
     selected_rows = list(results)
-    if n_yamas >= EDF_COMPARE_MIN_YAMAS:
+    if n_yamas > EDF_COMPARE_MIN_YAMAS:
         existing_evaluation = _final_score_rows(results)
         edf_result = _edf_candidate_to_rows(edf_candidate["rows"])
         edf_evaluation = _final_score_rows(edf_result)
@@ -2230,7 +2230,7 @@ def assign_processes_by_arrival_time(
 
     if proc_details is not None and not proc_details.empty:
         yama_count = int(pd.Series(proc_details["山通番"]).astype(int).nunique())
-        if yama_count >= EDF_COMPARE_MIN_YAMAS:
+        if yama_count > EDF_COMPARE_MIN_YAMAS:
             normalized_master = master_df.copy() if master_df is not None else pd.DataFrame()
             if not normalized_master.empty:
                 normalized_master = normalized_master.copy()
