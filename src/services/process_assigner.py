@@ -22,6 +22,7 @@ from ..models.constants import (
     SHIFT_FIRST_TRIP_BUFFER_SECS, FIRST_BIN_RELEASE_BUFFER_SECS,
     LUNCH_PRE_MARGIN_SECS, LUNCH_POST_RESUME_SECS, LUNCH_POST_LOCK_SECS,
     PICKUP_DEADLINE_BUFFER_SECS,
+    EDF_COMPARE_MIN_YAMAS,
     EDF_SWAP_MAX_ITERATIONS,
     SPLIT_UKEIRE_ROUTES,
 )
@@ -1734,7 +1735,8 @@ def _legacy_assign_processes_by_arrival_time(
     results = best_snapshot
 
     # 大規模日では、既存の2レーン探索に加えてEDF 3レーン候補を比較する。
-    # 既存候補より評価が悪い場合は従来結果を維持する。
+    # 比較は後段のあふれ再判定・最終整列まで完了した結果で行い、
+    # 途中の一時的な候補置換が最終出力を悪化させないようにする。
     edf_input = [
         {
             "yama_no": int(m["山通番"]),
@@ -1771,21 +1773,40 @@ def _legacy_assign_processes_by_arrival_time(
                 late_seconds += int(end - deadline_eval)
         return late_count, late_seconds, finish_secs, len(used_lanes)
 
-    existing_evaluation = _assignment_evaluation(results)
-    edf_rows_by_yama = {int(row["yama_no"]): row for row in edf_candidate["rows"]}
-    edf_result = copy.deepcopy(results)
-    for row in edf_result:
-        edf_row = edf_rows_by_yama.get(int(row["山通番"]))
-        if edf_row is None:
-            continue
-        row["山工程"] = edf_row["lane"]
-        row["実開始時間"] = _seconds_to_hhmm(int(edf_row["start_secs"]))
-        row["実終了時間"] = _seconds_to_hhmm(int(edf_row["end_secs"]))
-        row["照合追加180秒"] = bool(edf_row.get("inspection_delay"))
-        row["_end_secs"] = int(edf_row["end_secs"])
-    # 小規模ケースは既存全探索の結果をそのまま採用し、互換性を保つ。
-    if n_yamas >= 17 and _assignment_evaluation(edf_result) < existing_evaluation:
-        results = edf_result
+    def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int]:
+        late_count = 0
+        finish_secs = 0
+        by_yama = {int(r["山通番"]): r for r in target_rows}
+        for mountain in mountain_info:
+            yama_no = int(mountain["山通番"])
+            row = by_yama.get(yama_no)
+            if row is None:
+                continue
+            start = _time_to_seconds(row.get("実開始時間", ""))
+            if start is None:
+                continue
+            end = _calc_work_end_with_breaks(start, int(mtn_work_map.get(yama_no, 0)))
+            finish_secs = max(finish_secs, int(end))
+            deadline = mtn_deadline_map.get(yama_no)
+            if deadline is not None:
+                deadline_eval = _deadline_for_eval(deadline, start)
+                if deadline_eval is not None and end > int(deadline_eval):
+                    late_count += 1
+        return late_count, finish_secs
+
+    def _edf_candidate_to_rows(candidate_rows: List[dict]) -> List[dict]:
+        out_rows: List[dict] = []
+        for edf_row in candidate_rows:
+            yama_no = int(edf_row["yama_no"])
+            out_rows.append({
+                "山通番": yama_no,
+                "山工程": edf_row["lane"],
+                "実開始時間": _seconds_to_hhmm(int(edf_row["start_secs"])),
+                "実終了時間": _seconds_to_hhmm(int(edf_row["end_secs"])),
+                "照合追加180秒": bool(edf_row.get("inspection_delay")),
+                "_end_secs": int(edf_row["end_secs"]),
+            })
+        return out_rows
 
     # ── あふれ判定: リリーフでも締切超過する山を「あふれ」工程に振り分け ──
     # あふれ山の開始時間 = 対象便の前便入車+10分（mtn_start_floor_map）
@@ -1865,10 +1886,11 @@ def _legacy_assign_processes_by_arrival_time(
             if yama_no in overflow_yama_set:
                 r["山工程"] = PROC_OVERFLOW
                 # あふれ開始は「前便入車+10分」を優先（未算出時は既存start_floorへフォールバック）。
+                # Issue #85: 1件目だけでなく、全あふれ山が同じ床を参照して開始下限を守るべき。
+                # あふれレーンは 1 山目だけでなく、全山で同じ床を起点に再スケジュールする。
+                # これにより、前回あふれ終了時刻が 2 山目以降にも正しく適用される。
                 floor = mtn_prev_arrival_floor_map.get(yama_no) or (mtn_start_floor_map.get(yama_no) or 0)
-                if not overflow_started:
-                    floor = max(int(floor), prev_overflow_end)
-                    overflow_started = True
+                floor = max(int(floor), prev_overflow_end)
                 work_dur = int(mtn_work_map.get(yama_no, 0))
                 overflow_start = _adjust_start_for_breaks(floor, work_dur)
                 r["実開始時間"] = _seconds_to_hhmm(overflow_start)
@@ -1921,10 +1943,9 @@ def _legacy_assign_processes_by_arrival_time(
             yy = int(rr["山通番"])
             if yy in overflow_set:
                 rr["山工程"] = PROC_OVERFLOW
+                # あふれ山が複数ある場合も、各山で最終の overflow 床を上限として再スケジュールする。
                 floor = mtn_prev_arrival_floor_map.get(yy) or (mtn_start_floor_map.get(yy) or 0)
-                if not overflow_started:
-                    floor = max(int(floor), prev_overflow_end)
-                    overflow_started = True
+                floor = max(int(floor), prev_overflow_end)
                 work_dur = int(mtn_work_map.get(yy, 0))
                 overflow_start = _adjust_start_for_breaks(floor, work_dur)
                 rr["実開始時間"] = _seconds_to_hhmm(overflow_start)
@@ -2164,16 +2185,27 @@ def _legacy_assign_processes_by_arrival_time(
     _finalize_inspection_delay_flags(results)
     _serialize_lanes_final(results)
 
-    for r in results:
+    selected_rows = list(results)
+    if n_yamas >= EDF_COMPARE_MIN_YAMAS:
+        existing_evaluation = _final_score_rows(results)
+        edf_result = _edf_candidate_to_rows(edf_candidate["rows"])
+        edf_evaluation = _final_score_rows(edf_result)
+        adopted = False
+        if edf_evaluation <= existing_evaluation:
+            selected_rows = list(edf_result)
+            adopted = True
+        _logger.info("EDF比較: existing=%s edf=%s n=%d adopted=%s", existing_evaluation, edf_evaluation, n_yamas, adopted)
+
+    for r in selected_rows:
         r.pop("_is_anchored", None)
     lane_end_times = {PROC_MAIN: 0, PROC_RELIEF: 0, PROC_OVERFLOW: 0}
-    for r in results:
+    for r in selected_rows:
         lab = str(r.get("山工程", ""))
         end_secs = r.get("_end_secs")
         if lab in lane_end_times and end_secs is not None:
             lane_end_times[lab] = max(int(lane_end_times[lab]), int(end_secs))
 
-    out_df = pd.DataFrame(results).sort_values("山通番").reset_index(drop=True)
+    out_df = pd.DataFrame(selected_rows).sort_values("山通番").reset_index(drop=True)
     if "_end_secs" in out_df.columns:
         out_df = out_df.drop(columns=["_end_secs"])
 
@@ -2195,6 +2227,99 @@ def assign_processes_by_arrival_time(
         previous_lane_end_times=previous_lane_end_times,
         return_lane_end_times=True,
     )
+
+    if proc_details is not None and not proc_details.empty:
+        yama_count = int(pd.Series(proc_details["山通番"]).astype(int).nunique())
+        if yama_count >= EDF_COMPARE_MIN_YAMAS:
+            normalized_master = master_df.copy() if master_df is not None else pd.DataFrame()
+            if not normalized_master.empty:
+                normalized_master = normalized_master.copy()
+                normalized_master["OData_納入先"] = normalized_master["OData_納入先"].astype(str).str.strip().apply(_normalize_dest_name)
+                normalized_master["NONYUHIBIN"] = normalized_master["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
+                normalized_master["入車時間"] = normalized_master["入車時間"].astype(str).str.strip()
+
+            mountain_info = []
+            for yama_no in sorted(proc_details["山通番"].astype(int).unique()):
+                sub = proc_details[proc_details["山通番"].astype(int) == int(yama_no)]
+                work_secs = int(pd.to_numeric(sub["移動工数"], errors="coerce").max() or 0)
+                deadlines = []
+                for _, row in sub.iterrows():
+                    vendor = _normalize_dest_name(str(row.get("納入先", "")).strip() or str(row.get("OData_納入先", "")).strip())
+                    nony = str(row.get("NONYUHIBIN", "")).strip().translate(_ZEN2HAN_DIGIT_COLON)
+                    if not vendor or not nony or normalized_master.empty:
+                        continue
+                    try:
+                        candidate = normalized_master[
+                            (normalized_master["OData_納入先"] == vendor) &
+                            (normalized_master["NONYUHIBIN"] == nony)
+                        ].iloc[0]
+                    except IndexError:
+                        continue
+                    pickup_secs = _to_operational_timeline_secs(_time_to_seconds(str(candidate["入車時間"])))
+                    if pickup_secs is None:
+                        continue
+                    deadlines.append(max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS))
+                mountain_info.append({
+                    "yama_no": int(yama_no),
+                    "work_secs": work_secs,
+                    "deadline_secs": min(deadlines) if deadlines else None,
+                    "start_floor_secs": 0,
+                    "日野便番号セット": set(),
+                })
+
+            if mountain_info:
+                lane_floor = previous_lane_end_times or {}
+                edf_candidate = _edf_list_schedule(
+                    mountain_info,
+                    {
+                        PROC_MAIN: int(lane_floor.get(PROC_MAIN, 0) or 0),
+                        PROC_RELIEF: int(lane_floor.get(PROC_RELIEF, 0) or 0),
+                        PROC_OVERFLOW: int(lane_floor.get(PROC_OVERFLOW, 0) or 0),
+                    },
+                    enabled_lanes=(PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW),
+                )
+                edf_df = pd.DataFrame([
+                    {
+                        "山通番": int(r["yama_no"]),
+                        "山工程": r["lane"],
+                        "実開始時間": _seconds_to_hhmm(int(r["start_secs"])),
+                        "実終了時間": _seconds_to_hhmm(int(r["end_secs"])),
+                    }
+                    for r in edf_candidate["rows"]
+                ]).sort_values("山通番").reset_index(drop=True)
+                if not edf_df.empty:
+                    def _score_result(df: pd.DataFrame) -> Tuple[int, int]:
+                        late_count = 0
+                        finish_secs = 0
+                        rows = df.to_dict(orient="records")
+                        by_yama = {int(r["山通番"]): r for r in rows}
+                        for m in mountain_info:
+                            yama_no = int(m["yama_no"])
+                            row = by_yama.get(yama_no)
+                            if row is None:
+                                continue
+                            start = _time_to_seconds(str(row.get("実開始時間", "")))
+                            end = _time_to_seconds(str(row.get("実終了時間", "")))
+                            if start is None or end is None:
+                                continue
+                            finish_secs = max(finish_secs, int(end))
+                            ddl = m.get("deadline_secs")
+                            if ddl is not None and int(end) > int(ddl):
+                                late_count += 1
+                        return late_count, finish_secs
+                    current_score = _score_result(out_df)
+                    edf_score = _score_result(edf_df)
+                    if edf_score <= current_score:
+                        out_df = edf_df
+                        lane_end_times = {PROC_MAIN: 0, PROC_RELIEF: 0, PROC_OVERFLOW: 0}
+                        for lane in (PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW):
+                            lane_rows = out_df[out_df["山工程"] == lane]
+                            if lane_rows.empty:
+                                continue
+                            lane_end_times[lane] = max(
+                                _time_to_seconds(str(r["実終了時間"])) for _, r in lane_rows.iterrows()
+                            )
+
     if return_lane_end_times:
         return out_df, lane_end_times
     return out_df

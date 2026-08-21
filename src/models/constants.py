@@ -71,6 +71,9 @@ LUNCH_POST_LOCK_SECS = 35 * 60
 
 # 集荷完了の締切: 各便の入車時刻の何分前までに山を完了させるか
 PICKUP_DEADLINE_BUFFER_SECS = 20 * 60
+# EDF比較を行う最小山数。15山以上で3レーン採用を評価する。
+# 実運用では 15 山でも EDF で採用されるケースがあるため、閾値を緩める。
+EDF_COMPARE_MIN_YAMAS = 15
 # EDFの休憩境界スワップ探索上限
 EDF_SWAP_MAX_ITERATIONS = 200
 
