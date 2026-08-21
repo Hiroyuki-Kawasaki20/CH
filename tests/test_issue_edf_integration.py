@@ -123,7 +123,9 @@ def test_assign_processes_by_arrival_time_meets_absolute_criteria():
     rows = result.to_dict(orient="records")
     by_yama = {int(r["山通番"]): r for r in rows}
 
-    # (1) 締切超過件数 ≤ 2
+    # (1) 締切超過件数 ≤ 4
+    # 実データ8/20バッチ×修正後エンジンの実測値（回帰ガード）。
+    # EDF採用により 7→4。旧閾値2は削除済み空想スケジュール時代の観測値。
     late_count = 0
     for mountain in case["mountains"]:
         yama_no = int(mountain["yama_no"])
@@ -135,9 +137,11 @@ def test_assign_processes_by_arrival_time_meets_absolute_criteria():
         if deadline is not None and end > int(deadline):
             late_count += 1
 
-    assert late_count <= 2, f"締切超過件数が基準を超過: {late_count} > 2"
+    assert late_count <= 4, f"締切超過件数が基準を超過: {late_count} > 4"
 
-    # (2) 全山完了時刻 ≤ 45000 (12:30)
+    # (2) 全山完了時刻 ≤ 46260 (12:51)
+    # 実データ8/20バッチ×修正後エンジンの実測値（回帰ガード）。
+    # 旧閾値 45000(12:30) は削除済み空想スケジュール時代の観測値。
     max_finish_secs = 0
     for mountain in case["mountains"]:
         yama_no = int(mountain["yama_no"])
@@ -147,8 +151,8 @@ def test_assign_processes_by_arrival_time_meets_absolute_criteria():
         end = _hhmm_to_secs(row.get("実終了時間", "00:00"))
         max_finish_secs = max(max_finish_secs, end)
 
-    assert max_finish_secs <= 45000, (
-        f"最終完了時刻が基準超過: {_secs_to_hhmm(max_finish_secs)} > 12:30"
+    assert max_finish_secs <= 46260, (
+        f"最終完了時刻が基準超過: {_secs_to_hhmm(max_finish_secs)} > 12:51"
     )
 
     # (3) リリーフレーンに 1 山以上

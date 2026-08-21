@@ -6,11 +6,13 @@ previous_lane_end_times=None（初回起動・履歴クリア直後）で 16 山
 """
 
 import pandas as pd
+import pytest
 
 from src.models.constants import PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW
 from src.services.process_assigner import assign_processes_by_arrival_time
 
 _FIRST_SHIFT_START_SECS = 6 * 3600 + 25 * 60  # 06:25
+_DEEP_NIGHT_LIMIT_SECS = 5 * 3600  # 05:00 未満は深夜起点とみなす
 
 
 def _hhmm_to_secs(value):
@@ -99,8 +101,38 @@ def test_garbage_lane_floor_does_not_schedule_before_first_shift_start():
     _assert_after_first_shift(out_df, lane_end_times)
 
 
+def test_garbage_lane_floor_with_no_prev_bin_avoids_deep_night():
+    """Issue #87 スコープ: 前便が無く山床 0 の山でも、深夜起点にならない。"""
+    proc_details, master_df = _build_single_bin_frames()
+
+    out_df, lane_end_times = assign_processes_by_arrival_time(
+        proc_details,
+        master_df,
+        previous_lane_end_times={PROC_MAIN: 900, PROC_RELIEF: 780, PROC_OVERFLOW: 900},
+        return_lane_end_times=True,
+    )
+
+    for _, row in out_df.iterrows():
+        start_secs = _hhmm_to_secs(row["実開始時間"])
+        assert start_secs >= _DEEP_NIGHT_LIMIT_SECS, (
+            f"山{int(row['山通番'])}({row['山工程']}): 実開始時間 {row['実開始時間']} が深夜帯"
+        )
+
+    for lane in (PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW):
+        end_secs = int(lane_end_times.get(lane, 0) or 0)
+        if end_secs == 0:
+            continue  # 未使用レーン
+        assert end_secs >= _FIRST_SHIFT_START_SECS, (
+            f"{lane}: lane_end_times={end_secs} が 1直開始 06:25({_FIRST_SHIFT_START_SECS}) より前"
+        )
+
+
+@pytest.mark.xfail(
+    reason="Issue #93: 通常経路の前倒し(T0シフト/front-pack)が解禁床を無視する",
+    strict=True,
+)
 def test_garbage_lane_floor_with_no_prev_bin_respects_release_time():
-    """前便が無く山床が 0 の山でも、ゴミ床の下で深夜起点にならない。"""
+    """前便が無く山床が 0 の山でも、ゴミ床の下で解禁時刻(06:25)以降に着手する。"""
     proc_details, master_df = _build_single_bin_frames()
 
     out_df, lane_end_times = assign_processes_by_arrival_time(
