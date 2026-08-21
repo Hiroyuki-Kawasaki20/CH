@@ -71,6 +71,11 @@ LUNCH_POST_LOCK_SECS = 35 * 60
 
 # 集荷完了の締切: 各便の入車時刻の何分前までに山を完了させるか
 PICKUP_DEADLINE_BUFFER_SECS = 20 * 60
+# EDF比較の下限値。実運用データに 15 山ケースがあるため 15 に緩和するが、
+# 15 山の通常ビーム探索経路では既存の安定動作を優先し、EDF比較は 16 山以上でのみ適用する。
+EDF_COMPARE_MIN_YAMAS = 15
+# EDFの休憩境界スワップ探索上限
+EDF_SWAP_MAX_ITERATIONS = 200
 
 # ===== 混載ポリシー =====
 SIZE_MIXING_POLICY = {
