@@ -1884,6 +1884,35 @@ def _legacy_assign_processes_by_arrival_time(
 
         return True, first_start
 
+    def _can_relief_at_floor(yama_no: int, target_rows: List[dict]) -> bool:
+        """床以降の締切順リリーフ再配置で全リリーフ山が成立するか確認する。"""
+        trial_rows = copy.deepcopy(target_rows)
+        target = next(
+            (rr for rr in trial_rows if int(rr["山通番"]) == int(yama_no)),
+            None,
+        )
+        if target is None:
+            return False
+        _reset_row_after_lane_change(target, PROC_RELIEF)
+        relief_rows = [rr for rr in trial_rows if rr.get("山工程") == PROC_RELIEF]
+        _schedule_proc_rows(
+            relief_rows,
+            PROC_RELIEF,
+            prefer_deadline_order=True,
+            lane_floor_secs=prev_relief_end,
+        )
+        for rr in relief_rows:
+            yy = int(rr["山通番"])
+            ddl = mtn_deadline_map.get(yy)
+            st = _time_to_seconds(rr.get("実開始時間", ""))
+            if ddl is None or st is None:
+                continue
+            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
+            ddl_for_eval = _deadline_for_eval(ddl, st)
+            if ddl_for_eval is not None and en > int(ddl_for_eval):
+                return False
+        return True
+
     overflow_yama_set = set()
     for r in results:
         if r.get("山工程") != PROC_RELIEF:
@@ -1994,6 +2023,75 @@ def _legacy_assign_processes_by_arrival_time(
             ddl_for_eval = _deadline_for_eval(ddl, st)
             if ddl_for_eval is not None and en > int(ddl_for_eval):
                 return True
+        return False
+
+    def _deadline_violation_set(target_rows: List[dict]) -> set:
+        violations = set()
+        for rr in target_rows:
+            yy = int(rr["山通番"])
+            ddl = mtn_deadline_map.get(yy)
+            st = _time_to_seconds(rr.get("実開始時間", ""))
+            if ddl is None or st is None:
+                continue
+            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
+            ddl_for_eval = _deadline_for_eval(ddl, st)
+            if ddl_for_eval is not None and en > int(ddl_for_eval):
+                violations.add(yy)
+        return violations
+
+    def _try_repromote_overflow_to_relief(target_rows: List[dict]) -> bool:
+        """あふれ山を締切順にリリーフへ戻し、全山の締切を再検証する。"""
+        candidates = sorted(
+            (
+                int(rr["山通番"]),
+                mtn_deadline_map.get(int(rr["山通番"])),
+            )
+            for rr in target_rows
+            if rr.get("山工程") == PROC_OVERFLOW
+            and mtn_deadline_map.get(int(rr["山通番"])) is not None
+        )
+        for yama_no, _ in candidates:
+            trial_rows = copy.deepcopy(target_rows)
+            existing_violations = _deadline_violation_set(target_rows)
+            target = next(
+                (rr for rr in trial_rows if int(rr["山通番"]) == yama_no),
+                None,
+            )
+            if target is None:
+                continue
+            _reset_row_after_lane_change(target, PROC_RELIEF)
+            relief_rows = [
+                rr for rr in trial_rows
+                if rr.get("山工程") == PROC_RELIEF and int(rr["山通番"]) != yama_no
+            ]
+            relief_end = int(prev_relief_end)
+            for rr in sorted(
+                relief_rows,
+                key=lambda row: (
+                    _time_to_seconds(row.get("実開始時間", "99:99")) is None,
+                    _time_to_seconds(row.get("実開始時間", "99:99")) or float("inf"),
+                    int(row["山通番"]),
+                ),
+            ):
+                start = _time_to_seconds(rr.get("実開始時間", ""))
+                if start is None:
+                    continue
+                relief_end = max(
+                    relief_end,
+                    int(_calc_work_end_with_breaks(start, int(mtn_work_map.get(int(rr["山通番"]), 0)))),
+                )
+            floor = max(
+                int(mtn_prev_arrival_floor_map.get(yama_no) or 0),
+                int(mtn_start_floor_map.get(yama_no) or 0),
+            )
+            new_start = _adjust_start_for_breaks(max(relief_end, floor), int(mtn_work_map.get(yama_no, 0)))
+            target["実開始時間"] = _seconds_to_hhmm(new_start)
+            target["_end_secs"] = int(_calc_work_end_with_breaks(new_start, int(mtn_work_map.get(yama_no, 0))))
+            new_violations = _deadline_violation_set(trial_rows) - existing_violations
+            if new_violations:
+                continue
+            target_rows[:] = trial_rows
+            return True
         return False
 
     def _fits_idle_gap_on_main(
@@ -2221,6 +2319,16 @@ def _legacy_assign_processes_by_arrival_time(
             selected_rows = list(edf_result)
             adopted = True
         _logger.info("EDF比較: existing=%s edf=%s n=%d adopted=%s", existing_evaluation, edf_evaluation, n_yamas, adopted)
+
+    if n_yamas > EXHAUSTIVE_THRESHOLD and any(
+        rr.get("山工程") == PROC_OVERFLOW
+        and "04" in mtn_hino_bins_map.get(int(rr["山通番"]), set())
+        for rr in selected_rows
+    ):
+        _try_front_pack_to_main_idle_gap(selected_rows)
+        while _try_repromote_overflow_to_relief(selected_rows):
+            pass
+        _serialize_lanes_final(selected_rows)
 
     for r in selected_rows:
         r.pop("_is_anchored", None)
