@@ -88,10 +88,6 @@ def _assert_all_mountains_feasible(mixed_details, master_df):
         )
 
 
-@pytest.mark.xfail(
-    reason="Issue #96: 混載判定が床vs締切を見ず、救済も前便をマスタから引かないため詰み山ができる",
-    strict=True,
-)
 def test_mixed_mountain_does_not_pair_incompatible_floor_and_deadline():
     master_df = _master([
         ("拠点A", "06", "13:00"),  # 前便（当日データには居ない）→ 07便の床は13:10
