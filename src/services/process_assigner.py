@@ -402,7 +402,7 @@ def _edf_schedule_score(schedule: dict) -> Tuple[int, int, int, int]:
     late_seconds = sum(max(0, int(row["end_secs"]) - int(row["deadline_secs"])) for row in late_rows)
     finish_secs = max((int(row["end_secs"]) for row in schedule.get("rows", [])), default=0)
     used_lanes = len(schedule.get("used_lanes", []))
-    return len(late_rows), late_seconds, finish_secs, used_lanes
+    return len(late_rows), late_seconds, used_lanes, finish_secs
 
 
 def _schedule_edf_lane_rows(lane_rows: List[dict], lane_floor: int) -> List[dict]:
@@ -579,8 +579,15 @@ def _edf_list_schedule(
                     and int(item["deadline_secs"]) <= boundary
                     and int(item["end_secs"]) > boundary
                 )
+                relief_overflow_count = sum(
+                    len(trial[candidate_lane])
+                    for candidate_lane in enabled_lanes
+                    if candidate_lane != PROC_MAIN
+                )
                 finish_secs = max((int(item["end_secs"]) for item in scheduled_rows), default=0)
-                candidates.append(((late_count, late_seconds, boundary_overruns, finish_secs), trial))
+                candidates.append(
+                    ((late_count, late_seconds, relief_overflow_count, boundary_overruns, finish_secs), trial)
+                )
         if not candidates:
             # 全レーンが日野隣接禁止に該当する場合は、最短終了候補を残す。
             state = beam[0]
@@ -595,7 +602,7 @@ def _edf_list_schedule(
                     )
                 ]
                 finish_secs = max((int(item["end_secs"]) for item in scheduled_rows), default=0)
-                candidates.append(((0, 0, 0, finish_secs), trial))
+                candidates.append(((0, 0, 0, 0, finish_secs), trial))
         candidates.sort(key=lambda item: item[0])
         beam = [state for _, state in candidates[:64]]
     lanes = min(
@@ -1789,8 +1796,9 @@ def _legacy_assign_processes_by_arrival_time(
                 late_seconds += int(end - deadline_eval)
         return late_count, late_seconds, finish_secs, len(used_lanes)
 
-    def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int]:
+    def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int]:
         late_count = 0
+        relief_overflow_count = 0
         finish_secs = 0
         by_yama = {int(r["山通番"]): r for r in target_rows}
         for mountain in mountain_info:
@@ -1798,6 +1806,8 @@ def _legacy_assign_processes_by_arrival_time(
             row = by_yama.get(yama_no)
             if row is None:
                 continue
+            if str(row.get("山工程", "")) != PROC_MAIN:
+                relief_overflow_count += 1
             start = _time_to_seconds(row.get("実開始時間", ""))
             if start is None:
                 continue
@@ -1808,7 +1818,7 @@ def _legacy_assign_processes_by_arrival_time(
                 deadline_eval = _deadline_for_eval(deadline, start)
                 if deadline_eval is not None and end > int(deadline_eval):
                     late_count += 1
-        return late_count, finish_secs
+        return late_count, relief_overflow_count, finish_secs
 
     def _edf_candidate_to_rows(candidate_rows: List[dict]) -> List[dict]:
         out_rows: List[dict] = []
@@ -2207,7 +2217,7 @@ def _legacy_assign_processes_by_arrival_time(
         edf_result = _edf_candidate_to_rows(edf_candidate["rows"])
         edf_evaluation = _final_score_rows(edf_result)
         adopted = False
-        if edf_evaluation <= existing_evaluation:
+        if edf_evaluation < existing_evaluation:
             selected_rows = list(edf_result)
             adopted = True
         _logger.info("EDF比較: existing=%s edf=%s n=%d adopted=%s", existing_evaluation, edf_evaluation, n_yamas, adopted)
