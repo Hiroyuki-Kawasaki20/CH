@@ -1,16 +1,13 @@
 # -*- coding: utf-8 -*-
-# -*- coding: utf-8 -*-
-"""Issue #97: 不要な「あふれ」レーン投入の再現テスト（strict xfail・実データスナップショット）
+"""Issue #97: 不要な「あふれ」レーン投入の回帰テスト（実データスナップショット）
 
 2026-08-24 19:54 実行の実データ（20山）で、日野04便（NONYUHIBIN 下2桁=04）の3山が
 あふれ工程へ振られた。実際は床(19:16)開始で全山締切超過なし・リリーフは17:59以降空き。
-期待値の根拠: 出力スナップショットは別途保管。
+期待値の根拠: output_snapshot_20260824_1954.xlsx（19:54 実行出力そのもの）。
 """
 from pathlib import Path
 
 import pandas as pd
-import pytest
-
 from src.services import process_assigner as pa
 from src.services.data_loader import load_pickup_time_master_xlsx
 from tests.unit.test_relief_earliest_start import (
@@ -39,12 +36,19 @@ def _hino04_yamas(details_df: pd.DataFrame) -> set:
 
 
 def _floor_map_for(details_df, master_df, yamas):
-    """対象山ごとの床（前便入車 + ARRIVAL_BUFFER_SECS の最大）を計算。日野04便は≈19:16。"""
+    """対象山ごとの床を本番と同じ前便規則で計算する。"""
     m = master_df.copy()
     m["OData_納入先"] = m["OData_納入先"].astype(str).str.strip().map(pa._normalize_dest_name)
     m["NONYUHIBIN"] = m["NONYUHIBIN"].astype(str).str.strip()
     m["入車時間"] = m["入車時間"].astype(str).str.strip()
     master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in m.iterrows()}
+    vendor_bin_numbers = {}
+    for vendor, order in master_map:
+        try:
+            vendor_bin_numbers.setdefault(vendor, set()).add(int(order))
+        except (TypeError, ValueError):
+            continue
+    vendor_bin_numbers = {vendor: sorted(bins) for vendor, bins in vendor_bin_numbers.items()}
 
     floors = {}
     for yama in yamas:
@@ -55,13 +59,32 @@ def _floor_map_for(details_df, master_df, yamas):
             order2 = nony[-2:] if len(nony) >= 2 else ""
             if not vendor or not order2:
                 continue
-            if vendor == "KVC":
+            if vendor == "日野":
+                try:
+                    current_bin = int(order2)
+                    lane_count = pa._get_lane_count(vendor)
+                    prev_bin = pa._get_prev_bin_for_vendor(
+                        vendor,
+                        current_bin,
+                        vendor_bin_numbers,
+                        allow_wrap=False,
+                        offset=lane_count,
+                        lane_parity=(current_bin % 2) if lane_count == 2 else None,
+                    )
+                except (TypeError, ValueError):
+                    prev_bin = None
+            elif vendor == "KVC":
                 uk = str(row.get("UKEIRE", "")).strip()
                 vendor = f"KVC-{uk}" if uk else vendor
-            try:
-                prev_bin = f"{int(order2) - 1:02d}" if int(order2) > 1 else None
-            except ValueError:
-                continue
+                try:
+                    prev_bin = f"{int(order2) - 1:02d}" if int(order2) > 1 else None
+                except ValueError:
+                    continue
+            else:
+                try:
+                    prev_bin = f"{int(order2) - 1:02d}" if int(order2) > 1 else None
+                except ValueError:
+                    continue
             if prev_bin is None:
                 continue
             prev_pickup = master_map.get((vendor, prev_bin), "")
@@ -75,11 +98,6 @@ def _floor_map_for(details_df, master_df, yamas):
     return floors
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Issue #97: 一時的なリリーフ混雑での誤判定＋単一便山の救済欠如＋あふれ片道切符により、"
-           "床開始で締切内完了できる日野04便3山が不要にあふれへ送られる",
-)
 def test_issue97_hino04_trio_not_sent_to_unneeded_overflow():
     spo_df, master_df = _load_snapshot()
     details_df = _build_detail_rows_from_spo_vendor_aware(spo_df, master_df)
