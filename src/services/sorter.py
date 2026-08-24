@@ -16,6 +16,7 @@ from ..models.constants import (
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
+from .bin_time_rules import build_bin_time_map, attach_unit_time_bounds
 
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,14 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
     used, id_map = set(), {}
     all_true = pd.Series(True, index=units.index)
     special_hinban_mask = units.get("_has_special_hinban", pd.Series(False, index=units.index)).astype(bool)
+    has_time_cols = {"_床秒", "_締切秒"}.issubset(units.columns)
+
+    def _time_feasible(base_floor: float, base_deadline: float, candidates: pd.DataFrame) -> pd.Series:
+        if not has_time_cols:
+            return pd.Series(True, index=candidates.index)
+        merged_floor = np.maximum(candidates["_床秒"].astype(float), float(base_floor))
+        merged_deadline = np.minimum(candidates["_締切秒"].astype(float), float(base_deadline))
+        return pd.Series(merged_floor <= merged_deadline, index=candidates.index)
 
     def _cap_for_merge(base_has_special: bool, candidates: pd.DataFrame, normal_cap: float):
         """統合対象(g1やg1+g2)または候補が特例品番を含むならSPECIAL_HINBAN_HEIGHT_CAP、それ以外は通常capを返す（候補ごとのSeries）。"""
@@ -221,8 +230,10 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         if has_special_g1:
             # 維持ルール: 特例品番入り山にsize21を載せない
             cond_layer2 &= ~units["_has_size21"]
-        cond_mix2_final = cond_mix2 & cond_layer2
-        
+        g1_floor = float(g1["_床秒"]) if has_time_cols else 0.0
+        g1_deadline = float(g1["_締切秒"]) if has_time_cols else float("inf")
+        cond_mix2_final = cond_mix2 & cond_layer2 & _time_feasible(g1_floor, g1_deadline, units)
+
         cand2 = units[
             (~units["山ID"].isin(used))
             & (units["山ID"] != id1)
@@ -254,7 +265,12 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
             cond_layer3 &= ~special_hinban_mask
         if has_special_merged:
             cond_layer3 &= ~units["_has_size21"]
-        cond_mix3_final = cond_mix3_1 & cond_mix3_2 & cond_layer3
+        g2_floor = float(g2["_床秒"]) if has_time_cols else 0.0
+        g2_deadline = float(g2["_締切秒"]) if has_time_cols else float("inf")
+        cond_mix3_final = (
+            cond_mix3_1 & cond_mix3_2 & cond_layer3
+            & _time_feasible(max(g1_floor, g2_floor), min(g1_deadline, g2_deadline), units)
+        )
 
         cand3 = units[
             (~units["山ID"].isin(used))
@@ -365,7 +381,7 @@ def run_pipeline(
     size1_mixed_summary, size1_mixed_details = None, None
     if not expanded.empty and expanded["サイズ種類"].astype(str).str.strip().isin(["1", "21"]).any():
         size1_mixed_summary, size1_mixed_details = _build_size1_mixed(
-            expanded, height_cap, mixing_key
+            expanded, height_cap, mixing_key, master_df
         )
 
     lane_end_times = dict(previous_lane_end_times or {})
@@ -383,7 +399,7 @@ def run_pipeline(
     return filtered, expanded, group_results, group_details, size1_mixed_summary, size1_mixed_details
 
 
-def _build_size1_mixed(expanded, height_cap, mixing_key):
+def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
     """種類1/21の混載処理（1/21以外は対象外）。"""
     stype = expanded["サイズ種類"].astype(str).str.strip()
     size1_df = expanded.loc[stype.isin(["1", "21"])].copy()
@@ -442,6 +458,8 @@ def _build_size1_mixed(expanded, height_cap, mixing_key):
     size1_packed = pd.concat(packed_list, axis=0).reset_index(drop=True) if packed_list else size1_df.copy()
 
     group_table = _build_size1_stack_units(size1_packed, mixing_key)
+    # Issue #96: マスタから床・締切を計算してユニットへ付与（混載判定の予防チェック用）
+    group_table = attach_unit_time_bounds(group_table, build_bin_time_map(master_df))
     group_cols = ["NONYUHIBIN", "_role_class", "ローカルグループ番号"]
     if "納入先コード" in size1_packed.columns:
         idx = group_cols.index("_role_class")
@@ -560,7 +578,7 @@ def _build_size1_mixed(expanded, height_cap, mixing_key):
 
     size1_with_mountain = _rescue_split_conflict_vendor(size1_with_mountain)
     size1_with_mountain = size1_with_mountain.drop(
-        columns=["_is_size1", "_is_size21", "_role_class"],
+        columns=["_is_size1", "_is_size21", "_role_class", "_床秒", "_締切秒"],
         errors="ignore",
     )
 
