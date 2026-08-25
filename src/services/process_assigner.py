@@ -699,6 +699,7 @@ def _legacy_assign_processes_by_arrival_time(
     master_df: pd.DataFrame,
     previous_lane_end_times: Optional[Dict[str, int]] = None,
     return_lane_end_times: bool = False,
+    front_pack_diag=None,
 ) -> pd.DataFrame:
     """
     入車時間マスタを元に、メイン工程（1人）で間に合うか判定。
@@ -2098,6 +2099,7 @@ def _legacy_assign_processes_by_arrival_time(
         yama_no: int,
         gap_start: int,
         gap_end: int,
+        diag=None,
     ) -> Optional[Tuple[int, int]]:
         work_dur = int(mtn_work_map.get(yama_no, 0))
         shift_floor = _shift_start_secs(_shift_index_for_secs(int(gap_start)))
@@ -2112,10 +2114,71 @@ def _legacy_assign_processes_by_arrival_time(
         earliest_end = _calc_work_end_with_breaks(earliest_start, work_dur)
         if earliest_end <= int(gap_end):
             return int(earliest_start), int(earliest_end)
+        if isinstance(diag, list):
+            diag.append((yama_no, PROC_MAIN, "床・休憩調整後の開始", False,
+                         f"工数={work_dur},開始={_seconds_to_hhmm(earliest_start)},終了={_seconds_to_hhmm(earliest_end)},窓終端={_seconds_to_hhmm(gap_end)}"))
         return None
 
-    def _try_front_pack_to_main_idle_gap(target_rows: List[dict]) -> bool:
-        """空き窓限定で、リリーフ/あふれ山をメインへ最速前詰めできるか検証して採用する。"""
+    def _try_front_pack_to_main_idle_gap(target_rows: List[dict], diag=None) -> bool:
+        """空き窓へ前詰めする。
+
+        2026-08-25 作業者証言: 日野は置場2レーンのため交錯させず、近い便から
+        完了させたい。#57 の交錯禁止を、先行日野便の全レーン完了と挿入後の
+        便順序非減少という2条件で判定する。
+        """
+
+        def _hino_front_pack_allowed(yama_no: int, new_start: int) -> bool:
+            candidate_bins = mtn_hino_bins_map.get(yama_no, set())
+            if not candidate_bins:
+                return True
+            candidate_bin = min(int(value) for value in candidate_bins)
+            hino_rows = [
+                rr for rr in target_rows
+                if mtn_hino_bins_map.get(int(rr["山通番"]), set())
+                and int(rr["山通番"]) != yama_no
+            ]
+            prior_rows = [
+                rr for rr in hino_rows
+                if min(int(value) for value in mtn_hino_bins_map[int(rr["山通番"])]) < candidate_bin
+            ]
+            for rr in prior_rows:
+                end = rr.get("_end_secs")
+                if end is None:
+                    start = _time_to_seconds(rr.get("実開始時間", ""))
+                    if start is None:
+                        return False
+                    end = _calc_work_end_with_breaks(start, int(mtn_work_map.get(int(rr["山通番"]), 0)))
+                if int(end) > int(new_start):
+                    if isinstance(diag, list):
+                        diag.append((yama_no, str(rr.get("山工程", "")), "日野条件(i)", False,
+                                     f"先行山{int(rr['山通番'])}終了={_seconds_to_hhmm(int(end))}"))
+                    return False
+
+            main_hino_rows = [
+                rr for rr in hino_rows if rr.get("山工程") == PROC_MAIN
+            ]
+            main_hino_rows.append({
+                "山通番": yama_no,
+                "山工程": PROC_MAIN,
+                "実開始時間": _seconds_to_hhmm(new_start),
+            })
+            main_hino_rows.sort(key=lambda rr: (
+                _time_to_seconds(rr.get("実開始時間", "99:99")) is None,
+                _time_to_seconds(rr.get("実開始時間", "99:99")) or float("inf"),
+                int(rr["山通番"]),
+            ))
+            bins = [
+                min(int(value) for value in mtn_hino_bins_map[int(rr["山通番"])] )
+                for rr in main_hino_rows
+                if int(rr["山通番"]) in mtn_hino_bins_map
+            ]
+            if bins != sorted(bins):
+                if isinstance(diag, list):
+                    diag.append((yama_no, PROC_MAIN, "日野条件(ii)", False, f"便順={bins}"))
+                return False
+            if isinstance(diag, list):
+                diag.append((yama_no, PROC_MAIN, "日野条件(i)/(ii)", True, f"便順={bins}"))
+            return True
         main_rows = [rr for rr in target_rows if rr.get("山工程") == PROC_MAIN]
         main_points = []
         for rr in main_rows:
@@ -2139,6 +2202,12 @@ def _legacy_assign_processes_by_arrival_time(
         if not gaps:
             return False
 
+        if isinstance(diag, list):
+            diag.append((None, PROC_MAIN, "窓列挙(窓一覧)", True, str([
+                (_seconds_to_hhmm(start), _seconds_to_hhmm(end), prev, nxt)
+                for start, end, prev, nxt in gaps
+            ])))
+
         candidates = []
         for rr in target_rows:
             proc_label = str(rr.get("山工程", ""))
@@ -2147,26 +2216,35 @@ def _legacy_assign_processes_by_arrival_time(
             yy = int(rr["山通番"])
             ddl = mtn_deadline_map.get(yy)
             if ddl is None:
+                if isinstance(diag, list):
+                    diag.append((yy, proc_label, "締切フィルタ", False, "締切なし"))
                 continue
             candidates.append((yy, int(ddl)))
 
         # 締切の厳しい山から順に、空き窓限定の最速前詰めを試す。
         for yy, _ in sorted(candidates, key=lambda x: (x[1], x[0])):
+            if isinstance(diag, list):
+                diag.append((yy, str(next(rr.get("山工程", "" ) for rr in target_rows if int(rr["山通番"]) == yy)),
+                             "締切フィルタ", True, f"締切={_seconds_to_hhmm(_)}"))
             for gap_start, gap_end, gap_prev_yama, gap_next_yama in gaps:
-                # Issue #57: 日野別便が隣接する窓への差し込みを禁止
-                _cand_bins = mtn_hino_bins_map.get(yy, set())
-                if _cand_bins:
-                    _prev_bins = mtn_hino_bins_map.get(gap_prev_yama, set())
-                    _next_bins = mtn_hino_bins_map.get(gap_next_yama, set())
-                    if (_prev_bins and _cand_bins.isdisjoint(_prev_bins)) or \
-                       (_next_bins and _cand_bins.isdisjoint(_next_bins)):
-                        continue
-                fit = _fits_idle_gap_on_main(yy, gap_start, gap_end)
+                fit = _fits_idle_gap_on_main(yy, gap_start, gap_end, diag=diag)
                 if fit is None:
+                    if isinstance(diag, list):
+                        diag.append((yy, PROC_MAIN, "窓内判定", False,
+                                     f"窓={_seconds_to_hhmm(gap_start)}-{_seconds_to_hhmm(gap_end)}"))
                     continue
                 new_start, new_end = fit
+                if isinstance(diag, list):
+                    diag.append((yy, PROC_MAIN, "床・休憩調整後の開始", True,
+                                 f"開始={_seconds_to_hhmm(new_start)},終了={_seconds_to_hhmm(new_end)}"))
+                    diag.append((yy, PROC_MAIN, "窓内判定", True,
+                                 f"窓={_seconds_to_hhmm(gap_start)}-{_seconds_to_hhmm(gap_end)}"))
+                # Issue #101: 日野便は先行便完了かつ便順序維持の場合だけ許可
+                if mtn_hino_bins_map.get(yy, set()) and not _hino_front_pack_allowed(yy, new_start):
+                    continue
 
                 trial_rows = copy.deepcopy(target_rows)
+                existing_violations = _deadline_violation_set(target_rows)
                 changed = False
                 for tr in trial_rows:
                     if int(tr["山通番"]) != int(yy):
@@ -2191,11 +2269,17 @@ def _legacy_assign_processes_by_arrival_time(
                 mtn_start_floor_map[yy] = int(new_start) if prev_floor <= 0 else min(prev_floor, int(new_start))
                 _finalize_inspection_delay_flags(trial_rows)
 
-                if _has_deadline_violation(trial_rows):
+                if _deadline_violation_set(trial_rows) - existing_violations:
+                    if isinstance(diag, list):
+                        diag.append((yy, PROC_MAIN, "締切差分", False,
+                                     f"追加違反={_deadline_violation_set(trial_rows) - existing_violations}"))
                     mtn_start_floor_map[yy] = prev_floor
                     continue
 
                 target_rows[:] = trial_rows
+                if isinstance(diag, list):
+                    diag.append((yy, PROC_MAIN, "採用", True,
+                                 f"開始={_seconds_to_hhmm(new_start)}"))
                 return True
 
         return False
@@ -2299,9 +2383,38 @@ def _legacy_assign_processes_by_arrival_time(
 
                 prev_end = int(end_secs)
                 valid_idx += 1
+
+    def _post_serialize_front_pack(target_rows: List[dict]):
+        """直列化後の最終空き窓へ前詰めする（#97/#101）。
+
+        2026-08-25 作業者証言: 日野は置場2レーンのため交錯させず、近い便から
+        完了させたい。直列化後の実時刻を基準に、床と便順序を守れる候補だけを
+        最大10周再評価する。1回の呼び出しで1山だけ移動するため、複数山を
+        順次処理する余地を確保する。
+        """
+        for _ in range(10):
+            snapshot = copy.deepcopy(target_rows)
+            before_violations = _deadline_violation_set(target_rows)
+            before = tuple(
+                (int(rr["山通番"]), str(rr.get("山工程")), str(rr.get("実開始時間", "")))
+                for rr in sorted(target_rows, key=lambda row: int(row["山通番"]))
+            )
+            if not _try_front_pack_to_main_idle_gap(target_rows, diag=front_pack_diag):
+                break
+            _serialize_lanes_final(target_rows)
+            after_violations = _deadline_violation_set(target_rows)
+            if after_violations - before_violations:
+                target_rows[:] = snapshot
+                break
+            after = tuple(
+                (int(rr["山通番"]), str(rr.get("山工程")), str(rr.get("実開始時間", "")))
+                for rr in sorted(target_rows, key=lambda row: int(row["山通番"]))
+            )
+            if before == after:
+                break
+
     for _ in range(3):
         _finalize_inspection_delay_flags(results)
-        _try_front_pack_to_main_idle_gap(results)
         if not _enforce_main_deadline_strict(results):
             break
         _reapply_overflow_for_relief(results)
@@ -2310,25 +2423,35 @@ def _legacy_assign_processes_by_arrival_time(
     _serialize_lanes_final(results)
 
     selected_rows = list(results)
+    edf_result_clean = None
+    edf_was_adopted = False
+    
     if n_yamas > EDF_COMPARE_MIN_YAMAS:
         existing_evaluation = _final_score_rows(results)
         edf_result = _edf_candidate_to_rows(edf_candidate["rows"])
         edf_evaluation = _final_score_rows(edf_result)
-        adopted = False
         if edf_evaluation < existing_evaluation:
             selected_rows = list(edf_result)
-            adopted = True
-        _logger.info("EDF比較: existing=%s edf=%s n=%d adopted=%s", existing_evaluation, edf_evaluation, n_yamas, adopted)
+            edf_result_clean = copy.deepcopy(edf_result)  # EDF 検査用に保存
+            edf_was_adopted = True
+        _logger.info("EDF比較: existing=%s edf=%s n=%d", existing_evaluation, edf_evaluation, n_yamas)
 
-    if n_yamas > EXHAUSTIVE_THRESHOLD and any(
-        rr.get("山工程") == PROC_OVERFLOW
-        and "04" in mtn_hino_bins_map.get(int(rr["山通番"]), set())
-        for rr in selected_rows
-    ):
-        _try_front_pack_to_main_idle_gap(selected_rows)
+    # Issue #101: 常に cleanup 処理を実施
+    # EDF採用時は事後的に品質チェック
+    if n_yamas > EXHAUSTIVE_THRESHOLD:
         while _try_repromote_overflow_to_relief(selected_rows):
             pass
         _serialize_lanes_final(selected_rows)
+
+    _post_serialize_front_pack(selected_rows)
+    
+    # EDF採用時のみ: cleanup 後がEDF original より悪ければ復帰
+    if edf_was_adopted and edf_result_clean is not None:
+        cleaned_score = _final_score_rows(selected_rows)
+        edf_baseline_score = _final_score_rows(edf_result_clean)
+        if cleaned_score > edf_baseline_score:
+            selected_rows[:] = edf_result_clean
+            _logger.info("EDF品質保護: cleanup後(%s) > EDF基準(%s) → 復帰", cleaned_score, edf_baseline_score)
 
     for r in selected_rows:
         r.pop("_is_anchored", None)
@@ -2353,6 +2476,7 @@ def assign_processes_by_arrival_time(
     master_df: pd.DataFrame,
     previous_lane_end_times: Optional[Dict[str, int]] = None,
     return_lane_end_times: bool = False,
+    front_pack_diag=None,
 ) -> pd.DataFrame:
     """公開エントリ。必要時に工程別終了時刻も返す。"""
     out_df, lane_end_times = _legacy_assign_processes_by_arrival_time(
@@ -2360,6 +2484,7 @@ def assign_processes_by_arrival_time(
         master_df,
         previous_lane_end_times=previous_lane_end_times,
         return_lane_end_times=True,
+        front_pack_diag=front_pack_diag,
     )
 
     if return_lane_end_times:
