@@ -30,3 +30,9 @@ lane_end_times_history.json
 
 # 入車時間マスタ（データはGit管理外）
 入車時間マスタ.xlsx
+
+# Issue #90: 実運用データは追跡しない（ローカル配置のみ）
+SPOアップロード用.xlsx
+
+# Excel のロックファイル
+~$*
