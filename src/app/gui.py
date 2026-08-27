@@ -1180,6 +1180,7 @@ class App(ctk.CTk):
         self.notebook.set("セットボード")
         self._on_main_tab_changed()
         self._update_status()
+        self._show_unreachable_pair_warning_popup()
         self._show_late_relief_warning_popup()
         messagebox.showinfo("完了", "仕分け＆セット完了。セットボードで結果をご確認ください。")
         # バッテリー交換は「その日だけ使う」運用のため、
@@ -1638,6 +1639,22 @@ class App(ctk.CTk):
 
         warnings.sort(key=lambda x: x["山通番"])
         return warnings
+
+    def _show_unreachable_pair_warning_popup(self):
+        """出荷場一覧に未登録で割り振れないデータを警告表示する（Issue #110 CD-2）。
+
+        オーダーは選べるのに受入が1件も出ないため無言で落ちていた行
+        （実測 85行/90パレット）を可視化する。到達不能が無ければ何も表示しない。
+        """
+        if getattr(self, "data_mgr", None) is None:
+            return
+        try:
+            message = self.data_mgr.build_unreachable_warning_message()
+        except Exception:
+            return
+        if not message:
+            return
+        messagebox.showwarning("未登録アラート", message)
 
     def _show_late_relief_warning_popup(self):
         """あふれ工程の山がある場合は警告ポップアップを表示する。"""
