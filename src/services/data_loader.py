@@ -289,183 +289,179 @@ class DataManager:
             mask = mask & (self.df_shipments["NONYUHIBIN"].astype(str).str.strip() == str(order).strip())
         return mask
 
-    def _mask_for_place_row(self, row: pd.Series) -> pd.Series:
-        place_code = row.get("納入先コード", "")
-        place_ukeire = _normalize_ukeire(row["受入"])
-        shipment_ukeire_normalized = self.df_shipments["UKEIRE"].apply(_normalize_ukeire)
-        mask = (
-            (self.df_shipments["SSYUKKA"] == row["仕入先工区"]) &
-            (self.df_shipments["納入先コード"] == str(place_code)) &
-            (self.df_shipments["SYUKKAKOKU"] == row["納入先工区"]) &
-            (shipment_ukeire_normalized == place_ukeire)
-        )
-        return mask
-
     def get_routes(self) -> list:
         routes = self.df_places["便名"].astype(str).str.strip().unique().tolist()
         # CH運用では日野EH・武部は便名選択対象外
         routes = [r for r in routes if r and r not in {"日野EH", "武部"}]
         return sorted(routes)
 
+    def _ukeire_mask(self, ukeire: Optional[str]) -> Optional[pd.Series]:
+        """UKEIRE 列での絞り込みマスク。指定なし／列なしなら None を返す。
+
+        Issue #110 CD-1: 出荷情報の UKEIRE はゼロ埋め（'06'）だが、マスタ側の受入は
+        非ゼロ埋め（'6'）という表記ゆれがある。GUI が渡す ukeire は
+        gui.refresh_routes() が入車時間マスタ（入車時間マスタ.xlsx の OData_納入先、
+        例 '日野-6'）の行名から切り出した値であり、出荷場一覧の受入列（同じく '6'）も
+        非ゼロ埋めのため、生文字列比較では日野便が必ず空になる
+        （実測: get_receipts_for_route("日野", ukeire="6") -> []）。
+        _fallback_mask と同様に両側を _normalize_ukeire で正規化して比較する。
+        英数字混在（'B7' 等）は正規化しても値が変わらないため分離は保たれる。
+        """
+        if not ukeire:
+            return None
+        if "UKEIRE" not in self.df_shipments.columns:
+            return None
+        target = _normalize_ukeire(str(ukeire))
+        return self.df_shipments["UKEIRE"].apply(_normalize_ukeire) == target
+
+    def _match_mask(
+        self,
+        route_name: str,
+        receipt: Optional[str] = None,
+        order: Optional[str] = None,
+        ukeire: Optional[str] = None,
+    ) -> pd.Series:
+        """便名（＋受入・オーダー・UKEIRE）に対応する出荷情報のマスクを生成する。
+
+        Issue #110: 出荷場一覧との厳密突合（strict）は撤去済み。
+        """
+        mask = self._fallback_mask(route_name, receipt=receipt, order=order)
+        um = self._ukeire_mask(ukeire)
+        if um is not None:
+            mask = mask & um
+        return mask
+
     def get_receipts_for_route(self, route_name: str, ukeire: Optional[str] = None) -> list:
         ps = self.df_places[self.df_places["便名"] == route_name]
         receipts = ps["受入"].unique().tolist()
-        if not (ukeire and "UKEIRE" in self.df_shipments.columns):
+        if self._ukeire_mask(ukeire) is None:
             return sorted(receipts)
-
-        ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
+        # Issue #110: 旧実装は strict 突合のみで fallback が無く、常に空リストを返していた
         filtered_receipts = set()
-        for _, row in ps.iterrows():
-            m = self._mask_for_place_row(row) & ukeire_mask
-            if m.sum() > 0:
-                filtered_receipts.add(row["受入"])
+        for receipt in receipts:
+            if self._match_mask(route_name, receipt=receipt, ukeire=ukeire).sum() > 0:
+                filtered_receipts.add(receipt)
         return sorted(filtered_receipts)
 
     def get_orders_for_route(self, route_name: str, ukeire: Optional[str] = None) -> list:
-        ps = self.df_places[self.df_places["便名"] == route_name]
-        if ps.empty:
-            m = self._fallback_mask(route_name)
-            # UKEIRE 絞り込み
-            if ukeire and "UKEIRE" in self.df_shipments.columns:
-                ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
-                m = m & ukeire_mask
-            if m.sum() == 0:
-                return []
-            return sorted(self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
-        mask_total = None
-        for _, row in ps.iterrows():
-            m = self._mask_for_place_row(row)
-            mask_total = m if mask_total is None else (mask_total | m)
-        # UKEIRE 絞り込み
-        if ukeire and "UKEIRE" in self.df_shipments.columns:
-            ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
-            mask_total = mask_total & ukeire_mask
-        out = sorted(self.df_shipments.loc[mask_total, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
-        if out:
-            return out
-        m = self._fallback_mask(route_name)
-        # UKEIRE 絞り込み（fallback）
-        if ukeire and "UKEIRE" in self.df_shipments.columns:
-            ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
-            m = m & ukeire_mask
-        return sorted(self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
+        m = self._match_mask(route_name, ukeire=ukeire)
+        if m.sum() == 0:
+            return []
+        orders = self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist()
+        return sorted(orders, reverse=True)
 
     def get_orders_for_route_receipt(self, route_name: str, receipt: str, ukeire: Optional[str] = None) -> list:
-        ps = self.df_places[(self.df_places["便名"] == route_name) & (self.df_places["受入"] == receipt)]
-        if ps.empty:
-            m = self._fallback_mask(route_name, receipt=receipt)
-            if ukeire and "UKEIRE" in self.df_shipments.columns:
-                ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
-                m = m & ukeire_mask
-            if m.sum() == 0:
-                return []
-            return sorted(self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
-
-        mask_total = None
-        ukeire_mask = None
-        if ukeire and "UKEIRE" in self.df_shipments.columns:
-            ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
-
-        for _, row in ps.iterrows():
-            m = self._mask_for_place_row(row)
-            if ukeire_mask is not None:
-                m = m & ukeire_mask
-            mask_total = m if mask_total is None else (mask_total | m)
-
-        if mask_total is None or mask_total.sum() == 0:
-            m = self._fallback_mask(route_name, receipt=receipt)
-            if ukeire_mask is not None:
-                m = m & ukeire_mask
-            return sorted(self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
-
-        return sorted(self.df_shipments.loc[mask_total, "NONYUHIBIN"].astype(str).unique().tolist(), reverse=True)
+        m = self._match_mask(route_name, receipt=receipt, ukeire=ukeire)
+        if m.sum() == 0:
+            return []
+        orders = self.df_shipments.loc[m, "NONYUHIBIN"].astype(str).unique().tolist()
+        return sorted(orders, reverse=True)
 
     def get_receipts_for_route_order(self, route_name: str, order: str, ukeire: Optional[str] = None) -> list:
         ps = self.df_places[self.df_places["便名"] == route_name]
         receipts = set()
         for _, row in ps.iterrows():
-            m = self._mask_for_place_row(row) & (self.df_shipments["NONYUHIBIN"] == str(order))
-            # UKEIRE 絞り込み
-            if ukeire and "UKEIRE" in self.df_shipments.columns:
-                ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
-                m = m & ukeire_mask
+            m = self._match_mask(route_name, receipt=row["受入"], order=order, ukeire=ukeire)
             if m.sum() > 0:
                 receipts.add(row["受入"])
-        out = sorted(receipts)
-        if out:
-            return out
-        m = self._fallback_mask(route_name, order=order)
-        if ukeire and "UKEIRE" in self.df_shipments.columns:
-            ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(ukeire).strip()
-            m = m & ukeire_mask
-        if m.sum() == 0:
-            return []
-        return sorted(self.df_shipments.loc[m, "UKEIRE"].astype(str).unique().tolist())
+        # Issue #110: 旧実装は fallback 経路のみ UKEIRE 列の値を返しており値域が不整合だった
+        return sorted(receipts)
 
     def filter_shipments(self, selections: list) -> pd.DataFrame:
-        """selections: list of {"便名","受入","オーダー"[,"ukeire"]}
-        ukeire: オプション。指定時は UKEIRE 列でさらに絞り込む（KVC専用）
+        """selections: list of {"便名","受入","オーダー"[,"ukeire"]}"""
+
+        final_mask = None
+        for sel in selections:
+            m = self._match_mask(
+                sel["便名"],
+                receipt=sel.get("受入"),
+                order=sel.get("オーダー"),
+                ukeire=sel.get("ukeire"),
+            )
+            final_mask = m if final_mask is None else (final_mask | m)
+        if final_mask is None:
+            return pd.DataFrame()
+        return self.df_shipments.loc[final_mask].copy()
+
+    def collect_unreachable_summary(self) -> dict:
+        """出荷場一覧に (便名, 受入) 行が無く、どの選択でも割り振れない出荷行を集計する。
+
+        Issue #110 CD-2: strict 撤去後の突合は出荷場一覧の (便名, 受入) に依存する。
+        該当行が無い組合せは get_receipts_for_route が空を返すため、オーダーは選べても
+        選択が完成せず、無言で割り振り対象外になる
+        （実測: KVC/B3 37行/37パレット・織機/21 48行/53パレット = 計 85行/90パレット）。
+        判定は既存の _fallback_mask / _ukeire_mask を再利用し、突合ロジックを二重実装しない。
+        戻り値: {"rows": int, "pallets": int,
+                 "pairs": [{"vendor": str, "ukeire": str, "rows": int, "pallets": int}, ...]}
         """
-        masks = []
-        for sel in selections:
-            ps = self.df_places[
-                (self.df_places["便名"] == sel["便名"]) & (self.df_places["受入"] == sel["受入"])
-            ]
-            if ps.empty:
-                continue
-            sub_mask_total = None
-            for _, place_row in ps.iterrows():
-                sub_mask = (
-                    self._mask_for_place_row(place_row) &
-                    (self.df_shipments["NONYUHIBIN"] == sel["オーダー"])
-                )
-                sub_mask_total = sub_mask if sub_mask_total is None else (sub_mask_total | sub_mask)
+        empty = {"rows": 0, "pallets": 0, "pairs": []}
+        if self.df_shipments is None or len(self.df_shipments) == 0:
+            return empty
+        if self.df_places is None or len(self.df_places) == 0:
+            return empty
+        if "便名" not in self.df_places.columns or "受入" not in self.df_places.columns:
+            return empty
 
-            # UKEIRE フィルタ（sel に ukeire が指定されている場合）
-            if sub_mask_total is not None:
-                if sel.get("ukeire") and "UKEIRE" in self.df_shipments.columns:
-                    ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(sel["ukeire"]).strip()
-                    sub_mask_total = sub_mask_total & ukeire_mask
-            if sub_mask_total is not None:
-                masks.append(sub_mask_total)
+        reach = pd.Series(False, index=self.df_shipments.index)
+        for _, place_row in self.df_places.iterrows():
+            mask = self._fallback_mask(str(place_row["便名"]))
+            ukeire_mask = self._ukeire_mask(str(place_row["受入"]))
+            if ukeire_mask is not None:
+                mask = mask & ukeire_mask
+            reach = reach | mask
+        miss = ~reach
+        if not bool(miss.any()):
+            return empty
 
-        if not masks:
-            fallback_masks = []
-            for sel in selections:
-                fb = self._fallback_mask(sel["便名"], receipt=sel["受入"], order=sel["オーダー"])
-                # UKEIRE フィルタ（fallback でも適用）
-                if sel.get("ukeire") and "UKEIRE" in self.df_shipments.columns:
-                    ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(sel["ukeire"]).strip()
-                    fb = fb & ukeire_mask
-                fallback_masks.append(fb)
-            if not fallback_masks:
-                return pd.DataFrame()
-            final_fb = fallback_masks[0]
-            for fm in fallback_masks[1:]:
-                final_fb |= fm
-            return self.df_shipments.loc[final_fb].copy()
-        
-        final_mask = masks[0]
-        for m in masks[1:]:
-            final_mask |= m
-        out = self.df_shipments.loc[final_mask].copy()
-        if not out.empty:
-            return out
+        if "PLANKANBANSU" in self.df_shipments.columns:
+            pallet = pd.to_numeric(self.df_shipments["PLANKANBANSU"], errors="coerce").fillna(0).astype(int)
+        else:
+            pallet = pd.Series([0] * len(self.df_shipments), index=self.df_shipments.index)
+        if "UKEIRE" in self.df_shipments.columns:
+            ukeire_label = self.df_shipments["UKEIRE"].astype(str)
+        else:
+            ukeire_label = pd.Series([""] * len(self.df_shipments), index=self.df_shipments.index)
+        vendor = self._fallback_vendor_series()
 
-        fallback_masks = []
-        for sel in selections:
-            fb = self._fallback_mask(sel["便名"], receipt=sel["受入"], order=sel["オーダー"])
-            # UKEIRE フィルタ（fallback 最後の段階でも適用）
-            if sel.get("ukeire") and "UKEIRE" in self.df_shipments.columns:
-                ukeire_mask = self.df_shipments["UKEIRE"].astype(str).str.strip() == str(sel["ukeire"]).strip()
-                fb = fb & ukeire_mask
-            fallback_masks.append(fb)
-        if not fallback_masks:
-            return out
-        final_fb = fallback_masks[0]
-        for fm in fallback_masks[1:]:
-            final_fb |= fm
-        return self.df_shipments.loc[final_fb].copy()
+        grouped = pd.DataFrame({
+            "vendor": vendor[miss],
+            "ukeire": ukeire_label[miss],
+            "pallet": pallet[miss],
+        }).groupby(["vendor", "ukeire"]).agg(rows=("pallet", "size"), pallets=("pallet", "sum"))
+        pairs = []
+        for key, row in grouped.iterrows():
+            pairs.append({
+                "vendor": str(key[0]),
+                "ukeire": str(key[1]),
+                "rows": int(row["rows"]),
+                "pallets": int(row["pallets"]),
+            })
+        return {"rows": int(miss.sum()), "pallets": int(pallet[miss].sum()), "pairs": pairs}
+
+    def build_unreachable_warning_message(self, max_pairs: int = 20) -> str:
+        """collect_unreachable_summary の結果を GUI 警告用の文面に組み立てる。
+
+        Issue #110 CD-2: 文面は scripts/tmp/cd_probe.py [6] が機械生成したものと同一。
+        到達不能が無い場合は空文字を返す（呼び出し側はポップアップを出さない）。
+        """
+        summary = self.collect_unreachable_summary()
+        pairs = summary.get("pairs", [])
+        if not pairs:
+            return ""
+        lines = ["出荷場一覧に未登録の組合せがあるため、次のデータは割り振り対象外です。"]
+        for pair in pairs[:max_pairs]:
+            lines.append(
+                "  ・" + str(pair["vendor"]) + "/" + str(pair["ukeire"])
+                + " " + str(pair["rows"]) + "行(" + str(pair["pallets"]) + "パレット)"
+            )
+        rest = len(pairs) - max_pairs
+        if rest > 0:
+            lines.append("  ... 他 " + str(rest) + " 組")
+        lines.append(
+            "合計 " + str(summary.get("rows", 0)) + "行 / "
+            + str(summary.get("pallets", 0)) + "パレット"
+        )
+        return "\n".join(lines)
 
 
 # ===== 入車時間マスタ管理 =====
