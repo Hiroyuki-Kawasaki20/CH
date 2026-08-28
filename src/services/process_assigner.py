@@ -53,7 +53,32 @@ def _break_policy(bs: int, be: int) -> Tuple[int, int, int]:
     if (int(bs), int(be)) in SPECIAL_LUNCH_BREAKS:
         return LUNCH_PRE_MARGIN_SECS, LUNCH_POST_RESUME_SECS, LUNCH_POST_LOCK_SECS
     return 0, 60, 0
+# ── Issue #119: リリーフ工程における短休憩の読み替え ──────────────
+# BREAK_TIMES の30分帯は「純休憩10分 + 仕分け猶予20分」の合計値
+# (docs/仕分け・割り振りルール.md §4.6)。仕分け猶予は1工程が仕分けを
+# 終えるための猶予であり、リリーフ工程は猶予中も引取を開始してよい
+# (2026-08-28 現場確認)。そこでリリーフ評価時のみ短休憩を純休憩10分へ
+# 読み替える。食事休憩(SPECIAL_LUNCH_BREAKS・45分)と各直朝一バッファは
+# 一切変更しない。
+SHORT_BREAK_PURE_SECS = 10 * 60
 
+
+def _relief_break_times() -> List[Tuple[int, int]]:
+    """リリーフ工程用の休憩帯を返す(短休憩のみ純休憩10分に短縮)。"""
+    adjusted: List[Tuple[int, int]] = []
+    for bs, be in BREAK_TIMES:
+        if (int(bs), int(be)) in SPECIAL_LUNCH_BREAKS:
+            adjusted.append((int(bs), int(be)))
+            continue
+        adjusted.append((int(bs), min(int(be), int(bs) + SHORT_BREAK_PURE_SECS)))
+    return adjusted
+
+
+def _breaks_for_proc(proc_label) -> List[Tuple[int, int]]:
+    """工程別の休憩帯。リリーフのみ短縮版、それ以外は従来の BREAK_TIMES。"""
+    if str(proc_label) == PROC_RELIEF:
+        return _relief_break_times()
+    return list(BREAK_TIMES)
 
 def _is_truthy_flag(v) -> bool:
     s = str(v).strip().lower()
@@ -344,9 +369,18 @@ def _seconds_to_hhmm(secs: int) -> str:
     return f"{hh:02d}:{mm:02d}"
 
 
-def _adjust_start_for_breaks(start_secs: int, work_duration_secs: int = 0) -> int:
-    """開始時間が休憩時間中、または作業が休憩をまたぐ場合、休憩終了1分後に調整"""
-    for bs, be in BREAK_TIMES:
+def _adjust_start_for_breaks(
+    start_secs: int,
+    work_duration_secs: int = 0,
+    break_times=None,
+) -> int:
+    """開始時間が休憩時間中、または作業が休憩をまたぐ場合、休憩終了1分後に調整
+
+    break_times=None のときは BREAK_TIMES を使う(従来と完全に同一挙動)。
+    リリーフ工程の評価のみ _relief_break_times() を渡す(Issue #119)。
+    """
+    breaks = BREAK_TIMES if break_times is None else break_times
+    for bs, be in breaks:
         pre_end_buffer, resume_offset, post_start_lock = _break_policy(bs, be)
         effective_break_start = bs - pre_end_buffer
         lock_until = be + post_start_lock
@@ -354,7 +388,7 @@ def _adjust_start_for_breaks(start_secs: int, work_duration_secs: int = 0) -> in
             return be + resume_offset
     if work_duration_secs > 0:
         end_secs = start_secs + work_duration_secs
-        for bs, be in BREAK_TIMES:
+        for bs, be in breaks:
             pre_end_buffer, resume_offset, _ = _break_policy(bs, be)
             effective_break_start = bs - pre_end_buffer
             if start_secs < effective_break_start < end_secs:
@@ -362,15 +396,23 @@ def _adjust_start_for_breaks(start_secs: int, work_duration_secs: int = 0) -> in
     return start_secs
 
 
-def _calc_work_end_with_breaks(start_secs: int, work_duration_secs: int) -> int:
-    """作業開始時間と作業時間から、休憩を考慮した作業終了時間を計算"""
+def _calc_work_end_with_breaks(
+    start_secs: int,
+    work_duration_secs: int,
+    break_times=None,
+) -> int:
+    """作業開始時間と作業時間から、休憩を考慮した作業終了時間を計算
+
+    break_times=None のときは BREAK_TIMES を使う(従来と完全に同一挙動)。
+    """
+    breaks = BREAK_TIMES if break_times is None else break_times
     current = start_secs
     remaining = work_duration_secs
     while remaining > 0:
         next_break_start = None
         next_break_end = None
         next_resume_offset = 60
-        for bs, be in BREAK_TIMES:
+        for bs, be in breaks:
             pre_end_buffer, resume_offset, post_start_lock = _break_policy(bs, be)
             effective_break_start = bs - pre_end_buffer
             lock_until = be + post_start_lock
