@@ -2322,6 +2322,167 @@ def _legacy_assign_processes_by_arrival_time(
         )
         return True
 
+    def _fits_idle_gap_on_relief(
+        yama_no: int,
+        gap_start: int,
+        gap_end: int,
+        diag=None,
+    ) -> Optional[Tuple[int, int]]:
+        """あふれ山をリリーフ工程の空き窓へ収められるか判定する（Issue #110 副次課題）。
+
+        メイン版 _fits_idle_gap_on_main との差分は2点。
+        入車時間由来の開始下限（床）を尊重すること、診断レーン名を PROC_RELIEF と
+        すること。Issue #93 の挙動を複製しないため、床は読むだけで書き換えない。
+        """
+        work_dur = int(mtn_work_map.get(yama_no, 0))
+        if work_dur <= 0:
+            return None
+        arrival_floor = max(
+            int(mtn_prev_arrival_floor_map.get(yama_no) or 0),
+            int(mtn_start_floor_map.get(yama_no) or 0),
+        )
+        shift_floor = _shift_start_secs(_shift_index_for_secs(int(gap_start)))
+        break_floor = int(gap_start)
+        for bs, be in BREAK_TIMES:
+            if int(gap_start) < int(bs) < int(gap_end):
+                _, resume_offset, _ = _break_policy(int(bs), int(be))
+                break_floor = max(int(break_floor), int(be) + int(resume_offset))
+        candidate_start = max(
+            int(gap_start),
+            int(shift_floor),
+            int(break_floor),
+            int(arrival_floor),
+        )
+        earliest_start = _adjust_start_for_breaks(candidate_start, work_dur)
+        earliest_end = _calc_work_end_with_breaks(earliest_start, work_dur)
+        if earliest_end <= int(gap_end):
+            return int(earliest_start), int(earliest_end)
+        if isinstance(diag, list):
+            diag.append((yama_no, PROC_RELIEF, "床・休憩調整後の開始", False,
+                         f"工数={work_dur},床={_seconds_to_hhmm(arrival_floor)},開始={_seconds_to_hhmm(earliest_start)},終了={_seconds_to_hhmm(earliest_end)},窓終端={_seconds_to_hhmm(gap_end)}"))
+        return None
+
+    def _try_front_pack_to_relief_idle_gap(target_rows: List[dict], diag=None) -> bool:
+        """あふれ山をリリーフ工程の空き窓へ前詰めする（Issue #110 副次課題）。
+
+        メイン版 _try_front_pack_to_main_idle_gap と同型だが次の5点が異なる。
+        1. 窓の母集団はリリーフ工程の山。移動候補はあふれ工程の山のみ
+           （リリーフ内の並べ替えは締切退行の危険があるため対象外）。
+        2. 入車時間由来の開始下限を尊重し、mtn_start_floor_map を書き換えない
+           （Issue #93 の挙動を複製しない）。
+        3. 日野便は初版では一律対象外（Issue #57 の交錯禁止を確実に守る）。
+        4. リリーフ工程を再スケジュールしない。_schedule_proc_rows は PROC_MAIN の
+           アンカーだけを尊重するため、リリーフに適用すると空き窓へ置いた
+           開始時刻が上書きされて消える。
+        5. リリーフは深夜帯に伸びるため、HH:MM の素の秒では24時をまたぐ列を
+           正しく並べられない。日跨ぎを検知した場合は窓を誤認しないよう前詰めしない。
+        """
+        relief_rows = [rr for rr in target_rows if rr.get("山工程") == PROC_RELIEF]
+        relief_points = []
+        for rr in relief_rows:
+            st = _time_to_seconds(str(rr.get("実開始時間", "")))
+            if st is None:
+                continue
+            yy = int(rr["山通番"])
+            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
+            relief_points.append((yy, int(st), int(en)))
+        if len(relief_points) < 2:
+            return False
+
+        relief_points.sort(key=lambda x: (x[1], x[0]))
+
+        if any(int(en) > 86400 for _, _, en in relief_points):
+            if isinstance(diag, list):
+                diag.append((None, PROC_RELIEF, "日跨ぎ検知", False, "終了が24時超"))
+            return False
+        has_late = any(int(st) >= 20 * 3600 for _, st, _ in relief_points)
+        has_early = any(int(st) < 6 * 3600 for _, st, _ in relief_points)
+        if has_late and has_early:
+            if isinstance(diag, list):
+                diag.append((None, PROC_RELIEF, "日跨ぎ検知", False, "深夜と早朝が混在"))
+            return False
+
+        gaps: List[Tuple[int, int, int, int]] = []
+        for i in range(len(relief_points) - 1):
+            prev_end = int(relief_points[i][2])
+            next_start = int(relief_points[i + 1][1])
+            if next_start > prev_end:
+                gaps.append((prev_end, next_start, relief_points[i][0], relief_points[i + 1][0]))
+        if not gaps:
+            return False
+
+        if isinstance(diag, list):
+            diag.append((None, PROC_RELIEF, "窓列挙(窓一覧)", True, str([
+                (_seconds_to_hhmm(start), _seconds_to_hhmm(end), prev, nxt)
+                for start, end, prev, nxt in gaps
+            ])))
+
+        candidates = []
+        for rr in target_rows:
+            if str(rr.get("山工程", "")) != PROC_OVERFLOW:
+                continue
+            yy = int(rr["山通番"])
+            if mtn_hino_bins_map.get(yy, set()):
+                if isinstance(diag, list):
+                    diag.append((yy, PROC_OVERFLOW, "日野除外", False, "初版は日野便を対象外"))
+                continue
+            ddl = mtn_deadline_map.get(yy)
+            if ddl is None:
+                if isinstance(diag, list):
+                    diag.append((yy, PROC_OVERFLOW, "締切フィルタ", False, "締切なし"))
+                continue
+            candidates.append((yy, int(ddl)))
+        if not candidates:
+            return False
+
+        for yy, ddl in sorted(candidates, key=lambda x: (x[1], x[0])):
+            if isinstance(diag, list):
+                diag.append((yy, PROC_OVERFLOW, "締切フィルタ", True,
+                             f"締切={_seconds_to_hhmm(ddl)}"))
+            for gap_start, gap_end, gap_prev_yama, gap_next_yama in gaps:
+                fit = _fits_idle_gap_on_relief(yy, gap_start, gap_end, diag=diag)
+                if fit is None:
+                    if isinstance(diag, list):
+                        diag.append((yy, PROC_RELIEF, "窓内判定", False,
+                                     f"窓={_seconds_to_hhmm(gap_start)}-{_seconds_to_hhmm(gap_end)}"))
+                    continue
+                new_start, new_end = fit
+                if isinstance(diag, list):
+                    diag.append((yy, PROC_RELIEF, "窓内判定", True,
+                                 f"窓={_seconds_to_hhmm(gap_start)}-{_seconds_to_hhmm(gap_end)}"))
+
+                trial_rows = copy.deepcopy(target_rows)
+                existing_violations = _deadline_violation_set(target_rows)
+                changed = False
+                for tr in trial_rows:
+                    if int(tr["山通番"]) != int(yy):
+                        continue
+                    tr["山工程"] = PROC_RELIEF
+                    tr["実開始時間"] = _seconds_to_hhmm(new_start)
+                    tr["前倒し"] = False
+                    tr["照合追加180秒"] = False
+                    tr["_is_anchored"] = True
+                    tr["_end_secs"] = int(new_end)
+                    changed = True
+                if not changed:
+                    continue
+
+                _finalize_inspection_delay_flags(trial_rows)
+                new_violations = _deadline_violation_set(trial_rows) - existing_violations
+                if new_violations:
+                    if isinstance(diag, list):
+                        diag.append((yy, PROC_RELIEF, "締切差分", False,
+                                     f"追加違反={new_violations}"))
+                    continue
+
+                target_rows[:] = trial_rows
+                if isinstance(diag, list):
+                    diag.append((yy, PROC_RELIEF, "採用", True,
+                                 f"開始={_seconds_to_hhmm(new_start)},窓=山{gap_prev_yama}の後"))
+                return True
+
+        return False
+
 
     def _serialize_lanes_final(target_rows: List[dict]):
         # Issue #36: 出力直前の最終直列化。探索・前詰め試行(trial_rows評価)には
@@ -2399,7 +2560,12 @@ def _legacy_assign_processes_by_arrival_time(
                 (int(rr["山通番"]), str(rr.get("山工程")), str(rr.get("実開始時間", "")))
                 for rr in sorted(target_rows, key=lambda row: int(row["山通番"]))
             )
-            if not _try_front_pack_to_main_idle_gap(target_rows, diag=front_pack_diag):
+            moved = _try_front_pack_to_main_idle_gap(target_rows, diag=front_pack_diag)
+            if not moved:
+                # Issue #110 副次課題: メインの空き窓で救えないあふれ山を
+                # リリーフ工程の空き窓へ前詰めする。
+                moved = _try_front_pack_to_relief_idle_gap(target_rows, diag=front_pack_diag)
+            if not moved:
                 break
             _serialize_lanes_final(target_rows)
             after_violations = _deadline_violation_set(target_rows)
