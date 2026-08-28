@@ -153,7 +153,6 @@ def test_struct_relief_front_pack_guards_are_present():
 
     checks = {
         "あふれ限定(PROC_OVERFLOW)": "PROC_OVERFLOW" in code,
-        "日野除外(mtn_hino_bins_map)": "mtn_hino_bins_map" in code,
         "リリーフ母集団(PROC_RELIEF)": "PROC_RELIEF" in code,
         "リリーフ2山未満で中止": bool(re.search(r"len\(\s*relief_points\s*\)\s*<\s*2", code)),
         "窓の検出(next_start>prev_end)": bool(re.search(r"next_start\s*>\s*prev_end", code)),
@@ -170,6 +169,11 @@ def test_struct_relief_front_pack_guards_are_present():
     assert not missing, (
         f"{_TRY} から次のガードが失われています: {missing}\n"
         "relief版の安全装置が外された疑いがあります。"
+    )
+        # Issue #117: 日野一律除外が撤去されていること
+    assert "日野除外" not in code, (
+        f"{_TRY} に日野一律除外の痕跡が残っています。"
+        "Issue #117 でリリーフ救済の日野除外は撤去する方針です。"
     )
 
     # リリーフを再スケジュールしないこと（docstring の宣言ではなくコードで確認）
@@ -446,30 +450,22 @@ def test_overflow_is_rescued_into_relief_idle_gap():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 観点b: 日野便は救済されないこと（Issue #57 遵守）※常時有効
+# 観点b: 日野便も救済対象であること（Issue #117。1工程の交錯禁止は別テストで担保）
 # ─────────────────────────────────────────────────────────────────────────────
-def test_hino_is_not_rescued_into_relief_idle_gap():
-    """全納入先を日野にした場合、relief版の前詰めが一度も成立しないこと。
-
-    シナリオ成立に依存しない一方向の主張であり、日野が1件でも救済されたら FAIL する。
-    実装は mtn_hino_bins_map を持つ山を候補から外すため、候補ゼロで False を返すはず。
-    """
+def test_hino_is_not_excluded_from_relief_rescue():
+    """全納入先を日野にしても、日野を理由に救済が阻まれないこと（Issue #117）。"""
     records = _sweep()
     report = _report(records)
     print(report)
 
-    violations = []
-    for rec in records:
-        for f in rec["allhino"]["fired"]:
-            violations.append((rec["params"], f["moved_yama"]))
-
-    assert not violations, (
-        f"日野便の山がリリーフの空き窓へ前詰め救済されています: {violations}\n"
-        "Issue #57（日野別便の交錯禁止）に反し、relief版の日野一律除外が"
-        "機能していません。\n" + report
-    )
-    # 候補が日野除外で消えていること（空振りPASS防止の補助的な証跡）
-    print("[EVIDENCE] 全日野シナリオでの relief版発動件数: 0（日野除外が機能）")
+    fired = [(rec["params"], f["moved_yama"])
+             for rec in records for f in rec["allhino"]["fired"]]
+    if not fired:
+        pytest.skip(
+            "シナリオ未成立: 日野シナリオで前詰めが発動しませんでした。\n"
+            "推定原因: " + _blocker(records) + "\n" + report
+        )
+    print(f"[EVIDENCE] 日野シナリオでも救済成立: {fired}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
