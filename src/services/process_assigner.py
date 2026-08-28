@@ -2370,7 +2370,10 @@ def _legacy_assign_processes_by_arrival_time(
            （リリーフ内の並べ替えは締切退行の危険があるため対象外）。
         2. 入車時間由来の開始下限を尊重し、mtn_start_floor_map を書き換えない
            （Issue #93 の挙動を複製しない）。
-        3. 日野便は初版では一律対象外（Issue #57 の交錯禁止を確実に守る）。
+        3. 日野便もリリーフ救済の対象とする（Issue #117）。
+            リリーフ工程は「あふれを減らすこと」が最優先という現場方針のため、
+            Issue #57 の別便交錯禁止はここでは適用しない。
+            1工程（PROC_MAIN）では従来どおり厳格に維持する。
         4. リリーフ工程を再スケジュールしない。_schedule_proc_rows は PROC_MAIN の
            アンカーだけを尊重するため、リリーフに適用すると空き窓へ置いた
            開始時刻が上書きされて消える。
@@ -2422,10 +2425,6 @@ def _legacy_assign_processes_by_arrival_time(
             if str(rr.get("山工程", "")) != PROC_OVERFLOW:
                 continue
             yy = int(rr["山通番"])
-            if mtn_hino_bins_map.get(yy, set()):
-                if isinstance(diag, list):
-                    diag.append((yy, PROC_OVERFLOW, "日野除外", False, "初版は日野便を対象外"))
-                continue
             ddl = mtn_deadline_map.get(yy)
             if ddl is None:
                 if isinstance(diag, list):
