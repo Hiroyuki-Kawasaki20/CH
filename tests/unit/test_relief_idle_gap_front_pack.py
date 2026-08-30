@@ -141,7 +141,7 @@ def test_struct_relief_fits_reads_floor_but_never_mutates_it():
     assert re.search(r"earliest_end\s*<=\s*int\(\s*gap_end\s*\)", code), (
         f"{_FITS} が窓終端 gap_end との比較を行っていません。"
     )
-    assert "BREAK_TIMES" in code and "_shift_start_secs" in code, (
+    assert ("BREAK_TIMES" in code or "_breaks_for_proc" in code) and "_shift_start_secs" in code, (
         f"{_FITS} が休憩帯または直開始の考慮を失っています。"
     )
     print(f"[EVIDENCE] {_FITS}: 床read-only / max2種 / gap_end比較 / 休憩・直開始考慮 すべてOK")

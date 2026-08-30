@@ -53,7 +53,32 @@ def _break_policy(bs: int, be: int) -> Tuple[int, int, int]:
     if (int(bs), int(be)) in SPECIAL_LUNCH_BREAKS:
         return LUNCH_PRE_MARGIN_SECS, LUNCH_POST_RESUME_SECS, LUNCH_POST_LOCK_SECS
     return 0, 60, 0
+# ── Issue #119: リリーフ工程における短休憩の読み替え ──────────────
+# BREAK_TIMES の30分帯は「純休憩10分 + 仕分け猶予20分」の合計値
+# (docs/仕分け・割り振りルール.md §4.6)。仕分け猶予は1工程が仕分けを
+# 終えるための猶予であり、リリーフ工程は猶予中も引取を開始してよい
+# (2026-08-28 現場確認)。そこでリリーフ評価時のみ短休憩を純休憩10分へ
+# 読み替える。食事休憩(SPECIAL_LUNCH_BREAKS・45分)と各直朝一バッファは
+# 一切変更しない。
+SHORT_BREAK_PURE_SECS = 10 * 60
 
+
+def _relief_break_times() -> List[Tuple[int, int]]:
+    """リリーフ工程用の休憩帯を返す(短休憩のみ純休憩10分に短縮)。"""
+    adjusted: List[Tuple[int, int]] = []
+    for bs, be in BREAK_TIMES:
+        if (int(bs), int(be)) in SPECIAL_LUNCH_BREAKS:
+            adjusted.append((int(bs), int(be)))
+            continue
+        adjusted.append((int(bs), min(int(be), int(bs) + SHORT_BREAK_PURE_SECS)))
+    return adjusted
+
+
+def _breaks_for_proc(proc_label) -> List[Tuple[int, int]]:
+    """工程別の休憩帯。リリーフのみ短縮版、それ以外は従来の BREAK_TIMES。"""
+    if str(proc_label) == PROC_RELIEF:
+        return _relief_break_times()
+    return list(BREAK_TIMES)
 
 def _is_truthy_flag(v) -> bool:
     s = str(v).strip().lower()
@@ -344,9 +369,18 @@ def _seconds_to_hhmm(secs: int) -> str:
     return f"{hh:02d}:{mm:02d}"
 
 
-def _adjust_start_for_breaks(start_secs: int, work_duration_secs: int = 0) -> int:
-    """開始時間が休憩時間中、または作業が休憩をまたぐ場合、休憩終了1分後に調整"""
-    for bs, be in BREAK_TIMES:
+def _adjust_start_for_breaks(
+    start_secs: int,
+    work_duration_secs: int = 0,
+    break_times=None,
+) -> int:
+    """開始時間が休憩時間中、または作業が休憩をまたぐ場合、休憩終了1分後に調整
+
+    break_times=None のときは BREAK_TIMES を使う(従来と完全に同一挙動)。
+    リリーフ工程の評価のみ _relief_break_times() を渡す(Issue #119)。
+    """
+    breaks = BREAK_TIMES if break_times is None else break_times
+    for bs, be in breaks:
         pre_end_buffer, resume_offset, post_start_lock = _break_policy(bs, be)
         effective_break_start = bs - pre_end_buffer
         lock_until = be + post_start_lock
@@ -354,7 +388,7 @@ def _adjust_start_for_breaks(start_secs: int, work_duration_secs: int = 0) -> in
             return be + resume_offset
     if work_duration_secs > 0:
         end_secs = start_secs + work_duration_secs
-        for bs, be in BREAK_TIMES:
+        for bs, be in breaks:
             pre_end_buffer, resume_offset, _ = _break_policy(bs, be)
             effective_break_start = bs - pre_end_buffer
             if start_secs < effective_break_start < end_secs:
@@ -362,15 +396,23 @@ def _adjust_start_for_breaks(start_secs: int, work_duration_secs: int = 0) -> in
     return start_secs
 
 
-def _calc_work_end_with_breaks(start_secs: int, work_duration_secs: int) -> int:
-    """作業開始時間と作業時間から、休憩を考慮した作業終了時間を計算"""
+def _calc_work_end_with_breaks(
+    start_secs: int,
+    work_duration_secs: int,
+    break_times=None,
+) -> int:
+    """作業開始時間と作業時間から、休憩を考慮した作業終了時間を計算
+
+    break_times=None のときは BREAK_TIMES を使う(従来と完全に同一挙動)。
+    """
+    breaks = BREAK_TIMES if break_times is None else break_times
     current = start_secs
     remaining = work_duration_secs
     while remaining > 0:
         next_break_start = None
         next_break_end = None
         next_resume_offset = 60
-        for bs, be in BREAK_TIMES:
+        for bs, be in breaks:
             pre_end_buffer, resume_offset, post_start_lock = _break_policy(bs, be)
             effective_break_start = bs - pre_end_buffer
             lock_until = be + post_start_lock
@@ -1812,7 +1854,11 @@ def _legacy_assign_processes_by_arrival_time(
             start = _time_to_seconds(row.get("実開始時間", ""))
             if start is None:
                 continue
-            end = _calc_work_end_with_breaks(start, int(mtn_work_map.get(yama_no, 0)))
+            end = _calc_work_end_with_breaks(
+                start,
+                int(mtn_work_map.get(yama_no, 0)),
+                break_times=_breaks_for_proc(row.get("山工程")),
+            )
             finish_secs = max(finish_secs, int(end))
             deadline = mtn_deadline_map.get(yama_no)
             if deadline is not None:
@@ -2034,7 +2080,11 @@ def _legacy_assign_processes_by_arrival_time(
             st = _time_to_seconds(rr.get("実開始時間", ""))
             if ddl is None or st is None:
                 continue
-            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
+            en = _calc_work_end_with_breaks(
+                st,
+                int(mtn_work_map.get(yy, 0)),
+                break_times=_breaks_for_proc(rr.get("山工程")),
+            )
             ddl_for_eval = _deadline_for_eval(ddl, st)
             if ddl_for_eval is not None and en > int(ddl_for_eval):
                 violations.add(yy)
@@ -2341,9 +2391,12 @@ def _legacy_assign_processes_by_arrival_time(
             int(mtn_prev_arrival_floor_map.get(yama_no) or 0),
             int(mtn_start_floor_map.get(yama_no) or 0),
         )
+        # Issue #119: リリーフは仕分け猶予20分中も引取を開始できるため、
+        # 短休憩を純休憩10分として評価する(食事45分・朝一35分は不変)。
+        relief_breaks = _breaks_for_proc(PROC_RELIEF)
         shift_floor = _shift_start_secs(_shift_index_for_secs(int(gap_start)))
         break_floor = int(gap_start)
-        for bs, be in BREAK_TIMES:
+        for bs, be in relief_breaks:
             if int(gap_start) < int(bs) < int(gap_end):
                 _, resume_offset, _ = _break_policy(int(bs), int(be))
                 break_floor = max(int(break_floor), int(be) + int(resume_offset))
@@ -2353,8 +2406,12 @@ def _legacy_assign_processes_by_arrival_time(
             int(break_floor),
             int(arrival_floor),
         )
-        earliest_start = _adjust_start_for_breaks(candidate_start, work_dur)
-        earliest_end = _calc_work_end_with_breaks(earliest_start, work_dur)
+        earliest_start = _adjust_start_for_breaks(
+            candidate_start, work_dur, break_times=relief_breaks
+        )
+        earliest_end = _calc_work_end_with_breaks(
+            earliest_start, work_dur, break_times=relief_breaks
+        )
         if earliest_end <= int(gap_end):
             return int(earliest_start), int(earliest_end)
         if isinstance(diag, list):
@@ -2500,6 +2557,7 @@ def _legacy_assign_processes_by_arrival_time(
         for proc_label in lane_labels:
             lane_rows = [rr for rr in target_rows if rr.get("山工程") == proc_label]
             lane_rows.sort(key=_op_start)
+            lane_breaks = _breaks_for_proc(proc_label)
             prev_end = None
             valid_idx = 0
             for rr in lane_rows:
@@ -2520,15 +2578,27 @@ def _legacy_assign_processes_by_arrival_time(
                     candidate = max(candidate, int(prev_end) + inspection_delay)
 
                 if candidate > int(current_start):
-                    new_start = int(_adjust_start_for_breaks(candidate, work_dur))
+                    new_start = int(
+                        _adjust_start_for_breaks(
+                            candidate, work_dur, break_times=lane_breaks
+                        )
+                    )
                     rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
-                    end_secs = int(_calc_work_end_with_breaks(new_start, work_dur))
+                    end_secs = int(
+                        _calc_work_end_with_breaks(
+                            new_start, work_dur, break_times=lane_breaks
+                        )
+                    )
                     rr["_end_secs"] = end_secs
                     if "実終了時間" in rr:
                         rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
                 else:
                     new_start = int(current_start)
-                    end_secs = int(_calc_work_end_with_breaks(new_start, work_dur))
+                    end_secs = int(
+                        _calc_work_end_with_breaks(
+                            new_start, work_dur, break_times=lane_breaks
+                        )
+                    )
                     rr["_end_secs"] = end_secs
                     if "実終了時間" in rr:
                         rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
