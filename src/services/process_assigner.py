@@ -1655,6 +1655,17 @@ def _legacy_assign_processes_by_arrival_time(
         late_total, late_relief, late_main = _late_score(target_rows)
         relief_count = sum(1 for rr in target_rows if rr.get("山工程") == PROC_RELIEF)
         return (late_total, late_main, late_relief, relief_count)
+    
+    def _serialized_late_count(target_rows: List[dict]) -> int:
+        """最終直列化まで進めた予定表で締切超過の山数を数える（採点用・非破壊）。
+
+        Issue #36 の方針では最終直列化が探索の採点に関与しないため、
+        出力（締切超過列）と採点で締切判定の物差しが二重化している。
+        本ヘルパーはその差を埋めるための土台。現時点では未使用。
+        """
+        trial_rows = copy.deepcopy(target_rows)
+        _serialize_lanes_final(trial_rows)
+        return len(_deadline_violation_set(trial_rows))
 
     def _state_key(target_rows: List[dict]) -> Tuple[Tuple[int, str], ...]:
         return tuple(sorted((int(rr["山通番"]), str(rr.get("山工程", PROC_MAIN))) for rr in target_rows))
@@ -1725,7 +1736,7 @@ def _legacy_assign_processes_by_arrival_time(
         for bits in range(total_patterns):
             trial = _build_trial_from_assignment(bits)
             trial_score = _state_score(trial)
-            if trial_score < best_score:
+            if trial_score < best_score:                                                             
                 best_score = trial_score
                 best_snapshot = trial
                 # 遅延ゼロ＆リリーフゼロなら完全解 → 即終了
@@ -2616,17 +2627,6 @@ def _legacy_assign_processes_by_arrival_time(
 
                 prev_end = int(end_secs)
                 valid_idx += 1
-    def _serialized_late_count(target_rows: List[dict]) -> int:
-        """最終直列化まで進めた予定表で締切超過の山数を数える（採点用・非破壊）。
-
-        Issue #36 の方針では最終直列化が探索の採点に関与しないため、
-        出力（締切超過列）と採点で締切判定の物差しが二重化している。
-        本ヘルパーはその差を埋めるための土台。現時点では未使用。
-        """
-        trial_rows = copy.deepcopy(target_rows)
-        _serialize_lanes_final(trial_rows)
-        return len(_deadline_violation_set(trial_rows))
-
     def _post_serialize_front_pack(target_rows: List[dict]):
         """直列化後の最終空き窓へ前詰めする（#97/#101）。
 
