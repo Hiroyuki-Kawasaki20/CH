@@ -1726,19 +1726,19 @@ def _legacy_assign_processes_by_arrival_time(
             for r in trial:
                 r["_is_anchored"] = False        
         return trial
-
+    best_candidates: List[List[dict]] = []   # 土台③: ベスト更新時の候補を記録（採点は本流末尾で）
     if n_yamas <= EXHAUSTIVE_THRESHOLD:
         best_snapshot = copy.deepcopy(results)
         _reschedule_rows(best_snapshot)
         best_score = _state_score(best_snapshot)
-
         total_patterns = 1 << n_yamas
         for bits in range(total_patterns):
             trial = _build_trial_from_assignment(bits)
             trial_score = _state_score(trial)
-            if trial_score < best_score:                                                             
+            if trial_score < best_score:
                 best_score = trial_score
                 best_snapshot = trial
+                best_candidates.append(copy.deepcopy(trial))   # 土台③
                 # 遅延ゼロ＆リリーフゼロなら完全解 → 即終了
                 if best_score[0] == 0 and best_score[3] == 0:
                     break
