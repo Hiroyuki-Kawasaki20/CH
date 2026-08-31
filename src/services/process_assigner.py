@@ -1697,7 +1697,7 @@ def _legacy_assign_processes_by_arrival_time(
     all_yamas = sorted(set(int(r["山通番"]) for r in results))
     n_yamas = len(all_yamas)
 
-    def _build_trial_from_assignment(assignment_bits: int) -> List[dict]:
+    def _build_trial_from_assignment(assignment_bits: int, release_anchor: bool = False) -> List[dict]:
         """ビットマスクに基づきレーン割当を行いスケジュールした試行を返す。
         bit i == 0 → メイン, bit i == 1 → リリーフ"""
         trial = copy.deepcopy(results)
@@ -1711,6 +1711,9 @@ def _legacy_assign_processes_by_arrival_time(
             if r.get("山工程") != new_proc:
                 _reset_row_after_lane_change(r, new_proc)
         _reschedule_rows(trial)
+        if release_anchor:
+            for r in trial:
+                r["_is_anchored"] = False        
         return trial
 
     if n_yamas <= EXHAUSTIVE_THRESHOLD:
