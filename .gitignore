@@ -36,3 +36,8 @@ SPOアップロード用.xlsx
 
 # Excel のロックファイル
 ~$*
+
+scripts/tmp/
+*.bak
+*.bak_*
+pr_body.txt
