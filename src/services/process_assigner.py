@@ -253,6 +253,58 @@ def _can_keep_primary_deadline(
     return primary_end <= primary_deadline
 
 
+def _makes_others_newly_late(
+    unscheduled: List[dict],
+    main_end_time: int,
+    main_mountain_count: int,
+    primary: dict,
+    candidate: dict,
+) -> bool:
+    """候補山の前倒しで、他山を新たに締切超過にするかを判定。"""
+    remaining = sorted(
+        [
+            mountain for mountain in unscheduled
+            if int(mountain["山通番"]) not in {int(primary["山通番"]), int(candidate["山通番"])}
+        ],
+        key=lambda mountain: (
+            _axis_aligned_deadline_secs(
+                mountain.get("締め切り_秒"), mountain.get("開始時間_秒")
+            ) is None,
+            _axis_aligned_deadline_secs(
+                mountain.get("締め切り_秒"), mountain.get("開始時間_秒")
+            ) or float("inf"),
+            int(mountain["山通番"]),
+        ),
+    )
+    def _late_set(order):
+        current_end = main_end_time
+        late_mountains = set()
+        for sequence_idx, mountain in enumerate(order):
+            _, end, _ = _floored_schedule(
+                current_end,
+                main_mountain_count + sequence_idx,
+                int(mountain["引取工数_秒"]),
+                mountain.get("開始時間_秒"),
+            )
+            deadline = _axis_aligned_deadline_secs(
+                mountain.get("締め切り_秒"), mountain.get("開始時間_秒")
+            )
+            if deadline is not None and end > deadline:
+                late_mountains.add(int(mountain["山通番"]))
+            current_end = end
+        return late_mountains
+
+    before = _late_set([primary, candidate, *remaining])
+    after = _late_set([candidate, primary, *remaining])
+    newly_late = after - before
+    if newly_late:
+        _logger.info(
+            "[GUARD] prefetch blocked: primary=%s candidate=%s newly_late=%s",
+            primary.get("山通番"), candidate.get("山通番"), sorted(newly_late),
+        )
+    return bool(newly_late)
+
+
 def _are_hino_interleave_forbidden(m1: dict, m2: dict) -> bool:
     """m1, m2 がともに日野山かつ便番号セットが交わらない（別便）なら入れ込み禁止。"""
     s1: set = m1.get("日野便番号セット") or set()
@@ -329,6 +381,12 @@ def _pick_next_main_mountain(
             primary_deadline=primary_deadline,
             candidate_start_floor=cand_floor,
             primary_start_floor=primary_floor,
+        ) and not _makes_others_newly_late(
+            unscheduled=unscheduled,
+            main_end_time=main_end_time,
+            main_mountain_count=main_mountain_count,
+            primary=primary,
+            candidate=cand,
         ):
             safe_prefetch.append((cand_start, cand_end, cand))
 
