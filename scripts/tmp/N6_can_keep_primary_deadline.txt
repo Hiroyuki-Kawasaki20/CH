@@ -1,0 +1,17 @@
+def _can_keep_primary_deadline(
+    main_end_time: int,
+    main_mountain_count: int,
+    candidate_work: int,
+    primary_work: int,
+    primary_deadline: Optional[int],
+    candidate_start_floor: Optional[int] = None,
+    primary_start_floor: Optional[int] = None,
+) -> bool:
+    """候補山を先に処理しても、主対象山の締切を守れるかを判定。"""
+    if primary_deadline is None:
+        return True
+    _, candidate_end, _ = _floored_schedule(main_end_time, main_mountain_count, candidate_work, candidate_start_floor)
+    primary_start, primary_end, _ = _floored_schedule(candidate_end, main_mountain_count + 1, primary_work, primary_start_floor)
+    if primary_start is None:
+        return False
+    return primary_end <= primary_deadline

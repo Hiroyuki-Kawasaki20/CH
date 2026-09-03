@@ -29,7 +29,7 @@ from ..models.constants import (
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
-from .relief_enforcer import enforce_until_stable
+
 
 # 各直の開始時刻（秒）: 1直=06:25, 2直=16:40
 SHIFT_START_SECS = [6 * 3600 + 25 * 60, 16 * 3600 + 40 * 60]
@@ -253,58 +253,6 @@ def _can_keep_primary_deadline(
     return primary_end <= primary_deadline
 
 
-def _makes_others_newly_late(
-    unscheduled: List[dict],
-    main_end_time: int,
-    main_mountain_count: int,
-    primary: dict,
-    candidate: dict,
-) -> bool:
-    """候補山の前倒しで、他山を新たに締切超過にするかを判定。"""
-    remaining = sorted(
-        [
-            mountain for mountain in unscheduled
-            if int(mountain["山通番"]) not in {int(primary["山通番"]), int(candidate["山通番"])}
-        ],
-        key=lambda mountain: (
-            _axis_aligned_deadline_secs(
-                mountain.get("締め切り_秒"), mountain.get("開始時間_秒")
-            ) is None,
-            _axis_aligned_deadline_secs(
-                mountain.get("締め切り_秒"), mountain.get("開始時間_秒")
-            ) or float("inf"),
-            int(mountain["山通番"]),
-        ),
-    )
-    def _late_set(order):
-        current_end = main_end_time
-        late_mountains = set()
-        for sequence_idx, mountain in enumerate(order):
-            _, end, _ = _floored_schedule(
-                current_end,
-                main_mountain_count + sequence_idx,
-                int(mountain["引取工数_秒"]),
-                mountain.get("開始時間_秒"),
-            )
-            deadline = _axis_aligned_deadline_secs(
-                mountain.get("締め切り_秒"), mountain.get("開始時間_秒")
-            )
-            if deadline is not None and end > deadline:
-                late_mountains.add(int(mountain["山通番"]))
-            current_end = end
-        return late_mountains
-
-    before = _late_set([primary, candidate, *remaining])
-    after = _late_set([candidate, primary, *remaining])
-    newly_late = after - before
-    if newly_late:
-        _logger.info(
-            "[GUARD] prefetch blocked: primary=%s candidate=%s newly_late=%s",
-            primary.get("山通番"), candidate.get("山通番"), sorted(newly_late),
-        )
-    return bool(newly_late)
-
-
 def _are_hino_interleave_forbidden(m1: dict, m2: dict) -> bool:
     """m1, m2 がともに日野山かつ便番号セットが交わらない（別便）なら入れ込み禁止。"""
     s1: set = m1.get("日野便番号セット") or set()
@@ -381,12 +329,6 @@ def _pick_next_main_mountain(
             primary_deadline=primary_deadline,
             candidate_start_floor=cand_floor,
             primary_start_floor=primary_floor,
-        ) and not _makes_others_newly_late(
-            unscheduled=unscheduled,
-            main_end_time=main_end_time,
-            main_mountain_count=main_mountain_count,
-            primary=primary,
-            candidate=cand,
         ):
             safe_prefetch.append((cand_start, cand_end, cand))
 
@@ -1912,11 +1854,7 @@ def _legacy_assign_processes_by_arrival_time(
             start = _time_to_seconds(row.get("実開始時間", ""))
             if start is None:
                 continue
-            end = _calc_work_end_with_breaks(
-                start,
-                int(mtn_work_map.get(yama_no, 0)),
-                break_times=_breaks_for_proc(row.get("山工程")),
-            )
+            end = _calc_work_end_with_breaks(start, int(mtn_work_map.get(yama_no, 0)))
             finish_secs = max(finish_secs, int(end))
             deadline = mtn_deadline_map.get(yama_no)
             if deadline is not None:
@@ -2138,11 +2076,7 @@ def _legacy_assign_processes_by_arrival_time(
             st = _time_to_seconds(rr.get("実開始時間", ""))
             if ddl is None or st is None:
                 continue
-            en = _calc_work_end_with_breaks(
-                st,
-                int(mtn_work_map.get(yy, 0)),
-                break_times=_breaks_for_proc(rr.get("山工程")),
-            )
+            en = _calc_work_end_with_breaks(st, int(mtn_work_map.get(yy, 0)))
             ddl_for_eval = _deadline_for_eval(ddl, st)
             if ddl_for_eval is not None and en > int(ddl_for_eval):
                 violations.add(yy)
@@ -2449,12 +2383,9 @@ def _legacy_assign_processes_by_arrival_time(
             int(mtn_prev_arrival_floor_map.get(yama_no) or 0),
             int(mtn_start_floor_map.get(yama_no) or 0),
         )
-        # Issue #119: リリーフは仕分け猶予20分中も引取を開始できるため、
-        # 短休憩を純休憩10分として評価する(食事45分・朝一35分は不変)。
-        relief_breaks = _breaks_for_proc(PROC_RELIEF)
         shift_floor = _shift_start_secs(_shift_index_for_secs(int(gap_start)))
         break_floor = int(gap_start)
-        for bs, be in relief_breaks:
+        for bs, be in BREAK_TIMES:
             if int(gap_start) < int(bs) < int(gap_end):
                 _, resume_offset, _ = _break_policy(int(bs), int(be))
                 break_floor = max(int(break_floor), int(be) + int(resume_offset))
@@ -2464,12 +2395,8 @@ def _legacy_assign_processes_by_arrival_time(
             int(break_floor),
             int(arrival_floor),
         )
-        earliest_start = _adjust_start_for_breaks(
-            candidate_start, work_dur, break_times=relief_breaks
-        )
-        earliest_end = _calc_work_end_with_breaks(
-            earliest_start, work_dur, break_times=relief_breaks
-        )
+        earliest_start = _adjust_start_for_breaks(candidate_start, work_dur)
+        earliest_end = _calc_work_end_with_breaks(earliest_start, work_dur)
         if earliest_end <= int(gap_end):
             return int(earliest_start), int(earliest_end)
         if isinstance(diag, list):
@@ -2615,7 +2542,6 @@ def _legacy_assign_processes_by_arrival_time(
         for proc_label in lane_labels:
             lane_rows = [rr for rr in target_rows if rr.get("山工程") == proc_label]
             lane_rows.sort(key=_op_start)
-            lane_breaks = _breaks_for_proc(proc_label)
             prev_end = None
             valid_idx = 0
             for rr in lane_rows:
@@ -2636,27 +2562,15 @@ def _legacy_assign_processes_by_arrival_time(
                     candidate = max(candidate, int(prev_end) + inspection_delay)
 
                 if candidate > int(current_start):
-                    new_start = int(
-                        _adjust_start_for_breaks(
-                            candidate, work_dur, break_times=lane_breaks
-                        )
-                    )
+                    new_start = int(_adjust_start_for_breaks(candidate, work_dur))
                     rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
-                    end_secs = int(
-                        _calc_work_end_with_breaks(
-                            new_start, work_dur, break_times=lane_breaks
-                        )
-                    )
+                    end_secs = int(_calc_work_end_with_breaks(new_start, work_dur))
                     rr["_end_secs"] = end_secs
                     if "実終了時間" in rr:
                         rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
                 else:
                     new_start = int(current_start)
-                    end_secs = int(
-                        _calc_work_end_with_breaks(
-                            new_start, work_dur, break_times=lane_breaks
-                        )
-                    )
+                    end_secs = int(_calc_work_end_with_breaks(new_start, work_dur))
                     rr["_end_secs"] = end_secs
                     if "実終了時間" in rr:
                         rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
@@ -2712,38 +2626,8 @@ def _legacy_assign_processes_by_arrival_time(
             break
         _reapply_overflow_for_relief(results)
 
-
-    def _enforce_effective_deadline_invariant(target_rows: List[dict]) -> bool:
-        """Issue #122 Phase 1: 実効締切(§4.3適用後)を割る山をメインに残さない。
-
-        §4.3のセットあり緩和は仕様（リリーフ最小化のための許可）なので尊重する。
-        本処理が保証するのは「直列化・再スケジュール後もメイン工程に実効締切
-        超過が残らない」ことのみ。緩和の是非は入車時間マスタのフラグで決める。
-        """
-        return enforce_until_stable(
-            target_rows,
-            proc_main=PROC_MAIN,
-            proc_relief=PROC_RELIEF,
-            proc_overflow=PROC_OVERFLOW,
-            strict_deadline_map=mtn_deadline_map,      # ← 実効締切に変更
-            work_map=mtn_work_map,
-            arrival_floor_map=mtn_prev_arrival_floor_map,
-            start_floor_map=mtn_start_floor_map,
-            lane_floor_map=prev_lane_floor,
-            schedule_lane=_schedule_proc_rows,
-            adjust_start=_adjust_start_for_breaks,
-            calc_end=_calc_work_end_with_breaks,
-            breaks_for_proc=_breaks_for_proc,
-            deadline_for_eval=_deadline_for_eval,
-            time_to_secs=_time_to_seconds,
-            seconds_to_hhmm=_seconds_to_hhmm,
-            serialize_lanes=_serialize_lanes_final,
-        )
-
     _finalize_inspection_delay_flags(results)
     _serialize_lanes_final(results)
-    # Issue #122 Phase 1: 直列化で押し出された分も含めて実効締切を強制する。
-    _enforce_effective_deadline_invariant(results)
 
     selected_rows = list(results)
     edf_result_clean = None

@@ -1,0 +1,26 @@
+N-6 読み取り結果（コード変更なし）
+
+Q1. はい。
+根拠行: src/services/process_assigner.py:306 に `for cand in unscheduled:` があり、
+           同関数内で `unscheduled` は引数として受け取る。呼び出し側は
+           src/services/process_assigner.py:1296 の `while unscheduled:` と
+           src/services/process_assigner.py:1299 の `unscheduled=unscheduled`。
+           この範囲に候補だけへ絞り込む代入はなく、主対象を含む残りの山を走査する。
+
+Q2. いいえ。
+根拠行: src/services/process_assigner.py:227-228 の docstring に
+           `照合180秒は後処理で開始時間順に付与するため、ここでは加算しない。` とあり、
+           src/services/process_assigner.py:230 で `inspection_delay = 0`。
+           一方、src/services/process_assigner.py:232-233 は
+           `_adjust_start_for_breaks` と `_calc_work_end_with_breaks` を呼ぶため、
+           休憩は加味するが、照合待ちは内部で加味しない。
+
+Q3. 採用された山がメイン工程へ配置可能（`if can_main:`）なら、次の反復に向けて
+    main_mountain_count は 1 増え、main_end_time は当該山の work_end に更新される。
+根拠行: src/services/process_assigner.py:1331 `main_mountain_count += 1`
+           src/services/process_assigner.py:1332 `main_end_time = work_end`
+           次反復の呼び出し: src/services/process_assigner.py:1298-1302。
+
+保存した inspect 全文:
+- N6_can_keep_primary_deadline.txt
+- N6_pick_next_main_mountain.txt
