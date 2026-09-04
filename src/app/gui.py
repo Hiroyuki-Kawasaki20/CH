@@ -34,6 +34,7 @@ from src.models.constants import (
 from src.services.data_loader import (
     load_data, DataManager,
     get_master_path, load_pickup_time_master_xlsx, save_pickup_time_master_xlsx,
+    _resolve_shipments_path,
     parse_ukeire_ch_excel, load_config, save_config, get_export_dir,
     set_flag_value_to_checkbox_mark, checkbox_mark_to_set_flag_value,
 )
@@ -65,6 +66,8 @@ from src.services.lane_end_times_history import (
     generate_lane_end_times_label, normalize_choice_label,
     save_lane_end_times_history, load_lane_end_times_history,
 )
+from src.services.export_validator import verify_export_invariant
+from src.services.export_archive import archive_export
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
 # ===== CustomTkinter 設定 =====
@@ -202,6 +205,9 @@ class App(ctk.CTk):
             minute = 15
         self.auto_reload_minute.set(minute)
         self.auto_reload_minute_str.set(f"{minute:02d}")
+        self.archive_enabled = bool(config.get("archive_enabled", True))
+        self.archive_dir = str(config.get("archive_dir", ""))
+        self.export_invariant_strict = bool(config.get("export_invariant_strict", True))
         # バッテリー交換チェックは「毎回OFF開始」仕様のため、
         # 設定ファイルからは復元しない。
 
@@ -1729,8 +1735,60 @@ class App(ctk.CTk):
         except Exception:
             pass
         if spo_df is not None and not spo_df.empty:
+            # ファイル書き出し直前に、表示・束ね後・GroupedData の枚数を突合する。
+            report = verify_export_invariant(
+                self.all_mountain_details_display,
+                self.all_mountain_details,
+                spo_df,
+                "GroupedData",
+            )
+            if report.is_lost:
+                missing_lines = []
+                for row in report.missing_kanban[:20]:
+                    missing_lines.append(
+                        f"{row.get('山通番', '')} / {row.get('納入先', '')} / "
+                        f"{row.get('ストア', row.get('SYUKKASAKI', ''))} / "
+                        f"{row.get('NONYUHIBIN', '')} / {row.get('UKEIRE', '')} / "
+                        f"{row.get('SEBANGO', '')}"
+                    )
+                message = f"パレットが {len(report.missing_kanban)} 枚消失しているため出力を中止しました"
+                if missing_lines:
+                    message += "\n\n山通番 / 納入先 / ストア / 便 / 受入 / SEBANGO\n" + "\n".join(missing_lines)
+                if self.export_invariant_strict:
+                    messagebox.showerror("出力中止", message)
+                    return
+                messagebox.showwarning("出力警告", message + "\n（strict=false のため出力を継続します）")
+            if report.has_unexpanded:
+                stores = ", ".join(report.unexpanded_stores) or "不明"
+                messagebox.showwarning(
+                    "束ね未展開",
+                    f"束ね未展開を検知しました（ストア: {stores}）。\n{report.summary()}",
+                )
             # SPOアップロード用.xlsx はSPO監視フォルダへ（staging+timestamp+move方式）
             spo_path = export_spo_xlsx_staged(spo_df, watch_dir=dirs["spo_xlsx_dir"])
+            if spo_path and getattr(self, "archive_enabled", True):
+                try:
+                    config = load_config()
+                    input_paths = []
+                    base_dir = config.get("base_dir")
+                    if base_dir:
+                        try:
+                            input_paths.append(_resolve_shipments_path(Path(base_dir)))
+                        except Exception:
+                            pass
+                    input_paths.append(get_master_path())
+                    archive_root = self.archive_dir or str(Path(self.export_dir) / "_export_archive")
+                    archive_export(
+                        output_path=spo_path,
+                        input_paths=input_paths,
+                        export_df=self.all_mountain_details,
+                        report=report,
+                        settings_snapshot=config,
+                        archive_dir=archive_root,
+                    )
+                except Exception as archive_error:
+                    print(f"出力アーカイブ警告: {archive_error}")
+                    messagebox.showwarning("出力アーカイブ", f"アーカイブ保存に失敗しました（出力は完了しています）。\n{archive_error}")
             try:
                 # 履歴はローカル固定フォルダへ
                 append_to_spo_history(spo_df, out_dir=dirs["history_dir"])

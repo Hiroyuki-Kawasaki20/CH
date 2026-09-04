@@ -23,5 +23,8 @@
     ]
   ],
   "auto_reload_minute": 30,
-  "enable_battery_change": true
+  "enable_battery_change": true,
+  "archive_enabled": true,
+  "archive_dir": "",
+  "export_invariant_strict": true
 }
