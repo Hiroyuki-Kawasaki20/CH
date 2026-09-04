@@ -1743,17 +1743,31 @@ class App(ctk.CTk):
                 "GroupedData",
             )
             if report.is_lost:
+                title_by_yama = {
+                    row.get("グループ番号"): row.get("タイトル", "")
+                    for _, row in spo_df.iterrows()
+                }
                 missing_lines = []
                 for row in report.missing_kanban[:20]:
+                    yama = row.get("山通番", "")
+                    title = title_by_yama.get(yama, "タイトル不明")
                     missing_lines.append(
-                        f"{row.get('山通番', '')} / {row.get('納入先', '')} / "
+                        f"{title}（山通番{yama}）/ {row.get('納入先', '')} / "
                         f"{row.get('ストア', row.get('SYUKKASAKI', ''))} / "
                         f"{row.get('NONYUHIBIN', '')} / {row.get('UKEIRE', '')} / "
                         f"{row.get('SEBANGO', '')}"
                     )
                 message = f"パレットが {len(report.missing_kanban)} 枚消失しているため出力を中止しました"
                 if missing_lines:
-                    message += "\n\n山通番 / 納入先 / ストア / 便 / 受入 / SEBANGO\n" + "\n".join(missing_lines)
+                    message += "\n\nタイトル（山通番） / 納入先 / ストア / 便 / 受入 / SEBANGO\n" + "\n".join(missing_lines)
+                audit_lines = [
+                    f"{finding.title}（山通番{finding.group_number}）/ {finding.check_name} "
+                    f"期待={finding.expected} 実測={finding.actual}"
+                    for finding in report.audit_findings
+                    if finding.severity == "ERROR"
+                ]
+                if audit_lines:
+                    message += "\n\n出力ファイル監査:\n" + "\n".join(audit_lines[:20])
                 if self.export_invariant_strict:
                     messagebox.showerror("出力中止", message)
                     return
@@ -1764,6 +1778,15 @@ class App(ctk.CTk):
                     "束ね未展開",
                     f"束ね未展開を検知しました（ストア: {stores}）。\n{report.summary()}",
                 )
+            warning_audit_lines = [
+                f"{finding.title}（山通番{finding.group_number}）/ {finding.check_name} "
+                f"期待={finding.expected} 実測={finding.actual}"
+                for finding in report.audit_findings
+                if finding.severity == "WARNING"
+            ]
+            if warning_audit_lines:
+                print("出力ファイル監査警告:\n" + "\n".join(warning_audit_lines))
+                messagebox.showwarning("出力ファイル監査", "\n".join(warning_audit_lines[:20]))
             # SPOアップロード用.xlsx はSPO監視フォルダへ（staging+timestamp+move方式）
             spo_path = export_spo_xlsx_staged(spo_df, watch_dir=dirs["spo_xlsx_dir"])
             if spo_path and getattr(self, "archive_enabled", True):

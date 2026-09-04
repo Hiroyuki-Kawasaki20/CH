@@ -6,8 +6,22 @@ from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
-from ..models.constants import VIRTUAL_YAMA_NO, is_virtual_yama
+from ..models.constants import (
+    BASE_ONE_TIME, BASE_PER_PAL, MIDDLE_WORK,
+    VIRTUAL_YAMA_NO, is_virtual_yama,
+)
 from ..utils.normalizer import _normalize_dest_name, _normalize_ukeire, _ZEN2HAN_DIGIT_COLON
+
+
+@dataclass
+class SpoAuditFinding:
+    title: str
+    group_number: Any
+    process: str
+    check_name: str
+    expected: Any
+    actual: Any
+    severity: str
 
 
 @dataclass
@@ -20,11 +34,13 @@ class ExportInvariantReport:
     is_lost: bool = False
     has_unexpanded: bool = False
     parse_failed_rows: List[Any] = None
+    audit_findings: List[SpoAuditFinding] = None
 
     def __post_init__(self):
         self.missing_kanban = list(self.missing_kanban or [])
         self.unexpanded_stores = list(self.unexpanded_stores or [])
         self.parse_failed_rows = list(self.parse_failed_rows or [])
+        self.audit_findings = list(self.audit_findings or [])
 
     def summary(self) -> str:
         flags = []
@@ -32,6 +48,8 @@ class ExportInvariantReport:
             flags.append("消失")
         if self.has_unexpanded:
             flags.append("束ね未展開")
+        if self.audit_findings:
+            flags.append("xlsx監査不整合")
         status = "・".join(flags) if flags else "正常"
         return f"{status}: GUI={self.gui_count}, pipeline={self.pipeline_count}, exported={self.exported_count}"
 
@@ -106,6 +124,73 @@ def count_exported_kanban(spo_df: pd.DataFrame, json_column: str) -> int:
     return total
 
 
+def _audit_finding(row: Any, check_name: str, expected: Any, actual: Any, severity: str) -> SpoAuditFinding:
+    return SpoAuditFinding(
+        title=str(row.get("タイトル", "")),
+        group_number=row.get("グループ番号", ""),
+        process=str(row.get("工程", "")),
+        check_name=check_name,
+        expected=expected,
+        actual=actual,
+        severity=severity,
+    )
+
+
+def audit_spo_dataframe(spo_df: pd.DataFrame) -> List[SpoAuditFinding]:
+    """SPO xlsx 単体で D-1〜D-4 を検査する。
+
+    ``パレット数`` と ``GroupedData`` は同じ出力元明細から作られるため、
+    上流で両方が同時に欠けた場合（例: 束ね処理前の消失）は単体では検知できない。
+    この場合は A（GUI表示）との突合が必要である。
+    """
+    findings: List[SpoAuditFinding] = []
+    if spo_df is None or not isinstance(spo_df, pd.DataFrame) or spo_df.empty:
+        return findings
+    for _, row in spo_df.iterrows():
+        if _is_virtual(row.get("グループ番号")):
+            continue
+        title = row.get("タイトル", "")
+        group_number = row.get("グループ番号", "")
+        process = str(row.get("工程", ""))
+        grouped_items, grouped_ok = _parse_json_items(row.get("GroupedData"))
+        groupdata_items, groupdata_ok = _parse_json_items(row.get("groupdata"))
+
+        if not grouped_ok:
+            findings.append(_audit_finding(row, "JSONパース(GroupedData)", "JSON配列", row.get("GroupedData"), "ERROR"))
+        if not groupdata_ok:
+            findings.append(_audit_finding(row, "JSONパース(groupdata)", "JSON配列", row.get("groupdata"), "ERROR"))
+
+        try:
+            pallet_count = int(row.get("パレット数"))
+        except (TypeError, ValueError):
+            pallet_count = None
+        if pallet_count != len(grouped_items):
+            findings.append(_audit_finding(row, "D-1 パレット数とGroupedData件数", pallet_count, len(grouped_items), "ERROR"))
+
+        if len(groupdata_items) != len(grouped_items):
+            findings.append(_audit_finding(row, "D-3 groupdataとGroupedData件数", len(grouped_items), len(groupdata_items), "ERROR"))
+
+        numbers = [item.get("番号") for item in grouped_items]
+        expected_numbers = list(range(1, len(grouped_items) + 1))
+        if numbers != expected_numbers:
+            findings.append(_audit_finding(row, "D-4 GroupedData番号連番", expected_numbers, numbers, "WARNING"))
+
+        try:
+            max_cost = float(row.get("Max移動工数"))
+            expected_cost = round(
+                max_cost + BASE_ONE_TIME
+                + ((pallet_count - 1) * MIDDLE_WORK)
+                + (pallet_count * BASE_PER_PAL),
+            ) if pallet_count is not None else None
+            actual_cost = int(row.get("引取工数"))
+        except (TypeError, ValueError):
+            expected_cost = None
+            actual_cost = row.get("引取工数")
+        if expected_cost is None or not isinstance(actual_cost, (int, float)) or abs(actual_cost - expected_cost) > 1:
+            findings.append(_audit_finding(row, "D-2 引取工数再計算", expected_cost, actual_cost, "WARNING"))
+    return findings
+
+
 def _norm(value: Any, field: str) -> str:
     if pd.isna(value):
         return ""
@@ -162,6 +247,14 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column) -> Expor
                     store = row.get("ストア", row.get("SYUKKASAKI", ""))
                     unexpanded.add(str(store).strip())
 
+        # 実出力は二重JSON列を持つ。既存の簡略呼出し（GroupedDataのみ）は
+        # 従来の A/B/C 検証を維持し、単体監査関数では列欠落も検知する。
+        audit_findings = (
+            audit_spo_dataframe(spo_df)
+            if isinstance(spo_df, pd.DataFrame)
+            and {"groupdata", "GroupedData"}.issubset(spo_df.columns)
+            else []
+        )
         report = ExportInvariantReport(
             gui_count=count_kanban(display_df),
             pipeline_count=count_kanban(export_df),
@@ -169,8 +262,13 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column) -> Expor
             missing_kanban=missing,
             unexpanded_stores=sorted(unexpanded),
             parse_failed_rows=parse_failed_rows,
+            audit_findings=audit_findings,
         )
-        report.is_lost = report.gui_count != report.pipeline_count
+        report.is_lost = (
+            report.gui_count != report.pipeline_count
+            or any(finding.severity == "ERROR" and finding.check_name.startswith(("D-1", "D-3", "JSON"))
+                   for finding in audit_findings)
+        )
         report.has_unexpanded = report.pipeline_count != report.exported_count
         return report
     except Exception:
