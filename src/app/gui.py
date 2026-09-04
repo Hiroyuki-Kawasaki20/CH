@@ -67,7 +67,7 @@ from src.services.lane_end_times_history import (
     save_lane_end_times_history, load_lane_end_times_history,
 )
 from src.services.export_validator import verify_export_invariant
-from src.services.export_archive import archive_export
+from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
 # ===== CustomTkinter 設定 =====
@@ -1777,7 +1777,7 @@ class App(ctk.CTk):
                         except Exception:
                             pass
                     input_paths.append(get_master_path())
-                    archive_root = self.archive_dir or str(Path(self.export_dir) / "_export_archive")
+                    archive_root = resolve_archive_dir(self.export_dir, self.archive_dir)
                     archive_export(
                         output_path=spo_path,
                         input_paths=input_paths,

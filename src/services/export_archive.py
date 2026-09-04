@@ -13,6 +13,13 @@ from .export_validator import ExportInvariantReport
 from ..models.constants import is_virtual_yama
 
 
+def resolve_archive_dir(export_dir: str, configured_dir: str = "") -> str:
+    """既定ではSPO監視フォルダの親配下へ保存する。"""
+    if configured_dir:
+        return str(Path(configured_dir))
+    return str(Path(export_dir).resolve().parent / "_export_archive")
+
+
 def _unique_path(path: Path) -> Path:
     if not path.exists():
         return path
