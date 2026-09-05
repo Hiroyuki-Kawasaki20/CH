@@ -73,6 +73,8 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
+APP_VERSION = "2026-09-05 afb922d 束ねキー修正+警告化"
+
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
@@ -131,6 +133,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("CHかんばんセット — 仕分け・セットボード")
+        self._version_label = APP_VERSION
         _sw = self.winfo_screenwidth()
         _sh = self.winfo_screenheight()
         _w = min(1600, max(1200, _sw - 40))
@@ -288,7 +291,7 @@ class App(ctk.CTk):
             p_relief = sum(1 for v in self.mountain_proc_map.values() if str(v) == PROC_RELIEF)
             auto_reload_part = f" | 自動再読込: {self._last_auto_reload_success_at}" if self._last_auto_reload_success_at else ""
             self.status_bar.configure(
-                text=f"前回実行: {now_str} | 山数: {mountain_num} | メイン: {p_main}山  リリーフ: {p_relief}山{auto_reload_part}"
+                text=f"前回実行: {now_str} | 山数: {mountain_num} | メイン: {p_main}山  リリーフ: {p_relief}山{auto_reload_part} | {self._version_label}"
             )
         except Exception:
             pass
@@ -341,7 +344,7 @@ class App(ctk.CTk):
 
         # ステータスバー
         self.status_bar = ctk.CTkLabel(
-            self, text="前回実行: なし | 山数: - | メイン: - リリーフ: -",
+            self, text=f"前回実行: なし | 山数: - | メイン: - リリーフ: - | {self._version_label}",
             fg_color=C_STATUS, text_color="#EDF2F4", font=self._label_font, anchor="w",
         )
         self.status_bar.pack(side="bottom", fill="x", ipady=5)
