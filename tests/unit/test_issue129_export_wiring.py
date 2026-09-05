@@ -68,18 +68,22 @@ def _patch_spo_pipeline(monkeypatch, app, tmp_path):
     monkeypatch.setattr(gui_module, "load_pickup_time_master_xlsx", lambda _: pd.DataFrame())
 
 
-def test_issue129_strict_loss_calls_no_output_functions(monkeypatch, tmp_path):
+def test_issue129_loss_warns_and_calls_output_functions(monkeypatch, tmp_path):
     app, _ = _app(tmp_path, strict=True)
     _patch_spo_pipeline(monkeypatch, app, tmp_path)
     calls = {"spo": 0, "history": 0, "kanban": 0}
-    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.__setitem__("spo", calls["spo"] + 1))
+    warnings = []
+    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.__setitem__("spo", calls["spo"] + 1) or str(tmp_path / "out.xlsx"))
     monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: calls.__setitem__("history", calls["history"] + 1))
     monkeypatch.setattr(gui_module, "export_kanban_xlsx", lambda *a, **k: calls.__setitem__("kanban", calls["kanban"] + 1))
-    monkeypatch.setattr(gui_module.messagebox, "showerror", lambda *a, **k: None)
+    monkeypatch.setattr(gui_module.messagebox, "showwarning", lambda title, message: warnings.append(message))
+    monkeypatch.setattr(gui_module.messagebox, "showinfo", lambda *a, **k: None)
 
     App._auto_export_spo(app)
 
-    assert calls == {"spo": 0, "history": 0, "kanban": 0}
+    assert calls == {"spo": 1, "history": 1, "kanban": 0}
+    assert len(warnings) == 1
+    assert "以下のパレットは出力ファイルに含まれていません。" in warnings[0]
 
 
 def test_issue129_non_strict_loss_continues_actual_spo_outputs(monkeypatch, tmp_path):
@@ -99,7 +103,7 @@ def test_issue129_non_strict_loss_continues_actual_spo_outputs(monkeypatch, tmp_
     assert calls["kanban"] == 0
 
 
-def test_issue129_validator_exception_does_not_fail_open(monkeypatch, tmp_path):
+def test_issue129_unverifiable_input_warns_and_calls_output_functions(monkeypatch, tmp_path):
     app, _ = _app(tmp_path, strict=True)
     _patch_spo_pipeline(monkeypatch, app, tmp_path)
     calls = []
@@ -107,13 +111,16 @@ def test_issue129_validator_exception_does_not_fail_open(monkeypatch, tmp_path):
     broken["groupdata"] = "{broken-json"
     broken["GroupedData"] = "{broken-json"
     app._spo = broken
-    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo"))
+    warnings = []
+    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo") or str(tmp_path / "out.xlsx"))
     monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: calls.append("history"))
-
-    monkeypatch.setattr(gui_module.messagebox, "showerror", lambda *a, **k: None)
+    monkeypatch.setattr(gui_module.messagebox, "showwarning", lambda title, message: warnings.append(message))
+    monkeypatch.setattr(gui_module.messagebox, "showinfo", lambda *a, **k: None)
     App._auto_export_spo(app)
 
-    assert calls == []
+    assert calls == ["spo", "history"]
+    assert len(warnings) == 1
+    assert "出力の整合性を確認できませんでした。" in warnings[0]
 
 
 def test_archive_manifest_contains_counts(tmp_path):
@@ -197,7 +204,7 @@ def test_archive_dir_requires_local_output_dir():
         resolve_archive_dir("C:/spo-watch", local_output_dir=None)
 
 
-def test_archive_dir_failure_is_reported_and_abort_stays_closed(monkeypatch, tmp_path):
+def test_archive_dir_failure_is_reported_and_output_continues(monkeypatch, tmp_path):
     app, _ = _app(tmp_path, strict=True)
     app.archive_enabled = True
     app.all_mountain_details = pd.DataFrame([{
@@ -214,13 +221,13 @@ def test_archive_dir_failure_is_reported_and_abort_stays_closed(monkeypatch, tmp
     _patch_spo_pipeline(monkeypatch, app, tmp_path)
     calls = []
     messages = []
-    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo"))
+    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo") or str(tmp_path / "out.xlsx"))
     monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: calls.append("history"))
     monkeypatch.setattr(gui_module, "resolve_archive_dir", lambda *a, **k: (_ for _ in ()).throw(ValueError("missing archive root")))
-    monkeypatch.setattr(gui_module.messagebox, "showerror", lambda *a, **k: messages.append(a[1]))
     monkeypatch.setattr(gui_module.messagebox, "showwarning", lambda *a, **k: messages.append(a[1]))
+    monkeypatch.setattr(gui_module.messagebox, "showinfo", lambda *a, **k: None)
     App._auto_export_spo(app)
-    assert calls == []
+    assert calls == ["spo", "history"]
     assert any("アーカイブに失敗しました" in message for message in messages)
 
 
@@ -232,7 +239,7 @@ def _bundle_row(dest, nony, ukeire, hinban):
     }
 
 
-def test_issue129_wrong_bundle_is_error_and_fail_closed(monkeypatch, tmp_path):
+def test_issue129_wrong_bundle_warns_and_outputs(monkeypatch, tmp_path):
     rows = [
         {**_bundle_row("高岡", "2026090404", "K5", "A"), "山通番": 2},
         {**_bundle_row("KVC", "2026082806", "B7", "B"), "山通番": 7},
@@ -254,22 +261,26 @@ def test_issue129_wrong_bundle_is_error_and_fail_closed(monkeypatch, tmp_path):
     app.all_mountain_details = clustered
     app.all_mountain_details_display = pd.DataFrame(rows)
     app._spo = pd.DataFrame({
-        "GroupedData": [json.dumps([rows[0]])],
-        "groupdata": [json.dumps([rows[0]])],
-        "グループ番号": [7], "タイトル": ["山7"], "パレット数": [1],
+        "GroupedData": [json.dumps([{**rows[0], "番号": 1}])],
+        "groupdata": [json.dumps([{**rows[0], "番号": 1}])],
+        "グループ番号": [7], "タイトル": ["山7"], "工程": ["1工程"], "パレット数": [1],
         "Max移動工数": [0], "引取工数": [0],
     })
     _patch_spo_pipeline(monkeypatch, app, tmp_path)
     calls = []
     archive_calls = []
-    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo"))
+    warnings = []
+    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo") or str(tmp_path / "out.xlsx"))
     monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: calls.append("history"))
     monkeypatch.setattr(gui_module, "archive_export", lambda *a, **k: archive_calls.append(k))
-    monkeypatch.setattr(gui_module.messagebox, "showerror", lambda *a, **k: None)
+    monkeypatch.setattr(gui_module.messagebox, "showwarning", lambda title, message: warnings.append(message))
+    monkeypatch.setattr(gui_module.messagebox, "showinfo", lambda *a, **k: None)
     App._auto_export_spo(app)
-    assert calls == []
-    assert archive_calls[0]["result"] == "中止"
-    assert archive_calls[0]["output_path"] is None
+    assert calls == ["spo", "history"]
+    assert archive_calls[0]["result"] == "出力"
+    assert archive_calls[0]["output_path"] is not None
+    assert len(warnings) == 1
+    assert "消失パレット: 1枚" in warnings[0]
 
 
 def test_valid_hinban_bundle_has_no_d5_or_unexpanded():

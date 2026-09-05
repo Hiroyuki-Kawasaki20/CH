@@ -1765,6 +1765,7 @@ class App(ctk.CTk):
                         "出力アーカイブ",
                         f"アーカイブに失敗しました。\n{archive_error}",
                     )
+            warning_lines = []
             # ファイル書き出し直前に、表示・束ね後・GroupedData の枚数を突合する。
             report = verify_export_invariant(
                 self.all_mountain_details_display,
@@ -1783,13 +1784,14 @@ class App(ctk.CTk):
                     report.explained_bundle_yamas,
                 )
             if report.is_unverifiable:
-                messagebox.showerror(
-                    "出力中止",
-                    f"出力整合性を検証できないため出力を中止しました。\n{report.error}",
+                warning_lines.append(
+                    "出力の整合性を確認できませんでした。出力は行いましたが、かんばん照合を必ず実施してください。"
                 )
-                _archive_result(report, result="中止")
-                return
-            if report.is_lost:
+            if report.is_lost and not report.is_unverifiable:
+                warning_lines.extend([
+                    "以下のパレットは出力ファイルに含まれていません。",
+                    "現物のかんばんで引取り（アナログ対応）をお願いします。",
+                ])
                 missing_lines = []
                 for row in report.missing_kanban[:20]:
                     yama = row.get("山通番", "")
@@ -1800,9 +1802,17 @@ class App(ctk.CTk):
                         f"{row.get('NONYUHIBIN', '')} / {row.get('UKEIRE', '')} / "
                         f"{row.get('SEBANGO', '')}"
                     )
-                message = f"パレットが {len(report.missing_kanban)} 枚消失しているため出力を中止しました"
+                d5_count = sum(
+                    finding.check_name.startswith("D-5 誤った束ね")
+                    for finding in report.audit_findings
+                )
+                lost_count = len(report.missing_kanban) + d5_count
+                message = f"消失パレット: {lost_count}枚"
                 if missing_lines:
-                    message += "\n\nタイトル（山通番） / 納入先 / ストア / 便 / 受入 / SEBANGO\n" + "\n".join(missing_lines)
+                    warning_lines.append(
+                        "タイトル（山通番） / 納入先 / ストア / 便 / 受入 / SEBANGO\n" + "\n".join(missing_lines)
+                    )
+                warning_lines.append(message)
                 audit_lines = [
                     f"{finding.title or title_by_yama.get(finding.group_number, 'タイトル不明')}"
                     f"（山通番{finding.group_number}）/ {finding.check_name} "
@@ -1811,18 +1821,10 @@ class App(ctk.CTk):
                     if finding.severity == "ERROR"
                 ]
                 if audit_lines:
-                    message += "\n\n出力ファイル監査:\n" + "\n".join(audit_lines[:20])
-                if self.export_invariant_strict:
-                    messagebox.showerror("出力中止", message)
-                    _archive_result(report, result="中止")
-                    return
-                messagebox.showwarning("出力警告", message + "\n（strict=false のため出力を継続します）")
+                    warning_lines.append("出力ファイル監査:\n" + "\n".join(audit_lines[:20]))
             if report.has_unexplained_count_gap:
                 stores = ", ".join(report.unexpanded_stores) or "不明"
-                messagebox.showwarning(
-                    "束ね未展開",
-                    f"束ね未展開を検知しました（ストア: {stores}）。\n{report.summary()}",
-                )
+                warning_lines.append(f"束ね未展開を検知しました（ストア: {stores}）。\n{report.summary()}")
             warning_audit_lines = [
                 f"{finding.title or title_by_yama.get(finding.group_number, 'タイトル不明')}"
                 f"（山通番{finding.group_number}）/ {finding.check_name} "
@@ -1832,11 +1834,9 @@ class App(ctk.CTk):
             ]
             if warning_audit_lines:
                 print("出力ファイル監査警告:\n" + "\n".join(warning_audit_lines))
-                messagebox.showwarning("出力ファイル監査", "\n".join(warning_audit_lines[:20]))
+                warning_lines.append("出力ファイル監査警告:\n" + "\n".join(warning_audit_lines[:20]))
             # SPOアップロード用.xlsx はSPO監視フォルダへ（staging+timestamp+move方式）
             spo_path = export_spo_xlsx_staged(spo_df, watch_dir=dirs["spo_xlsx_dir"])
-            if spo_path and getattr(self, "archive_enabled", True):
-                _archive_result(report, spo_path, result="出力")
             try:
                 # 履歴はローカル固定フォルダへ
                 append_to_spo_history(spo_df, out_dir=dirs["history_dir"])
@@ -1848,6 +1848,13 @@ class App(ctk.CTk):
                     os.startfile(self.export_dir)
             except Exception:
                 pass
+            if spo_path and getattr(self, "archive_enabled", True):
+                _archive_result(report, spo_path, result="出力")
+            if warning_lines:
+                warning_message = "\n\n".join(warning_lines)
+                warning_message = "⚠️ 手作業での引取りが必要です\n" + warning_message
+                logger.error(warning_message)
+                messagebox.showwarning("⚠️ 手作業での引取りが必要です", warning_message)
 
     # ===== タブ更新 =====
     def update_basic_views(self):

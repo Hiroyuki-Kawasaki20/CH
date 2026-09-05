@@ -223,7 +223,7 @@ def _bundle_signature(row: Any) -> tuple:
 
 
 def _bundle_label(row: Any) -> str:
-    return "/".join(str(row.get(field, "")).strip() for field in ("納入先", "NONYUHIBIN", "UKEIRE"))
+    return "/".join(str(row.get(field, "")).strip() for field in ("納入先", "NONYUHIBIN", "UKEIRE", "SEBANGO"))
 
 
 def audit_clustered_rows(export_df: pd.DataFrame) -> List[SpoAuditFinding]:
