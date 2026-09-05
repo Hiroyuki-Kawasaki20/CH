@@ -159,6 +159,25 @@ def test_archive_failure_does_not_fail_output(monkeypatch, tmp_path):
     assert calls == ["spo", "history"]
 
 
+def test_archive_resolution_failure_does_not_stop_healthy_output(monkeypatch, tmp_path):
+    app, _ = _app(tmp_path, strict=True)
+    app.all_mountain_details_display = app.all_mountain_details.copy()
+    app.archive_enabled = True
+    _patch_spo_pipeline(monkeypatch, app, tmp_path)
+    calls = []
+    messages = []
+    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo") or str(tmp_path / "out.xlsx"))
+    monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: calls.append("history"))
+    monkeypatch.setattr(gui_module, "resolve_archive_dir", lambda *a, **k: (_ for _ in ()).throw(ValueError("archive root")))
+    monkeypatch.setattr(gui_module.messagebox, "showwarning", lambda title, message: messages.append(message))
+    monkeypatch.setattr(gui_module.messagebox, "showinfo", lambda *a, **k: None)
+
+    App._auto_export_spo(app)
+
+    assert calls == ["spo", "history"]
+    assert any("アーカイブに失敗しました" in message for message in messages)
+
+
 def test_default_archive_is_outside_spo_watch_folder(tmp_path):
     export_dir = tmp_path / "spo-watch"
     resolved = resolve_archive_dir(str(export_dir), local_output_dir=LOCAL_OUTPUT_DIR)

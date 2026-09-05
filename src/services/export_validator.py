@@ -8,7 +8,7 @@ import pandas as pd
 
 from ..models.constants import (
     BASE_ONE_TIME, BASE_PER_PAL, MIDDLE_WORK,
-    VIRTUAL_YAMA_NO, is_virtual_yama,
+    SPO_EXPORT_REQUIRED_COLUMNS, VIRTUAL_YAMA_NO, is_virtual_yama,
 )
 from ..utils.normalizer import _normalize_dest_name, _normalize_ukeire, _ZEN2HAN_DIGIT_COLON
 
@@ -37,6 +37,7 @@ class ExportInvariantReport:
     parse_failed_rows: List[Any] = None
     audit_findings: List[SpoAuditFinding] = None
     error: str = ""
+    errors: List[str] = None
     is_unverifiable: bool = False
 
     def __post_init__(self):
@@ -45,6 +46,10 @@ class ExportInvariantReport:
         self.parse_failed_rows = list(self.parse_failed_rows or [])
         self.audit_findings = list(self.audit_findings or [])
         self.explained_bundle_yamas = dict(self.explained_bundle_yamas or {})
+        self.errors = list(self.errors or [])
+        if self.error and self.error not in self.errors:
+            self.errors.append(self.error)
+        self.error = "\n".join(self.errors)
 
     @property
     def has_unexpanded(self) -> bool:
@@ -219,7 +224,26 @@ def audit_clustered_rows(export_df: pd.DataFrame) -> List[SpoAuditFinding]:
         merged = row.get("_merged_rows")
         if not _is_merged_rows(merged):
             continue
-        missing_yama = [item for item in merged if isinstance(item, dict) and not str(item.get("山通番", "")).strip()]
+        malformed_rows = [item for item in merged if not isinstance(item, dict)]
+        missing_yama = [
+            item for item in merged
+            if isinstance(item, dict) and (
+                "山通番" not in item
+                or item.get("山通番") is None
+                or (isinstance(item.get("山通番"), float) and pd.isna(item.get("山通番")))
+                or not str(item.get("山通番", "")).strip()
+            )
+        ]
+        if malformed_rows:
+            findings.append(SpoAuditFinding(
+                title=str(row.get("タイトル", "")),
+                group_number=row.get("山通番", ""),
+                process=str(row.get("工程", "")),
+                check_name="D-5 検証不能（束ね元行が不正）",
+                expected="束ね元行はdict",
+                actual=f"不正行数={len(malformed_rows)}",
+                severity="ERROR",
+            ))
         if missing_yama:
             findings.append(SpoAuditFinding(
                 title=str(row.get("タイトル", "")),
@@ -231,8 +255,8 @@ def audit_clustered_rows(export_df: pd.DataFrame) -> List[SpoAuditFinding]:
                 severity="ERROR",
             ))
             continue
-        representative = merged[0] if isinstance(merged[0], dict) else None
         valid_rows = [item for item in merged if isinstance(item, dict) and not _is_virtual(item.get("山通番"))]
+        representative = valid_rows[0] if valid_rows else None
         signatures = {_bundle_signature(item) for item in valid_rows}
         if len(signatures) <= 1:
             continue
@@ -301,7 +325,7 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
             raise ValueError("GUI表示データに山通番列がありません")
         if export_df is not None and (not isinstance(export_df, pd.DataFrame) or "山通番" not in export_df.columns):
             raise ValueError("パイプラインデータに山通番列がありません")
-        required_spo_columns = {"タイトル", "工程", "groupdata", "GroupedData", "パレット数", "グループ番号"}
+        required_spo_columns = set(SPO_EXPORT_REQUIRED_COLUMNS)
         if spo_df is not None and not isinstance(spo_df, pd.DataFrame):
             raise ValueError("SPOデータがDataFrameではありません")
         if spo_df is not None:
@@ -371,12 +395,22 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
                    for finding in audit_findings)
         )
         report.is_unverifiable = bool(report.parse_failed_rows)
+        report_reasons = []
         if report.is_unverifiable:
-            report.error = f"GroupedData JSONのパースに失敗した行があります: {report.parse_failed_rows}"
+            report_reasons.append(f"GroupedData JSONのパースに失敗した行があります: {report.parse_failed_rows}")
         report.has_unexplained_count_gap = bool(unexplained_unexpanded_yamas)
-        if any(finding.check_name == "D-5 検証不能（山通番欠落）" for finding in audit_findings):
+        unverifiable_findings = [
+            finding for finding in audit_findings
+            if finding.check_name.startswith("D-5 検証不能")
+        ]
+        if unverifiable_findings:
             report.is_unverifiable = True
-            report.error = "束ね元行に山通番がないため検証できません"
+            report_reasons.extend(
+                f"{finding.check_name}: {finding.actual}"
+                for finding in unverifiable_findings
+            )
+        report.errors = report_reasons
+        report.error = "\n".join(report_reasons)
         return report
     except Exception as error:
         return ExportInvariantReport(

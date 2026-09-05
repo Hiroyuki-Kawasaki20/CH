@@ -1777,6 +1777,11 @@ class App(ctk.CTk):
                 row.get("グループ番号"): row.get("タイトル", "")
                 for _, row in spo_df.iterrows()
             }
+            if report.explained_bundle_yamas:
+                logger.info(
+                    "正当な束ねによるGroupedData件数差: %s",
+                    report.explained_bundle_yamas,
+                )
             if report.is_unverifiable:
                 messagebox.showerror(
                     "出力中止",
@@ -1812,7 +1817,7 @@ class App(ctk.CTk):
                     _archive_result(report, result="中止")
                     return
                 messagebox.showwarning("出力警告", message + "\n（strict=false のため出力を継続します）")
-            if report.has_unexpanded:
+            if report.has_unexplained_count_gap:
                 stores = ", ".join(report.unexpanded_stores) or "不明"
                 messagebox.showwarning(
                     "束ね未展開",

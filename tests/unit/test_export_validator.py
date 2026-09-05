@@ -9,6 +9,7 @@ from src.services.export_validator import (
     audit_clustered_rows,
 )
 from src.services.exporter import build_spo_export_df
+from src.services.scheduler import cluster_by_store
 
 
 def _row(yama, store, nonyuhibin, ukeire, dest="KVC", sebango=""):
@@ -145,6 +146,44 @@ def test_missing_yama_in_merged_rows_is_unverifiable():
     assert report.is_lost is True
 
 
+def test_nan_yama_in_merged_rows_is_unverifiable():
+    merged = [_row(float("nan"), "A", "1", "1"), _row(1, "B", "1", "1")]
+    export = pd.DataFrame([{"山通番": 1, "ストア": "A", "_merged_rows": merged}])
+    findings = audit_clustered_rows(export)
+    assert findings[0].check_name == "D-5 検証不能（山通番欠落）"
+    assert verify_export_invariant(export, export, _spo([{"山通番": 1}], [1]), "GroupedData").is_unverifiable is True
+
+
+def test_non_dict_merged_row_is_unverifiable():
+    export = pd.DataFrame([{"山通番": 1, "ストア": "A", "_merged_rows": [{"山通番": 1}, "bad"]}])
+    findings = audit_clustered_rows(export)
+    assert findings[0].check_name == "D-5 検証不能（束ね元行が不正）"
+    assert verify_export_invariant(export, export, _spo([{"山通番": 1}], [1]), "GroupedData").is_unverifiable is True
+
+
+def test_virtual_first_merged_row_uses_first_real_row_as_representative():
+    merged = [
+        {"山通番": -1, "ストア": "A", "納入先": "仮想", "NONYUHIBIN": "0", "UKEIRE": "0"},
+        {"山通番": 3, "ストア": "A", "納入先": "KVC", "NONYUHIBIN": "1", "UKEIRE": "1"},
+        {"山通番": 7, "ストア": "A", "納入先": "高岡", "NONYUHIBIN": "2", "UKEIRE": "2"},
+    ]
+    findings = audit_clustered_rows(pd.DataFrame([{"山通番": 3, "_merged_rows": merged}]))
+    assert findings[0].expected.startswith("代表行=山通番3")
+    assert "山通番7" in findings[0].actual
+
+
+def test_multiple_unverifiable_reasons_are_preserved():
+    merged = [{"ストア": "A"}, {"山通番": 1, "ストア": "A"}]
+    export = pd.DataFrame([{"山通番": 1, "_merged_rows": merged}])
+    spo = _spo([{"山通番": 1}], [1])
+    spo.loc[0, "GroupedData"] = "{bad-json"
+    spo.loc[0, "groupdata"] = "{bad-json"
+    report = verify_export_invariant(export, export, spo, "GroupedData")
+    assert "JSON" in report.error
+    assert "山通番欠落" in report.error
+    assert len(report.errors) >= 2
+
+
 def test_verify_real_build_spo_export_output_is_verifiable():
     details = pd.DataFrame([
         {"山通番": 1, "移動工数": 10.0, "高さ": 100, "ストア": "A", "納入先": "KVC",
@@ -158,3 +197,35 @@ def test_verify_real_build_spo_export_output_is_verifiable():
     report = verify_export_invariant(details, details, spo, "GroupedData")
     assert report.is_unverifiable is False
     assert report.is_lost is False
+
+
+def test_real_pipeline_cluster_build_verify_with_valid_bundle():
+    rows = [
+        {"山通番": 3, "ストア": "L12-C-5", "納入先": "KVC", "NONYUHIBIN": "2026082806",
+         "UKEIRE": "B7", "HINBAN": "A", "SEBANGO": "719", "移動工数": 10.0, "高さ": 100,
+         "工程内No": 1, "サイズ種類": "1"},
+        {"山通番": 3, "ストア": "L12-C-5", "納入先": "KVC", "NONYUHIBIN": "2026082806",
+         "UKEIRE": "B7", "HINBAN": "B", "SEBANGO": "720", "移動工数": 20.0, "高さ": 100,
+         "工程内No": 2, "サイズ種類": "1"},
+    ]
+    clustered = pd.DataFrame(cluster_by_store(rows))
+    assert "山通番" in clustered.iloc[0]["_merged_rows"][0]
+    spo = build_spo_export_df(clustered, {3: "メイン"}, {3: "08:00"})
+    report = verify_export_invariant(pd.DataFrame(rows), clustered, spo, "GroupedData")
+    assert report.is_unverifiable is False
+    assert report.is_lost is False
+    assert report.has_unexplained_count_gap is False
+
+
+def test_explained_bundle_gap_is_aggregated_after_all_rows():
+    rows = [
+        {"山通番": 3, "ストア": "A", "納入先": "KVC", "NONYUHIBIN": "1", "UKEIRE": "1", "HINBAN": "A"},
+        {"山通番": 3, "ストア": "A", "納入先": "KVC", "NONYUHIBIN": "1", "UKEIRE": "1", "HINBAN": "B"},
+        {"山通番": 3, "ストア": "B", "納入先": "KVC", "NONYUHIBIN": "1", "UKEIRE": "1", "HINBAN": "C"},
+        {"山通番": 3, "ストア": "B", "納入先": "KVC", "NONYUHIBIN": "1", "UKEIRE": "1", "HINBAN": "D"},
+    ]
+    clustered = pd.DataFrame(cluster_by_store(rows))
+    spo = build_spo_export_df(clustered, {3: "メイン"}, {3: "08:00"})
+    report = verify_export_invariant(pd.DataFrame(rows), clustered, spo, "GroupedData")
+    assert report.explained_bundle_yamas == {"3": 2}
+    assert report.has_unexplained_count_gap is False

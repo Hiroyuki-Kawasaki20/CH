@@ -45,6 +45,9 @@ VIRTUAL_YAMA_NO = -1
 CONFIG_FILENAME = "ch_kanban_settings.json"
 REASSIGN_LOG_FILENAME = "reassign_log.csv"
 LOCAL_OUTPUT_DIR = r"C:\Users\1588386\DIG_Project\CHかんばんセット"
+SPO_EXPORT_REQUIRED_COLUMNS = (
+    "タイトル", "工程", "groupdata", "GroupedData", "パレット数", "グループ番号",
+)
 
 # ===== 休憩時間（秒単位） =====
 BREAK_TIMES = [
