@@ -6,9 +6,10 @@ import pandas as pd
 import pytest
 
 import src.app.gui as gui_module
-from src.app.gui import App
+from src.app.gui import App, LOCAL_OUTPUT_DIR
 from src.services.export_archive import archive_export, resolve_archive_dir
-from src.services.export_validator import ExportInvariantReport
+from src.services.export_validator import ExportInvariantReport, audit_clustered_rows
+from src.services.scheduler import cluster_by_store
 
 
 def _row(store, sebango=""):
@@ -95,12 +96,15 @@ def test_issue129_validator_exception_does_not_fail_open(monkeypatch, tmp_path):
     app, _ = _app(tmp_path, strict=True)
     _patch_spo_pipeline(monkeypatch, app, tmp_path)
     calls = []
-    monkeypatch.setattr(gui_module, "verify_export_invariant", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("validator failure")))
+    broken = app._spo.copy()
+    broken["groupdata"] = "{broken-json"
+    broken["GroupedData"] = "{broken-json"
+    app._spo = broken
     monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo"))
     monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: calls.append("history"))
 
-    with pytest.raises(RuntimeError, match="validator failure"):
-        App._auto_export_spo(app)
+    monkeypatch.setattr(gui_module.messagebox, "showerror", lambda *a, **k: None)
+    App._auto_export_spo(app)
 
     assert calls == []
 
@@ -119,6 +123,18 @@ def test_archive_manifest_contains_counts(tmp_path):
     assert manifest["A_gui_count"] == 4
     assert manifest["B_pipeline_count"] == 3
     assert manifest["C_exported_count"] == 3
+
+
+def test_archive_manifest_records_cancelled_result_without_output(tmp_path):
+    report = ExportInvariantReport(gui_count=4, pipeline_count=4, exported_count=3, is_lost=True)
+    archive_dir = archive_export(
+        None, [], pd.DataFrame(), report, {}, str(tmp_path / "archive"), result="中止"
+    )
+    manifest_path = Path(archive_dir) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["結果"] == "中止"
+    assert manifest["出力ファイル名"] == ""
+    assert list(Path(archive_dir).glob("*.xlsx")) == []
 
 
 def test_archive_failure_does_not_fail_output(monkeypatch, tmp_path):
@@ -141,6 +157,68 @@ def test_archive_failure_does_not_fail_output(monkeypatch, tmp_path):
 
 def test_default_archive_is_outside_spo_watch_folder(tmp_path):
     export_dir = tmp_path / "spo-watch"
-    resolved = resolve_archive_dir(str(export_dir))
-    assert Path(resolved).parent == tmp_path
-    assert not Path(resolved).is_relative_to(export_dir)
+    resolved = resolve_archive_dir(str(export_dir), local_output_dir=LOCAL_OUTPUT_DIR)
+    assert Path(resolved).is_relative_to(Path(LOCAL_OUTPUT_DIR))
+    assert not export_dir.is_relative_to(Path(resolved))
+
+
+def _bundle_row(dest, nony, ukeire, hinban):
+    return {
+        "山通番": 3, "ストア": "L12-C-5", "納入先": dest,
+        "NONYUHIBIN": nony, "UKEIRE": ukeire, "HINBAN": hinban,
+        "SEBANGO": "719",
+    }
+
+
+def test_issue129_wrong_bundle_is_error_and_fail_closed(monkeypatch, tmp_path):
+    rows = [
+        _bundle_row("高岡", "2026090404", "K5", "A"),
+        _bundle_row("KVC", "2026082806", "B7", "B"),
+    ]
+    clustered = pd.DataFrame(cluster_by_store(rows))
+    findings = audit_clustered_rows(clustered)
+    assert len(findings) == 1
+    assert findings[0].severity == "ERROR"
+    assert "高岡/2026090404/K5" in findings[0].expected
+    assert "KVC/2026082806/B7" in findings[0].actual
+
+    app, _ = _app(tmp_path, strict=True)
+    app.archive_enabled = True
+    app.all_mountain_details = clustered
+    app.all_mountain_details_display = pd.DataFrame(rows)
+    app._spo = pd.DataFrame({
+        "GroupedData": [json.dumps([rows[0]])],
+        "groupdata": [json.dumps([rows[0]])],
+        "グループ番号": [3], "タイトル": ["山7"], "パレット数": [1],
+        "Max移動工数": [0], "引取工数": [0],
+    })
+    _patch_spo_pipeline(monkeypatch, app, tmp_path)
+    calls = []
+    archive_calls = []
+    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo"))
+    monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: calls.append("history"))
+    monkeypatch.setattr(gui_module, "archive_export", lambda *a, **k: archive_calls.append(k))
+    monkeypatch.setattr(gui_module.messagebox, "showerror", lambda *a, **k: None)
+    App._auto_export_spo(app)
+    assert calls == []
+    assert archive_calls[0]["result"] == "中止"
+    assert archive_calls[0]["output_path"] is None
+
+
+def test_valid_hinban_bundle_has_no_d5_or_unexpanded():
+    rows = [
+        _bundle_row("KVC", "2026082806", "B7", "A"),
+        _bundle_row("KVC", "2026082806", "B7", "B"),
+    ]
+    clustered = pd.DataFrame(cluster_by_store(rows))
+    assert audit_clustered_rows(clustered) == []
+
+
+def test_same_hinban_rows_are_not_clustered_and_have_no_findings():
+    rows = [
+        _bundle_row("KVC", "2026082806", "B7", "A"),
+        _bundle_row("高岡", "2026090404", "K5", "A"),
+    ]
+    clustered = pd.DataFrame(cluster_by_store(rows))
+    assert len(clustered) == 2
+    assert audit_clustered_rows(clustered) == []

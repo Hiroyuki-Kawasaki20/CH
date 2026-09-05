@@ -208,6 +208,7 @@ class App(ctk.CTk):
         self.archive_enabled = bool(config.get("archive_enabled", True))
         self.archive_dir = str(config.get("archive_dir", ""))
         self.export_invariant_strict = bool(config.get("export_invariant_strict", True))
+        self.export_invariant_audit_cost = bool(config.get("export_invariant_audit_cost", False))
         # バッテリー交換チェックは「毎回OFF開始」仕様のため、
         # 設定ファイルからは復元しない。
 
@@ -1735,18 +1736,57 @@ class App(ctk.CTk):
         except Exception:
             pass
         if spo_df is not None and not spo_df.empty:
+            def _archive_result(report, output_path=None, result="出力"):
+                if not getattr(self, "archive_enabled", True):
+                    return
+                try:
+                    config = load_config()
+                    input_paths = []
+                    base_dir = config.get("base_dir")
+                    if base_dir:
+                        try:
+                            input_paths.append(_resolve_shipments_path(Path(base_dir)))
+                        except Exception:
+                            pass
+                    input_paths.append(get_master_path())
+                    archive_root = resolve_archive_dir(
+                        self.export_dir, self.archive_dir, LOCAL_OUTPUT_DIR
+                    )
+                    archive_export(
+                        output_path=output_path,
+                        input_paths=input_paths,
+                        export_df=self.all_mountain_details,
+                        report=report,
+                        settings_snapshot=config,
+                        archive_dir=archive_root,
+                        result=result,
+                    )
+                except Exception as archive_error:
+                    print(f"出力アーカイブ警告: {archive_error}")
+                    messagebox.showwarning(
+                        "出力アーカイブ",
+                        f"アーカイブ保存に失敗しました。\n{archive_error}",
+                    )
             # ファイル書き出し直前に、表示・束ね後・GroupedData の枚数を突合する。
             report = verify_export_invariant(
                 self.all_mountain_details_display,
                 self.all_mountain_details,
                 spo_df,
                 "GroupedData",
+                audit_cost=getattr(self, "export_invariant_audit_cost", False),
             )
+            title_by_yama = {
+                row.get("グループ番号"): row.get("タイトル", "")
+                for _, row in spo_df.iterrows()
+            }
+            if report.is_unverifiable:
+                messagebox.showerror(
+                    "出力中止",
+                    f"出力整合性を検証できないため出力を中止しました。\n{report.error}",
+                )
+                _archive_result(report, result="中止")
+                return
             if report.is_lost:
-                title_by_yama = {
-                    row.get("グループ番号"): row.get("タイトル", "")
-                    for _, row in spo_df.iterrows()
-                }
                 missing_lines = []
                 for row in report.missing_kanban[:20]:
                     yama = row.get("山通番", "")
@@ -1761,7 +1801,8 @@ class App(ctk.CTk):
                 if missing_lines:
                     message += "\n\nタイトル（山通番） / 納入先 / ストア / 便 / 受入 / SEBANGO\n" + "\n".join(missing_lines)
                 audit_lines = [
-                    f"{finding.title}（山通番{finding.group_number}）/ {finding.check_name} "
+                    f"{finding.title or title_by_yama.get(finding.group_number, 'タイトル不明')}"
+                    f"（山通番{finding.group_number}）/ {finding.check_name} "
                     f"期待={finding.expected} 実測={finding.actual}"
                     for finding in report.audit_findings
                     if finding.severity == "ERROR"
@@ -1770,6 +1811,7 @@ class App(ctk.CTk):
                     message += "\n\n出力ファイル監査:\n" + "\n".join(audit_lines[:20])
                 if self.export_invariant_strict:
                     messagebox.showerror("出力中止", message)
+                    _archive_result(report, result="中止")
                     return
                 messagebox.showwarning("出力警告", message + "\n（strict=false のため出力を継続します）")
             if report.has_unexpanded:
@@ -1779,7 +1821,8 @@ class App(ctk.CTk):
                     f"束ね未展開を検知しました（ストア: {stores}）。\n{report.summary()}",
                 )
             warning_audit_lines = [
-                f"{finding.title}（山通番{finding.group_number}）/ {finding.check_name} "
+                f"{finding.title or title_by_yama.get(finding.group_number, 'タイトル不明')}"
+                f"（山通番{finding.group_number}）/ {finding.check_name} "
                 f"期待={finding.expected} 実測={finding.actual}"
                 for finding in report.audit_findings
                 if finding.severity == "WARNING"
@@ -1790,28 +1833,7 @@ class App(ctk.CTk):
             # SPOアップロード用.xlsx はSPO監視フォルダへ（staging+timestamp+move方式）
             spo_path = export_spo_xlsx_staged(spo_df, watch_dir=dirs["spo_xlsx_dir"])
             if spo_path and getattr(self, "archive_enabled", True):
-                try:
-                    config = load_config()
-                    input_paths = []
-                    base_dir = config.get("base_dir")
-                    if base_dir:
-                        try:
-                            input_paths.append(_resolve_shipments_path(Path(base_dir)))
-                        except Exception:
-                            pass
-                    input_paths.append(get_master_path())
-                    archive_root = resolve_archive_dir(self.export_dir, self.archive_dir)
-                    archive_export(
-                        output_path=spo_path,
-                        input_paths=input_paths,
-                        export_df=self.all_mountain_details,
-                        report=report,
-                        settings_snapshot=config,
-                        archive_dir=archive_root,
-                    )
-                except Exception as archive_error:
-                    print(f"出力アーカイブ警告: {archive_error}")
-                    messagebox.showwarning("出力アーカイブ", f"アーカイブ保存に失敗しました（出力は完了しています）。\n{archive_error}")
+                _archive_result(report, spo_path, result="出力")
             try:
                 # 履歴はローカル固定フォルダへ
                 append_to_spo_history(spo_df, out_dir=dirs["history_dir"])

@@ -13,11 +13,12 @@ from .export_validator import ExportInvariantReport
 from ..models.constants import is_virtual_yama
 
 
-def resolve_archive_dir(export_dir: str, configured_dir: str = "") -> str:
-    """既定ではSPO監視フォルダの親配下へ保存する。"""
+def resolve_archive_dir(export_dir: str, configured_dir: str = "", local_output_dir: str = "") -> str:
+    """既定ではSPO監視フォルダ外のローカル出力先配下へ保存する。"""
     if configured_dir:
         return str(Path(configured_dir))
-    return str(Path(export_dir).resolve().parent / "_export_archive")
+    root = Path(local_output_dir) if local_output_dir else Path(export_dir).resolve().parent
+    return str(root / "_export_archive")
 
 
 def _unique_path(path: Path) -> Path:
@@ -62,14 +63,17 @@ def _counts_by_mountain(export_df: pd.DataFrame) -> dict:
 
 
 def archive_export(
-    output_path: str,
-    input_paths: Iterable[Path],
-    export_df: pd.DataFrame,
-    report: ExportInvariantReport,
-    settings_snapshot: dict,
-    archive_dir: str,
+    output_path: Optional[str] = None,
+    input_paths: Iterable[Path] = (),
+    export_df: Optional[pd.DataFrame] = None,
+    report: Optional[ExportInvariantReport] = None,
+    settings_snapshot: Optional[dict] = None,
+    archive_dir: str = "",
+    result: str = "出力",
 ) -> Optional[str]:
     """出力成功後にファイルと検証結果を保存する。呼び出し側で例外を捕捉する。"""
+    report = report or ExportInvariantReport()
+    settings_snapshot = settings_snapshot or {}
     root = Path(archive_dir)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     folder = root / timestamp
@@ -81,8 +85,10 @@ def archive_export(
                 break
     folder.mkdir(parents=True, exist_ok=False)
 
-    copied_output = _unique_path(folder / Path(output_path).name)
-    shutil.copy2(output_path, copied_output)
+    copied_output = None
+    if output_path:
+        copied_output = _unique_path(folder / Path(output_path).name)
+        shutil.copy2(output_path, copied_output)
     copied_inputs = []
     for raw_path in input_paths:
         source = Path(raw_path)
@@ -94,7 +100,8 @@ def archive_export(
 
     manifest = {
         "出力日時": datetime.now().isoformat(timespec="seconds"),
-        "出力ファイル名": copied_output.name,
+        "結果": result,
+        "出力ファイル名": copied_output.name if copied_output else "",
         "A_gui_count": report.gui_count,
         "B_pipeline_count": report.pipeline_count,
         "C_exported_count": report.exported_count,
