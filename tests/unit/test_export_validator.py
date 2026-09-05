@@ -6,7 +6,9 @@ from src.services.export_validator import (
     count_exported_kanban,
     count_kanban,
     verify_export_invariant,
+    audit_clustered_rows,
 )
+from src.services.exporter import build_spo_export_df
 
 
 def _row(yama, store, nonyuhibin, ukeire, dest="KVC", sebango=""):
@@ -78,6 +80,7 @@ def test_valid_merged_rows_are_not_unexpanded():
     spo = _spo([merged[0]], [1])
     report = verify_export_invariant(export, export, spo, "GroupedData")
     assert report.has_unexpanded is False
+    assert report.explained_bundle_yamas == {"1": 1}
     assert report.unexpanded_stores == []
 
 
@@ -126,3 +129,32 @@ def test_both_input_frames_none_are_unverifiable():
     report = verify_export_invariant(None, None, None, "GroupedData")
     assert report.is_unverifiable is True
     assert report.is_lost is True
+
+
+def test_missing_yama_in_merged_rows_is_unverifiable():
+    merged = [_row(1, "A", "1", "1"), _row(1, "B", "1", "1")]
+    for item in merged:
+        item.pop("山通番")
+    export = pd.DataFrame([{"山通番": 1, "ストア": "A", "_merged_rows": merged}])
+    findings = audit_clustered_rows(export)
+    assert findings[0].check_name == "D-5 検証不能（山通番欠落）"
+    assert findings[0].severity == "ERROR"
+    spo = _spo([{"山通番": 1, "ストア": "A"}], [1])
+    report = verify_export_invariant(export, export, spo, "GroupedData")
+    assert report.is_unverifiable is True
+    assert report.is_lost is True
+
+
+def test_verify_real_build_spo_export_output_is_verifiable():
+    details = pd.DataFrame([
+        {"山通番": 1, "移動工数": 10.0, "高さ": 100, "ストア": "A", "納入先": "KVC",
+         "NONYUHIBIN": "1", "UKEIRE": "1", "SEBANGO": "1", "工程内No": 1,
+         "サイズ種類": "1"},
+        {"山通番": 1, "移動工数": 20.0, "高さ": 100, "ストア": "B", "納入先": "KVC",
+         "NONYUHIBIN": "1", "UKEIRE": "1", "SEBANGO": "2", "工程内No": 2,
+         "サイズ種類": "1"},
+    ])
+    spo = build_spo_export_df(details, {1: "メイン"}, {1: "08:00"})
+    report = verify_export_invariant(details, details, spo, "GroupedData")
+    assert report.is_unverifiable is False
+    assert report.is_lost is False

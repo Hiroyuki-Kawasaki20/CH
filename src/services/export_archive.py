@@ -12,7 +12,7 @@ from .export_validator import ExportInvariantReport, report_as_dict
 from ..models.constants import LOCAL_OUTPUT_DIR, is_virtual_yama
 
 
-def resolve_archive_dir(export_dir: str, configured_dir: str = "", local_output_dir: str = None) -> str:
+def resolve_archive_dir(export_dir: str, configured_dir: str = "", local_output_dir: Optional[str] = None) -> str:
     """既定ではSPO監視フォルダ外のローカル出力先配下へ保存する。"""
     if configured_dir:
         return str(Path(configured_dir))

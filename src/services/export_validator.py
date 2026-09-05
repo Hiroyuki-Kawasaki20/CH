@@ -2,7 +2,7 @@
 
 from dataclasses import asdict, dataclass
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -32,7 +32,8 @@ class ExportInvariantReport:
     missing_kanban: List[dict] = None
     unexpanded_stores: List[str] = None
     is_lost: bool = False
-    has_unexpanded: bool = False
+    has_unexplained_count_gap: bool = False
+    explained_bundle_yamas: Dict[str, int] = None
     parse_failed_rows: List[Any] = None
     audit_findings: List[SpoAuditFinding] = None
     error: str = ""
@@ -43,12 +44,18 @@ class ExportInvariantReport:
         self.unexpanded_stores = list(self.unexpanded_stores or [])
         self.parse_failed_rows = list(self.parse_failed_rows or [])
         self.audit_findings = list(self.audit_findings or [])
+        self.explained_bundle_yamas = dict(self.explained_bundle_yamas or {})
+
+    @property
+    def has_unexpanded(self) -> bool:
+        """旧API互換。未展開警告は原因不明の件数差だけを指す。"""
+        return self.has_unexplained_count_gap
 
     def summary(self) -> str:
         flags = []
         if self.is_lost:
             flags.append("消失")
-        if self.has_unexpanded:
+        if self.has_unexplained_count_gap:
             flags.append("束ね未展開")
         if self.audit_findings:
             flags.append("xlsx監査不整合")
@@ -212,11 +219,25 @@ def audit_clustered_rows(export_df: pd.DataFrame) -> List[SpoAuditFinding]:
         merged = row.get("_merged_rows")
         if not _is_merged_rows(merged):
             continue
+        missing_yama = [item for item in merged if isinstance(item, dict) and not str(item.get("山通番", "")).strip()]
+        if missing_yama:
+            findings.append(SpoAuditFinding(
+                title=str(row.get("タイトル", "")),
+                group_number=row.get("山通番", ""),
+                process=str(row.get("工程", "")),
+                check_name="D-5 検証不能（山通番欠落）",
+                expected="全ての束ね元行に山通番",
+                actual=f"欠落行数={len(missing_yama)}",
+                severity="ERROR",
+            ))
+            continue
+        representative = merged[0] if isinstance(merged[0], dict) else None
         valid_rows = [item for item in merged if isinstance(item, dict) and not _is_virtual(item.get("山通番"))]
         signatures = {_bundle_signature(item) for item in valid_rows}
         if len(signatures) <= 1:
             continue
-        representative = valid_rows[0]
+        if representative is None:
+            continue
         for disappeared in valid_rows[1:]:
             if _bundle_signature(disappeared) == _bundle_signature(representative):
                 continue
@@ -298,6 +319,7 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
 
         unexpanded = set()
         unexplained_unexpanded_yamas = set()
+        explained_bundle_yamas = {}
         explained_unexpanded_yamas = set()
         if export_df is not None and isinstance(export_df, pd.DataFrame) and not export_df.empty:
             expected_by_yama = {}
@@ -315,7 +337,9 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
                         if isinstance(item, dict)
                     } if _is_merged_rows(merged_rows) else set()
                     if len(signatures) == 1:
-                        explained_unexpanded_yamas.add(_norm(yama, "山通番"))
+                        explained_bundle_yamas[_norm(yama, "山通番")] = (
+                            expected_by_yama.get(yama, 0) - exported_by_yama.get(yama, 0)
+                        )
                         continue
                     unexplained_unexpanded_yamas.add(_norm(yama, "山通番"))
                     store = row.get("ストア", row.get("SYUKKASAKI", ""))
@@ -323,7 +347,7 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
             for yama, expected_count in expected_by_yama.items():
                 if exported_by_yama.get(yama, 0) != expected_count:
                     yama_key = _norm(yama, "山通番")
-                    if yama_key not in explained_unexpanded_yamas:
+                    if yama_key not in explained_bundle_yamas:
                         unexplained_unexpanded_yamas.add(yama_key)
 
         audit_findings = audit_spo_dataframe(spo_df, audit_cost=audit_cost)
@@ -336,6 +360,7 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
             unexpanded_stores=sorted(unexpanded),
             parse_failed_rows=parse_failed_rows,
             audit_findings=audit_findings,
+            explained_bundle_yamas=explained_bundle_yamas,
         )
         d5_findings = [finding for finding in audit_findings if finding.check_name.startswith("D-5")]
         report.is_lost = (
@@ -348,7 +373,10 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
         report.is_unverifiable = bool(report.parse_failed_rows)
         if report.is_unverifiable:
             report.error = f"GroupedData JSONのパースに失敗した行があります: {report.parse_failed_rows}"
-        report.has_unexpanded = bool(unexplained_unexpanded_yamas)
+        report.has_unexplained_count_gap = bool(unexplained_unexpanded_yamas)
+        if any(finding.check_name == "D-5 検証不能（山通番欠落）" for finding in audit_findings):
+            report.is_unverifiable = True
+            report.error = "束ね元行に山通番がないため検証できません"
         return report
     except Exception as error:
         return ExportInvariantReport(

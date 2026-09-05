@@ -166,6 +166,38 @@ def test_default_archive_is_outside_spo_watch_folder(tmp_path):
     assert not export_dir.is_relative_to(Path(resolved))
 
 
+def test_archive_dir_requires_local_output_dir():
+    with pytest.raises(ValueError):
+        resolve_archive_dir("C:/spo-watch", local_output_dir=None)
+
+
+def test_archive_dir_failure_is_reported_and_abort_stays_closed(monkeypatch, tmp_path):
+    app, _ = _app(tmp_path, strict=True)
+    app.archive_enabled = True
+    app.all_mountain_details = pd.DataFrame([{
+        "山通番": 1, "ストア": "A", "_merged_rows": [
+            {"山通番": 1, "ストア": "A", "納入先": "KVC", "NONYUHIBIN": "1", "UKEIRE": "1"},
+            {"山通番": 7, "ストア": "A", "納入先": "高岡", "NONYUHIBIN": "2", "UKEIRE": "2"},
+        ],
+    }])
+    app.all_mountain_details_display = pd.DataFrame([{"山通番": 1}])
+    app._spo = pd.DataFrame({
+        "タイトル": ["山1"], "工程": ["1工程"], "groupdata": ["[]"], "GroupedData": ["[]"],
+        "グループ番号": [1], "パレット数": [0], "Max移動工数": [0], "引取工数": [0],
+    })
+    _patch_spo_pipeline(monkeypatch, app, tmp_path)
+    calls = []
+    messages = []
+    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo"))
+    monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: calls.append("history"))
+    monkeypatch.setattr(gui_module, "resolve_archive_dir", lambda *a, **k: (_ for _ in ()).throw(ValueError("missing archive root")))
+    monkeypatch.setattr(gui_module.messagebox, "showerror", lambda *a, **k: messages.append(a[1]))
+    monkeypatch.setattr(gui_module.messagebox, "showwarning", lambda *a, **k: messages.append(a[1]))
+    App._auto_export_spo(app)
+    assert calls == []
+    assert any("アーカイブに失敗しました" in message for message in messages)
+
+
 def _bundle_row(dest, nony, ukeire, hinban):
     return {
         "山通番": 3, "ストア": "L12-C-5", "納入先": dest,

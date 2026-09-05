@@ -15,9 +15,12 @@ from datetime import datetime, timedelta
 import os
 import sys
 import json
+import logging
 
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # パス設定（srcの親ディレクトリをsys.pathに追加）
 _SRC_DIR = Path(__file__).resolve().parents[1]
@@ -1757,10 +1760,10 @@ class App(ctk.CTk):
                         result=result,
                     )
                 except Exception as archive_error:
-                    print(f"出力アーカイブ警告: {archive_error}")
+                    logger.error("出力アーカイブに失敗しました", exc_info=True)
                     messagebox.showwarning(
                         "出力アーカイブ",
-                        f"アーカイブ保存に失敗しました。\n{archive_error}",
+                        f"アーカイブに失敗しました。\n{archive_error}",
                     )
             # ファイル書き出し直前に、表示・束ね後・GroupedData の枚数を突合する。
             report = verify_export_invariant(
