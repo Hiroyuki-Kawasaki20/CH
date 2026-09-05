@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """CHかんばんセット — 定数・工数計算式"""
 
+
 # ===== 仕分け定数 =====
 DEFAULT_MIXING_KEY = "UKEIRE"           # 混載キーのデフォルト列名
 DEFAULT_HEIGHT_CAP = 2450               # 高さ上限（mm）

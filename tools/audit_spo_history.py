@@ -1,5 +1,6 @@
 """SPO履歴xlsxを読み取り専用で一括監査するCLI。"""
 
+
 import argparse
 from collections import Counter
 from pathlib import Path

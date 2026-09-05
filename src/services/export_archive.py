@@ -1,5 +1,6 @@
 """SPO 出力と入力データの調査用アーカイブ。"""
 
+
 from datetime import datetime
 import json
 from pathlib import Path

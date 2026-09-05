@@ -31,11 +31,14 @@ def _app(tmp_path, strict=True):
         {**_row("Q10-B-3", "439"), "山通番": 2, "NONYUHIBIN": "2026090414", "UKEIRE": "07", "納入先": "日野"},
     ])
     export = display.iloc[[1, 2, 3]].copy()
+    def _json_row(row):
+        return json.dumps([{**row, "番号": 1}])
+
     spo = pd.DataFrame({
         "タイトル": ["山1", "山1", "山2"],
         "工程": ["1工程"] * 3,
-        "GroupedData": [json.dumps([row]) for row in export.to_dict("records")],
-        "groupdata": [json.dumps([row]) for row in export.to_dict("records")],
+        "GroupedData": [_json_row(row) for row in export.to_dict("records")],
+        "groupdata": [_json_row(row) for row in export.to_dict("records")],
         "グループ番号": [1, 1, 2],
         "パレット数": [1, 1, 1], "Max移動工数": [0.0, 0.0, 0.0], "引取工数": [0, 0, 0],
     })
@@ -166,6 +169,9 @@ def test_archive_resolution_failure_does_not_stop_healthy_output(monkeypatch, tm
     _patch_spo_pipeline(monkeypatch, app, tmp_path)
     calls = []
     messages = []
+    reports = []
+    original_verify = gui_module.verify_export_invariant
+    monkeypatch.setattr(gui_module, "verify_export_invariant", lambda *a, **k: (reports.append(original_verify(*a, **k)) or reports[-1]))
     monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", lambda *a, **k: calls.append("spo") or str(tmp_path / "out.xlsx"))
     monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: calls.append("history"))
     monkeypatch.setattr(gui_module, "resolve_archive_dir", lambda *a, **k: (_ for _ in ()).throw(ValueError("archive root")))
@@ -176,6 +182,7 @@ def test_archive_resolution_failure_does_not_stop_healthy_output(monkeypatch, tm
 
     assert calls == ["spo", "history"]
     assert any("アーカイブに失敗しました" in message for message in messages)
+    assert reports and reports[0].audit_findings == []
 
 
 def test_default_archive_is_outside_spo_watch_folder(tmp_path):

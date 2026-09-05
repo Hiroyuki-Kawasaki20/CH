@@ -1,5 +1,6 @@
 """出力前のかんばん枚数不変条件を検証するサービス。"""
 
+
 from dataclasses import asdict, dataclass
 import json
 from typing import Any, Dict, List, Optional, Tuple
@@ -77,6 +78,18 @@ def _is_virtual(value: Any) -> bool:
 
 def _is_merged_rows(value: Any) -> bool:
     return isinstance(value, list) and bool(value)
+
+
+def _is_missing_yama(value: Any) -> bool:
+    """山通番が欠損（未設定/None/NaN/pd.NA/pd.NaT/空文字）かを判定する。"""
+    if value is None:
+        return True
+    try:
+        if bool(pd.isna(value)):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return not str(value).strip()
 
 
 def count_kanban(df: pd.DataFrame) -> int:
@@ -229,9 +242,7 @@ def audit_clustered_rows(export_df: pd.DataFrame) -> List[SpoAuditFinding]:
             item for item in merged
             if isinstance(item, dict) and (
                 "山通番" not in item
-                or item.get("山通番") is None
-                or (isinstance(item.get("山通番"), float) and pd.isna(item.get("山通番")))
-                or not str(item.get("山通番", "")).strip()
+                or _is_missing_yama(item.get("山通番"))
             )
         ]
         if malformed_rows:
@@ -256,6 +267,17 @@ def audit_clustered_rows(export_df: pd.DataFrame) -> List[SpoAuditFinding]:
             ))
             continue
         valid_rows = [item for item in merged if isinstance(item, dict) and not _is_virtual(item.get("山通番"))]
+        if not valid_rows:
+            findings.append(SpoAuditFinding(
+                title=str(row.get("タイトル", "")),
+                group_number=row.get("山通番", ""),
+                process=str(row.get("工程", "")),
+                check_name="D-5 検証不能（実行行なし）",
+                expected="仮想山以外の実行行",
+                actual="0行",
+                severity="ERROR",
+            ))
+            continue
         representative = valid_rows[0] if valid_rows else None
         signatures = {_bundle_signature(item) for item in valid_rows}
         if len(signatures) <= 1:

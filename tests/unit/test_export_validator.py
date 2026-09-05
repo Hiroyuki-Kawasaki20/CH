@@ -10,6 +10,7 @@ from src.services.export_validator import (
 )
 from src.services.exporter import build_spo_export_df
 from src.services.scheduler import cluster_by_store
+from src.services.sorter import build_all_mountain_details
 
 
 def _row(yama, store, nonyuhibin, ukeire, dest="KVC", sebango=""):
@@ -60,6 +61,7 @@ def test_normal_export_is_consistent():
     })
     report = verify_export_invariant(rows, rows, spo, "GroupedData")
     assert report.is_lost is False
+    # 旧名propertyの互換性を確認。新規コードではhas_unexplained_count_gapを使う。
     assert report.has_unexpanded is False
 
 
@@ -80,6 +82,7 @@ def test_valid_merged_rows_are_not_unexpanded():
     export = pd.DataFrame([{**merged[0], "_merged_rows": merged}])
     spo = _spo([merged[0]], [1])
     report = verify_export_invariant(export, export, spo, "GroupedData")
+    # 旧名propertyの互換性を確認。新規コードではhas_unexplained_count_gapを使う。
     assert report.has_unexpanded is False
     assert report.explained_bundle_yamas == {"1": 1}
     assert report.unexpanded_stores == []
@@ -154,6 +157,31 @@ def test_nan_yama_in_merged_rows_is_unverifiable():
     assert verify_export_invariant(export, export, _spo([{"山通番": 1}], [1]), "GroupedData").is_unverifiable is True
 
 
+def test_pd_na_yama_in_merged_rows_is_unverifiable():
+    merged = [_row(pd.NA, "A", "1", "1"), _row(1, "B", "2", "2")]
+    export = pd.DataFrame([{"山通番": 1, "ストア": "A", "_merged_rows": merged}])
+    report = verify_export_invariant(export, export, _spo([{"山通番": 1}], [1]), "GroupedData")
+    assert report.is_unverifiable is True
+
+
+def test_all_missing_yamas_are_unverifiable_even_with_different_attributes():
+    merged = [
+        _row(float("nan"), "A", "1", "1"),
+        _row(float("nan"), "A", "2", "2"),
+    ]
+    export = pd.DataFrame([{"山通番": 1, "ストア": "A", "_merged_rows": merged}])
+    report = verify_export_invariant(export, export, _spo([{"山通番": 1}], [1]), "GroupedData")
+    assert report.is_unverifiable is True
+
+
+def test_all_virtual_merged_rows_are_unverifiable():
+    merged = [_row(-1, "A", "1", "1"), _row(-1, "A", "1", "1")]
+    export = pd.DataFrame([{"山通番": -1, "ストア": "A", "_merged_rows": merged}])
+    report = verify_export_invariant(export, export, _spo([{"山通番": -1}], [-1]), "GroupedData")
+    assert any(f.check_name == "D-5 検証不能（実行行なし）" for f in report.audit_findings)
+    assert report.is_unverifiable is True
+
+
 def test_non_dict_merged_row_is_unverifiable():
     export = pd.DataFrame([{"山通番": 1, "ストア": "A", "_merged_rows": [{"山通番": 1}, "bad"]}])
     findings = audit_clustered_rows(export)
@@ -215,6 +243,24 @@ def test_real_pipeline_cluster_build_verify_with_valid_bundle():
     assert report.is_unverifiable is False
     assert report.is_lost is False
     assert report.has_unexplained_count_gap is False
+
+
+def test_contract_build_all_mountain_details_preserves_yama_in_merged_rows():
+    """R-1（山通番欠落→出力中止）の前提。この列が消えると本番の全出力が停止する。"""
+    details = pd.DataFrame([
+        {"グループ番号": 1, "入車時間": "08:00", "移動工数": 10.0, "高さ": 100,
+         "納入先": "KVC", "ストア": "A", "NONYUHIBIN": "1", "UKEIRE": "1",
+         "HINBAN": "A", "サイズ種類": "4"},
+        {"グループ番号": 1, "入車時間": "08:00", "移動工数": 20.0, "高さ": 100,
+         "納入先": "KVC", "ストア": "A", "NONYUHIBIN": "1", "UKEIRE": "1",
+         "HINBAN": "B", "サイズ種類": "4"},
+    ])
+    out = build_all_mountain_details({"4": details}, pd.DataFrame())
+    assert "山通番" in out.columns
+    clustered = cluster_by_store(out.to_dict(orient="records"))
+    merged = [row for row in clustered if isinstance(row.get("_merged_rows"), list)]
+    assert merged
+    assert all("山通番" in item for item in merged[0]["_merged_rows"])
 
 
 def test_explained_bundle_gap_is_aggregated_after_all_rows():
