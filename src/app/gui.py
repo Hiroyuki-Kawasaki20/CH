@@ -15,9 +15,12 @@ from datetime import datetime, timedelta
 import os
 import sys
 import json
+import logging
 
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # パス設定（srcの親ディレクトリをsys.pathに追加）
 _SRC_DIR = Path(__file__).resolve().parents[1]
@@ -29,11 +32,12 @@ from src.models.constants import (
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, PROC_MAIN_LABEL, PROC_RELIEF_LABEL, PROC_OVERFLOW_LABEL,
     COLOR_MAIN, COLOR_RELIEF, COLOR_OVERFLOW, COLOR_VIOLATION,
-    VIRTUAL_YAMA_NO, is_virtual_yama, SPLIT_UKEIRE_ROUTES,
+    VIRTUAL_YAMA_NO, is_virtual_yama, SPLIT_UKEIRE_ROUTES, LOCAL_OUTPUT_DIR,
 )
 from src.services.data_loader import (
     load_data, DataManager,
     get_master_path, load_pickup_time_master_xlsx, save_pickup_time_master_xlsx,
+    _resolve_shipments_path,
     parse_ukeire_ch_excel, load_config, save_config, get_export_dir,
     set_flag_value_to_checkbox_mark, checkbox_mark_to_set_flag_value,
 )
@@ -65,16 +69,13 @@ from src.services.lane_end_times_history import (
     generate_lane_end_times_label, normalize_choice_label,
     save_lane_end_times_history, load_lane_end_times_history,
 )
+from src.services.export_validator import verify_export_invariant
+from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
-
-# ===== SPO出力先の設定 =====
-# ローカル固定フォルダ（ハードコード）
-LOCAL_OUTPUT_DIR = r"C:\Users\1588386\DIG_Project\CHかんばんセット"
-
 
 def resolve_spo_output_dirs(spo_watch_dir: str) -> dict:
     """3ファイルの出力先を返す（テスト可能な純粋関数）。
@@ -202,6 +203,10 @@ class App(ctk.CTk):
             minute = 15
         self.auto_reload_minute.set(minute)
         self.auto_reload_minute_str.set(f"{minute:02d}")
+        self.archive_enabled = bool(config.get("archive_enabled", True))
+        self.archive_dir = str(config.get("archive_dir", ""))
+        self.export_invariant_strict = bool(config.get("export_invariant_strict", True))
+        self.export_invariant_audit_cost = bool(config.get("export_invariant_audit_cost", False))
         # バッテリー交換チェックは「毎回OFF開始」仕様のため、
         # 設定ファイルからは復元しない。
 
@@ -1729,6 +1734,107 @@ class App(ctk.CTk):
         except Exception:
             pass
         if spo_df is not None and not spo_df.empty:
+            def _archive_result(report, output_path=None, result="出力"):
+                if not getattr(self, "archive_enabled", True):
+                    return
+                try:
+                    config = load_config()
+                    input_paths = []
+                    base_dir = config.get("base_dir")
+                    if base_dir:
+                        try:
+                            input_paths.append(_resolve_shipments_path(Path(base_dir)))
+                        except Exception:
+                            pass
+                    input_paths.append(get_master_path())
+                    archive_root = resolve_archive_dir(
+                        self.export_dir, self.archive_dir, LOCAL_OUTPUT_DIR
+                    )
+                    archive_export(
+                        output_path=output_path,
+                        input_paths=input_paths,
+                        export_df=self.all_mountain_details,
+                        report=report,
+                        settings_snapshot=config,
+                        archive_dir=archive_root,
+                        result=result,
+                    )
+                except Exception as archive_error:
+                    logger.error("出力アーカイブに失敗しました", exc_info=True)
+                    messagebox.showwarning(
+                        "出力アーカイブ",
+                        f"アーカイブに失敗しました。\n{archive_error}",
+                    )
+            warning_lines = []
+            # ファイル書き出し直前に、表示・束ね後・GroupedData の枚数を突合する。
+            report = verify_export_invariant(
+                self.all_mountain_details_display,
+                self.all_mountain_details,
+                spo_df,
+                "GroupedData",
+                audit_cost=getattr(self, "export_invariant_audit_cost", False),
+            )
+            title_by_yama = {
+                row.get("グループ番号"): row.get("タイトル", "")
+                for _, row in spo_df.iterrows()
+            }
+            if report.explained_bundle_yamas:
+                logger.info(
+                    "正当な束ねによるGroupedData件数差: %s",
+                    report.explained_bundle_yamas,
+                )
+            if report.is_unverifiable:
+                warning_lines.append(
+                    "出力の整合性を確認できませんでした。出力は行いましたが、かんばん照合を必ず実施してください。"
+                )
+            if report.is_lost and not report.is_unverifiable:
+                warning_lines.extend([
+                    "以下のパレットは出力ファイルに含まれていません。",
+                    "現物のかんばんで引取り（アナログ対応）をお願いします。",
+                ])
+                missing_lines = []
+                for row in report.missing_kanban[:20]:
+                    yama = row.get("山通番", "")
+                    title = title_by_yama.get(yama, "タイトル不明")
+                    missing_lines.append(
+                        f"{title}（山通番{yama}）/ {row.get('納入先', '')} / "
+                        f"{row.get('ストア', row.get('SYUKKASAKI', ''))} / "
+                        f"{row.get('NONYUHIBIN', '')} / {row.get('UKEIRE', '')} / "
+                        f"{row.get('SEBANGO', '')}"
+                    )
+                d5_count = sum(
+                    finding.check_name.startswith("D-5 誤った束ね")
+                    for finding in report.audit_findings
+                )
+                lost_count = len(report.missing_kanban) + d5_count
+                message = f"消失パレット: {lost_count}枚"
+                if missing_lines:
+                    warning_lines.append(
+                        "タイトル（山通番） / 納入先 / ストア / 便 / 受入 / SEBANGO\n" + "\n".join(missing_lines)
+                    )
+                warning_lines.append(message)
+                audit_lines = [
+                    f"{finding.title or title_by_yama.get(finding.group_number, 'タイトル不明')}"
+                    f"（山通番{finding.group_number}）/ {finding.check_name} "
+                    f"期待={finding.expected} 実測={finding.actual}"
+                    for finding in report.audit_findings
+                    if finding.severity == "ERROR"
+                ]
+                if audit_lines:
+                    warning_lines.append("出力ファイル監査:\n" + "\n".join(audit_lines[:20]))
+            if report.has_unexplained_count_gap:
+                stores = ", ".join(report.unexpanded_stores) or "不明"
+                warning_lines.append(f"束ね未展開を検知しました（ストア: {stores}）。\n{report.summary()}")
+            warning_audit_lines = [
+                f"{finding.title or title_by_yama.get(finding.group_number, 'タイトル不明')}"
+                f"（山通番{finding.group_number}）/ {finding.check_name} "
+                f"期待={finding.expected} 実測={finding.actual}"
+                for finding in report.audit_findings
+                if finding.severity == "WARNING"
+            ]
+            if warning_audit_lines:
+                print("出力ファイル監査警告:\n" + "\n".join(warning_audit_lines))
+                warning_lines.append("出力ファイル監査警告:\n" + "\n".join(warning_audit_lines[:20]))
             # SPOアップロード用.xlsx はSPO監視フォルダへ（staging+timestamp+move方式）
             spo_path = export_spo_xlsx_staged(spo_df, watch_dir=dirs["spo_xlsx_dir"])
             try:
@@ -1742,6 +1848,13 @@ class App(ctk.CTk):
                     os.startfile(self.export_dir)
             except Exception:
                 pass
+            if spo_path and getattr(self, "archive_enabled", True):
+                _archive_result(report, spo_path, result="出力")
+            if warning_lines:
+                warning_message = "\n\n".join(warning_lines)
+                warning_message = "⚠️ 手作業での引取りが必要です\n" + warning_message
+                logger.error(warning_message)
+                messagebox.showwarning("⚠️ 手作業での引取りが必要です", warning_message)
 
     # ===== タブ更新 =====
     def update_basic_views(self):

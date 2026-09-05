@@ -33,6 +33,8 @@ lane_end_times_history.json
 
 # Issue #90: 実運用データは追跡しない（ローカル配置のみ）
 SPOアップロード用.xlsx
+_export_archive/
+*_audit.csv
 
 # Excel のロックファイル
 ~$*

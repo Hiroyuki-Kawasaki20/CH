@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """CHかんばんセット — 定数・工数計算式"""
 
+
 # ===== 仕分け定数 =====
 DEFAULT_MIXING_KEY = "UKEIRE"           # 混載キーのデフォルト列名
 DEFAULT_HEIGHT_CAP = 2450               # 高さ上限（mm）
@@ -44,6 +45,10 @@ VIRTUAL_YAMA_NO = -1
 # ===== ファイル名 =====
 CONFIG_FILENAME = "ch_kanban_settings.json"
 REASSIGN_LOG_FILENAME = "reassign_log.csv"
+LOCAL_OUTPUT_DIR = r"C:\Users\1588386\DIG_Project\CHかんばんセット"
+SPO_EXPORT_REQUIRED_COLUMNS = (
+    "タイトル", "工程", "groupdata", "GroupedData", "パレット数", "グループ番号",
+)
 
 # ===== 休憩時間（秒単位） =====
 BREAK_TIMES = [
