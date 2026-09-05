@@ -76,3 +76,11 @@ def test_history_cli_does_not_modify_xlsx(tmp_path):
     assert exit_code == 1
     assert csv_path.exists()
     assert hashlib.sha256(xlsx_path.read_bytes()).digest() == before
+
+
+def test_history_cli_rejects_missing_required_columns(tmp_path):
+    xlsx_path = tmp_path / "incomplete.xlsx"
+    csv_path = tmp_path / "audit.csv"
+    pd.DataFrame({"GroupedData": ["[]"]}).to_excel(xlsx_path, index=False)
+    assert audit_history(xlsx_path, csv_path) == 2
+    assert not csv_path.exists()

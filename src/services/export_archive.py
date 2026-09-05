@@ -1,6 +1,5 @@
 """SPO 出力と入力データの調査用アーカイブ。"""
 
-from dataclasses import asdict
 from datetime import datetime
 import json
 from pathlib import Path
@@ -9,15 +8,17 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-from .export_validator import ExportInvariantReport
-from ..models.constants import is_virtual_yama
+from .export_validator import ExportInvariantReport, report_as_dict
+from ..models.constants import LOCAL_OUTPUT_DIR, is_virtual_yama
 
 
-def resolve_archive_dir(export_dir: str, configured_dir: str = "", local_output_dir: str = "") -> str:
+def resolve_archive_dir(export_dir: str, configured_dir: str = "", local_output_dir: str = None) -> str:
     """既定ではSPO監視フォルダ外のローカル出力先配下へ保存する。"""
     if configured_dir:
         return str(Path(configured_dir))
-    root = Path(local_output_dir) if local_output_dir else Path(export_dir).resolve().parent
+    if not local_output_dir:
+        raise ValueError("local_output_dir は必須です")
+    root = Path(local_output_dir)
     return str(root / "_export_archive")
 
 
@@ -108,7 +109,7 @@ def archive_export(
         "山通番ごとのかんばん枚数": _counts_by_mountain(export_df),
         "入力ファイル": _input_metadata(input_paths),
         "アーカイブ内入力ファイル": copied_inputs,
-        "ExportInvariantReport": asdict(report),
+        "ExportInvariantReport": report_as_dict(report),
         "設定値スナップショット": settings_snapshot,
     }
     with (folder / "manifest.json").open("w", encoding="utf-8") as file:

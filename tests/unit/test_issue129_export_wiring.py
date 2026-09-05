@@ -32,8 +32,12 @@ def _app(tmp_path, strict=True):
     ])
     export = display.iloc[[1, 2, 3]].copy()
     spo = pd.DataFrame({
+        "タイトル": ["山1", "山1", "山2"],
+        "工程": ["1工程"] * 3,
         "GroupedData": [json.dumps([row]) for row in export.to_dict("records")],
+        "groupdata": [json.dumps([row]) for row in export.to_dict("records")],
         "グループ番号": [1, 1, 2],
+        "パレット数": [1, 1, 1], "Max移動工数": [0.0, 0.0, 0.0], "引取工数": [0, 0, 0],
     })
     app = SimpleNamespace(
         export_dir=str(tmp_path / "spo-watch"),
@@ -172,15 +176,16 @@ def _bundle_row(dest, nony, ukeire, hinban):
 
 def test_issue129_wrong_bundle_is_error_and_fail_closed(monkeypatch, tmp_path):
     rows = [
-        _bundle_row("高岡", "2026090404", "K5", "A"),
-        _bundle_row("KVC", "2026082806", "B7", "B"),
+        {**_bundle_row("高岡", "2026090404", "K5", "A"), "山通番": 2},
+        {**_bundle_row("KVC", "2026082806", "B7", "B"), "山通番": 7},
     ]
     clustered = pd.DataFrame(cluster_by_store(rows))
     findings = audit_clustered_rows(clustered)
     assert len(findings) == 1
     assert findings[0].severity == "ERROR"
     assert "高岡/2026090404/K5" in findings[0].expected
-    assert "KVC/2026082806/B7" in findings[0].actual
+    assert "山通番2" in findings[0].expected
+    assert "山通番7" in findings[0].actual
 
     app, _ = _app(tmp_path, strict=True)
     app.archive_enabled = True
@@ -189,7 +194,7 @@ def test_issue129_wrong_bundle_is_error_and_fail_closed(monkeypatch, tmp_path):
     app._spo = pd.DataFrame({
         "GroupedData": [json.dumps([rows[0]])],
         "groupdata": [json.dumps([rows[0]])],
-        "グループ番号": [3], "タイトル": ["山7"], "パレット数": [1],
+        "グループ番号": [7], "タイトル": ["山7"], "パレット数": [1],
         "Max移動工数": [0], "引取工数": [0],
     })
     _patch_spo_pipeline(monkeypatch, app, tmp_path)
@@ -216,8 +221,8 @@ def test_valid_hinban_bundle_has_no_d5_or_unexpanded():
 
 def test_same_hinban_rows_are_not_clustered_and_have_no_findings():
     rows = [
-        _bundle_row("KVC", "2026082806", "B7", "A"),
-        _bundle_row("高岡", "2026090404", "K5", "A"),
+        {**_bundle_row("KVC", "2026082806", "B7", "A"), "山通番": 3},
+        {**_bundle_row("高岡", "2026090404", "K5", "A"), "山通番": 7},
     ]
     clustered = pd.DataFrame(cluster_by_store(rows))
     assert len(clustered) == 2

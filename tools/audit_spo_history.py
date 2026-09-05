@@ -2,7 +2,6 @@
 
 import argparse
 from collections import Counter
-from datetime import datetime
 from pathlib import Path
 import sys
 
@@ -11,13 +10,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.services.export_validator import SpoAuditFinding, audit_spo_dataframe
-
-
-LOCAL_OUTPUT_DIR = Path(r"C:\Users\1588386\DIG_Project\CHかんばんセット")
+from src.models.constants import LOCAL_OUTPUT_DIR
 
 
 def _default_history_path() -> Path:
-    return LOCAL_OUTPUT_DIR / "SPOアップロード用_履歴.xlsx"
+    return Path(LOCAL_OUTPUT_DIR) / "SPOアップロード用_履歴.xlsx"
 
 
 def _finding_row(finding: SpoAuditFinding) -> dict:
@@ -35,6 +32,11 @@ def _finding_row(finding: SpoAuditFinding) -> dict:
 def audit_history(input_path: Path, csv_path: Path) -> int:
     """履歴を読むだけで監査し、findingを標準出力とCSVへ出力する。"""
     history = pd.read_excel(input_path, engine="openpyxl")
+    required = {"タイトル", "工程", "groupdata", "GroupedData", "パレット数", "グループ番号"}
+    missing = sorted(required - set(history.columns))
+    if missing:
+        print(f"必須列不足のため監査を中止します: {', '.join(missing)}", file=sys.stderr)
+        return 2
     findings = audit_spo_dataframe(history)
     finding_rows = [_finding_row(finding) for finding in findings]
 

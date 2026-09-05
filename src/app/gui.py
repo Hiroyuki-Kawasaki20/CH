@@ -29,7 +29,7 @@ from src.models.constants import (
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, PROC_MAIN_LABEL, PROC_RELIEF_LABEL, PROC_OVERFLOW_LABEL,
     COLOR_MAIN, COLOR_RELIEF, COLOR_OVERFLOW, COLOR_VIOLATION,
-    VIRTUAL_YAMA_NO, is_virtual_yama, SPLIT_UKEIRE_ROUTES,
+    VIRTUAL_YAMA_NO, is_virtual_yama, SPLIT_UKEIRE_ROUTES, LOCAL_OUTPUT_DIR,
 )
 from src.services.data_loader import (
     load_data, DataManager,
@@ -73,11 +73,6 @@ from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
-
-# ===== SPO出力先の設定 =====
-# ローカル固定フォルダ（ハードコード）
-LOCAL_OUTPUT_DIR = r"C:\Users\1588386\DIG_Project\CHかんばんセット"
-
 
 def resolve_spo_output_dirs(spo_watch_dir: str) -> dict:
     """3ファイルの出力先を返す（テスト可能な純粋関数）。

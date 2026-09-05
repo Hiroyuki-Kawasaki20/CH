@@ -194,7 +194,7 @@ def audit_spo_dataframe(spo_df: pd.DataFrame, audit_cost: bool = False) -> List[
 
 
 def _bundle_signature(row: Any) -> tuple:
-    return tuple(_norm(row.get(field, ""), field) for field in ("NONYUHIBIN", "UKEIRE", "納入先"))
+    return tuple(_norm(row.get(field, ""), field) for field in ("山通番", "NONYUHIBIN", "UKEIRE", "納入先"))
 
 
 def _bundle_label(row: Any) -> str:
@@ -217,16 +217,18 @@ def audit_clustered_rows(export_df: pd.DataFrame) -> List[SpoAuditFinding]:
         if len(signatures) <= 1:
             continue
         representative = valid_rows[0]
-        disappeared = next(item for item in valid_rows[1:] if _bundle_signature(item) != _bundle_signature(representative))
-        findings.append(SpoAuditFinding(
-            title=str(row.get("タイトル", "")),
-            group_number=row.get("山通番", ""),
-            process=str(row.get("工程", "")),
-            check_name="D-5 誤った束ね（別パレットの消滅）",
-            expected=f"代表行={_bundle_label(representative)}",
-            actual=f"消滅行={_bundle_label(disappeared)} / STORE={row.get('ストア', '')}",
-            severity="ERROR",
-        ))
+        for disappeared in valid_rows[1:]:
+            if _bundle_signature(disappeared) == _bundle_signature(representative):
+                continue
+            findings.append(SpoAuditFinding(
+                title=str(row.get("タイトル", "")),
+                group_number=row.get("山通番", ""),
+                process=str(row.get("工程", "")),
+                check_name="D-5 誤った束ね（別パレットの消滅）",
+                expected=f"代表行=山通番{representative.get('山通番', '')} {_bundle_label(representative)}",
+                actual=f"消滅行=山通番{disappeared.get('山通番', '')} {_bundle_label(disappeared)} / STORE={row.get('ストア', '')}",
+                severity="ERROR",
+            ))
     return findings
 
 
@@ -272,12 +274,21 @@ def _expanded_rows(df: pd.DataFrame) -> List[dict]:
 def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_cost: bool = False) -> ExportInvariantReport:
     """GUI、パイプライン、SPO JSON の枚数を比較し、検証不能も fail-closed で報告する。"""
     try:
+        if display_df is None and export_df is None:
+            raise ValueError("GUI表示データとパイプラインデータがともにありません")
         if display_df is not None and (not isinstance(display_df, pd.DataFrame) or "山通番" not in display_df.columns):
             raise ValueError("GUI表示データに山通番列がありません")
         if export_df is not None and (not isinstance(export_df, pd.DataFrame) or "山通番" not in export_df.columns):
             raise ValueError("パイプラインデータに山通番列がありません")
-        if spo_df is not None and (not isinstance(spo_df, pd.DataFrame) or json_column not in spo_df.columns):
-            raise ValueError(f"SPOデータに{json_column}列がありません")
+        required_spo_columns = {"タイトル", "工程", "groupdata", "GroupedData", "パレット数", "グループ番号"}
+        if spo_df is not None and not isinstance(spo_df, pd.DataFrame):
+            raise ValueError("SPOデータがDataFrameではありません")
+        if spo_df is not None:
+            missing_spo_columns = sorted(required_spo_columns - set(spo_df.columns))
+            if missing_spo_columns:
+                raise ValueError(f"SPOデータに必須列がありません: {', '.join(missing_spo_columns)}")
+            if json_column not in spo_df.columns:
+                raise ValueError(f"SPOデータに{json_column}列がありません")
         gui_rows = _expanded_rows(display_df)
         pipeline_rows = _expanded_rows(export_df)
         gui_keys = {_row_key(row): row for row in gui_rows}
@@ -286,6 +297,8 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
         exported_count, parse_failed_rows, exported_by_yama = _count_exported_details(spo_df, json_column)
 
         unexpanded = set()
+        unexplained_unexpanded_yamas = set()
+        explained_unexpanded_yamas = set()
         if export_df is not None and isinstance(export_df, pd.DataFrame) and not export_df.empty:
             expected_by_yama = {}
             for row in pipeline_rows:
@@ -296,17 +309,24 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
                 if _is_virtual(yama) or not _is_merged_rows(row.get("_merged_rows")):
                     continue
                 if exported_by_yama.get(yama, 0) != expected_by_yama.get(yama, 0):
+                    merged_rows = row.get("_merged_rows")
+                    signatures = {
+                        _bundle_signature(item) for item in merged_rows
+                        if isinstance(item, dict)
+                    } if _is_merged_rows(merged_rows) else set()
+                    if len(signatures) == 1:
+                        explained_unexpanded_yamas.add(_norm(yama, "山通番"))
+                        continue
+                    unexplained_unexpanded_yamas.add(_norm(yama, "山通番"))
                     store = row.get("ストア", row.get("SYUKKASAKI", ""))
                     unexpanded.add(str(store).strip())
+            for yama, expected_count in expected_by_yama.items():
+                if exported_by_yama.get(yama, 0) != expected_count:
+                    yama_key = _norm(yama, "山通番")
+                    if yama_key not in explained_unexpanded_yamas:
+                        unexplained_unexpanded_yamas.add(yama_key)
 
-        # 実出力は二重JSON列を持つ。既存の簡略呼出し（GroupedDataのみ）は
-        # 従来の A/B/C 検証を維持し、単体監査関数では列欠落も検知する。
-        audit_findings = (
-            audit_spo_dataframe(spo_df, audit_cost=audit_cost)
-            if isinstance(spo_df, pd.DataFrame)
-            and {"groupdata", "GroupedData"}.issubset(spo_df.columns)
-            else []
-        )
+        audit_findings = audit_spo_dataframe(spo_df, audit_cost=audit_cost)
         audit_findings.extend(audit_clustered_rows(export_df))
         report = ExportInvariantReport(
             gui_count=count_kanban(display_df),
@@ -328,7 +348,7 @@ def verify_export_invariant(display_df, export_df, spo_df, json_column, audit_co
         report.is_unverifiable = bool(report.parse_failed_rows)
         if report.is_unverifiable:
             report.error = f"GroupedData JSONのパースに失敗した行があります: {report.parse_failed_rows}"
-        report.has_unexpanded = report.pipeline_count != report.exported_count and not d5_findings
+        report.has_unexpanded = bool(unexplained_unexpanded_yamas)
         return report
     except Exception as error:
         return ExportInvariantReport(
