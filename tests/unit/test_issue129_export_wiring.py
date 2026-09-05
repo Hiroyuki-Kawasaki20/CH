@@ -237,7 +237,11 @@ def test_issue129_wrong_bundle_is_error_and_fail_closed(monkeypatch, tmp_path):
         {**_bundle_row("高岡", "2026090404", "K5", "A"), "山通番": 2},
         {**_bundle_row("KVC", "2026082806", "B7", "B"), "山通番": 7},
     ]
-    clustered = pd.DataFrame(cluster_by_store(rows))
+    clustered = pd.DataFrame([{
+        **rows[0],
+        "_merged_rows": rows,
+        "_merged_hinban": ["A", "B"],
+    }])
     findings = audit_clustered_rows(clustered)
     assert len(findings) == 1
     assert findings[0].severity == "ERROR"

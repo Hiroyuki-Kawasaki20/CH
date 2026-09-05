@@ -41,11 +41,11 @@ _ARRIVAL_BUFFER_SECS = 10 * 60
 
 
 def cluster_by_store(rows: List[dict]) -> List[dict]:
-    """同一STOREに異なるHINBANが同梱されるケースを1パレットに束ねる前処理。
+    """同一束ねキーに異なるHINBANが同梱されるケースを1パレットに束ねる前処理。
 
     束ねルール:
-    - 同一STORE内でHINBANの種類が複数 → 全行を1行に束ねる（同梱）
-    - 同一STORE内でHINBANが全て同一  → 束ねない（別行のまま維持）
+    - 同一（山通番・ストア・便・受入・納入先）内でHINBANの種類が複数 → 全行を1行に束ねる（同梱）
+    - 同一束ねキー内でHINBANが全て同一  → 束ねない（別行のまま維持）
 
     束ね時の代表値:
     - 締切・解禁・移動工数は先頭行の値をそのまま採用
@@ -72,13 +72,28 @@ def cluster_by_store(rows: List[dict]) -> List[dict]:
     def _get_hinban(row: dict) -> str:
         return str(row.get("HINBAN", "")).strip()
 
-    # STORE別にインデックスをグループ化（出現順を保持）
-    store_indices: Dict[str, List[int]] = {}
+    def _norm_field(row: dict, name: str) -> str:
+        v = row.get(name, "")
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return ""
+        return str(v).strip()
+
+    def _bundle_key(row: dict) -> tuple:
+        return (
+            _norm_field(row, "山通番"),
+            _get_store(row),
+            _norm_field(row, "NONYUHIBIN"),
+            _norm_field(row, "UKEIRE"),
+            _norm_field(row, "納入先"),
+        )
+
+    # 束ねキー別にインデックスをグループ化（出現順を保持）
+    bundle_indices: Dict[tuple, List[int]] = {}
     for i, row in enumerate(rows):
-        store = _get_store(row)
-        if store not in store_indices:
-            store_indices[store] = []
-        store_indices[store].append(i)
+        bundle_key = _bundle_key(row)
+        if bundle_key not in bundle_indices:
+            bundle_indices[bundle_key] = []
+        bundle_indices[bundle_key].append(i)
 
     consumed: set = set()
     result: List[dict] = []
@@ -87,10 +102,10 @@ def cluster_by_store(rows: List[dict]) -> List[dict]:
         if i in consumed:
             continue
 
-        store = _get_store(row)
-        group_idxs = store_indices[store]
+        bundle_key = _bundle_key(row)
+        group_idxs = bundle_indices[bundle_key]
 
-        # このSTOREグループ内のHINBAN種類数を判定（出現順を保持した重複除去）
+        # この束ねキー内のHINBAN種類数を判定（出現順を保持した重複除去）
         hinbans_in_group = [_get_hinban(rows[j]) for j in group_idxs]
         seen_h: Dict[str, bool] = {}
         unique_hinbans: List[str] = []
