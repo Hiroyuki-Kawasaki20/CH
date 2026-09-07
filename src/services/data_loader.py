@@ -3,7 +3,9 @@
 
 import sys
 import json
+import logging
 import re
+import tempfile
 from datetime import datetime, time
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
@@ -21,6 +23,7 @@ from ..utils.normalizer import (
     _normalize_ukeire, _ZEN2HAN_DIGIT_COLON,
 )
 from ..utils.csv_utils import read_csv_ja
+logger = logging.getLogger(__name__)
 
 
 _SET_FLAG_TRUTHY_VALUES = {"1", "true", "t", "yes", "y", "on", "〇", "○", "有", "あり", "☑"}
@@ -465,22 +468,281 @@ class DataManager:
 
 
 # ===== 入車時間マスタ管理 =====
-def get_master_path() -> Path:
+MASTER_FILENAME = "入車時間マスタ.xlsx"
+MASTER_COLUMNS = ["OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"]
+_MASTER_EXCEL_SUFFIXES = (".xlsx", ".xlsm", ".xls")
+
+
+class MasterFileError(Exception):
+    """入車時間マスタの入出力エラー（利用者向けの説明文をそのまま持つ）。"""
+
+
+class MasterFileLockedError(MasterFileError, PermissionError):
+    """Excel等に開かれていて入車時間マスタを読み書きできない。"""
+
+
+class MasterFileReadError(MasterFileError, ValueError):
+    """入車時間マスタを読み取れない（破損・同期競合など）。"""
+
+
+def get_legacy_master_path() -> Path:
+    """従来の入車時間マスタ配置（移行期・異常時のフォールバック先）。"""
     if getattr(sys, 'frozen', False):
-        return Path(sys.executable).parent / "入車時間マスタ.xlsx"
+        return Path(sys.executable).parent / MASTER_FILENAME
     else:
-        return Path(__file__).resolve().parents[2] / "入車時間マスタ.xlsx"
+        return Path(__file__).resolve().parents[2] / MASTER_FILENAME
+
+
+def _to_master_file_path(raw_value) -> Optional[Path]:
+    """設定値（ファイル/フォルダのどちらでも可）をマスタのファイルパスへ正規化する。"""
+    text = str(raw_value or "").strip()
+    if not text:
+        return None
+    p = Path(text)
+    if p.suffix.lower() in _MASTER_EXCEL_SUFFIXES:
+        return p
+    return p / MASTER_FILENAME
+
+
+def _resolve_master_path_candidates(config: Optional[dict] = None,
+                                    legacy_path: Optional[Path] = None) -> List[Path]:
+    """入車時間マスタの候補パスを優先順に返す（_resolve_shipments_path と同じ流儀）。
+
+    1) config["master_path"]（明示指定。フォルダ指定も可。通常は未設定）
+    2) config["base_dir"] 直下（SharePoint(OneDrive)同期フォルダ＝通常運用の本命）
+    3) 従来位置（frozen: exe同階層 / 開発時: リポジトリ直下）
+    """
+    if config is None:
+        config = load_config()
+    if legacy_path is None:
+        legacy_path = get_legacy_master_path()
+
+    candidates: List[Path] = []
+    for raw_value in (config.get("master_path"), config.get("base_dir")):
+        p = _to_master_file_path(raw_value)
+        if p is not None and p not in candidates:
+            candidates.append(p)
+    if legacy_path not in candidates:
+        candidates.append(legacy_path)
+    return candidates
+
+
+def _resolve_master_path(config: Optional[dict] = None,
+                         legacy_path: Optional[Path] = None) -> Path:
+    """候補リストから入車時間マスタのパス（読み書き共通）を決定する。
+
+    - 既に存在する候補があれば、優先順位の高いものを採用する。
+    - 1件も存在しない場合は例外にせず、親フォルダにアクセスできる先頭候補を
+      「新規作成先」として返す（マスタ未配置でもアプリを起動不能にしない）。
+    - どの候補にもアクセスできない場合（NW未接続・OneDrive未同期）は従来位置を返す。
+    """
+    if config is None:
+        config = load_config()
+    if legacy_path is None:
+        legacy_path = get_legacy_master_path()
+
+    candidates = _resolve_master_path_candidates(config, legacy_path)
+    for p in candidates:
+        try:
+            if p.exists():
+                return p
+        except OSError:
+            continue
+    for p in candidates:
+        try:
+            if p.parent.is_dir():
+                return p
+        except OSError:
+            continue
+    return legacy_path
+
+
+def get_master_path() -> Path:
+    return _resolve_master_path()
+
+
+def find_master_conflict_candidates(master_path: Path) -> List[Path]:
+    """OneDrive同期の競合で生まれた「〜のコピー」等の類似ファイルを列挙する。"""
+    try:
+        master_path = Path(master_path)
+        folder = master_path.parent
+        if not folder.is_dir():
+            return []
+        return sorted(
+            p for p in folder.glob(f"{master_path.stem}*")
+            if p.name != master_path.name
+            and not p.name.startswith("~$")
+            and p.suffix.lower() in _MASTER_EXCEL_SUFFIXES
+        )
+    except OSError:
+        return []
+
+
+def _conflict_lines(master_path: Path, max_items: int = 10) -> List[str]:
+    conflicts = find_master_conflict_candidates(master_path)
+    if not conflicts:
+        return []
+    lines = ["", "同じフォルダに似た名前のファイルがあります（OneDrive同期の競合の可能性）:"]
+    lines += [f"  ・{p.name}" for p in conflicts[:max_items]]
+    lines.append(f"正しいものを『{MASTER_FILENAME}』の名前に戻してください。")
+    return lines
+
+
+def build_master_not_found_message(master_path: Path) -> str:
+    """マスタが見つからないときの案内文（GUI表示・ログ共用）。"""
+    lines = [
+        f"入車時間マスタが見つかりません: {master_path}",
+        "",
+        f"通常は SharePoint(OneDrive) 同期フォルダ（設定の base_dir）直下に『{MASTER_FILENAME}』を置きます。",
+        "次を確認してください:",
+        "  ・ネットワーク（社内NW/VPN）に接続されているか",
+        "  ・OneDriveが起動し、同期が完了しているか（クラウドのみの状態になっていないか）",
+        f"  ・ファイル名が『{MASTER_FILENAME}』のままか",
+        f"  ・config/{CONFIG_FILENAME} の base_dir が正しいか",
+    ]
+    lines += _conflict_lines(master_path)
+    lines += ["", "マスタが無い場合は空の状態で動作します（保存すると上記の場所へ新規作成されます）。"]
+    return "\n".join(lines)
+
+
+def _master_rescue_dir() -> Path:
+    """保存に失敗した編集内容を退避するフォルダ（テストで差し替え可）。"""
+    return Path(tempfile.gettempdir())
+
+
+def _write_master_excel(df_save: pd.DataFrame, master_path: Path) -> None:
+    """実際にExcelへ書き出す最小単位（テストで差し替え可）。"""
+    df_save.to_excel(master_path, index=False, engine="openpyxl", sheet_name="入車時間マスタ")
+
+
+def _rescue_master_dataframe(df_save: Optional[pd.DataFrame]) -> Optional[Path]:
+    """保存失敗時にデータを失わないよう、編集内容を退避コピーとして書き出す。"""
+    if df_save is None:
+        return None
+    try:
+        rescue_dir = _master_rescue_dir()
+        rescue_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rescue_path = rescue_dir / f"入車時間マスタ_未保存_{stamp}.xlsx"
+        _write_master_excel(df_save, rescue_path)
+        return rescue_path
+    except Exception:
+        return None
+
+
+def _rescue_lines(rescue_path: Optional[Path]) -> List[str]:
+    if rescue_path is None:
+        return []
+    return ["", "編集内容は次の場所へ退避しました（データは失われていません）:", f"  {rescue_path}"]
+
+
+def _build_master_locked_message(master_path: Path,
+                                 rescue_path: Optional[Path] = None,
+                                 action: str = "保存") -> str:
+    lines = [
+        f"入車時間マスタを{action}できませんでした: {master_path}",
+        "",
+        "ファイルがExcelで開かれている可能性があります。",
+        f"  ・自分または他の人が『{MASTER_FILENAME}』をExcelで開いていないか確認してください。",
+        "  ・SharePoint(OneDrive) のブラウザ編集画面も閉じてください。",
+        "  ・閉じたあと、もう一度同じ操作をやり直してください。",
+        "",
+        "画面上の編集内容は残っています（このまま再保存できます）。",
+    ]
+    lines += _rescue_lines(rescue_path)
+    return "\n".join(lines)
+
+
+def _build_master_folder_missing_message(master_path: Path,
+                                         rescue_path: Optional[Path] = None) -> str:
+    lines = [
+        f"入車時間マスタの保存先フォルダが見つかりません: {Path(master_path).parent}",
+        "",
+        "SharePoint(OneDrive) の同期フォルダにアクセスできない可能性があります。",
+        "  ・ネットワーク（社内NW/VPN）に接続されているか",
+        "  ・OneDriveが起動し、同期が有効になっているか",
+        f"  ・config/{CONFIG_FILENAME} の base_dir が正しいか",
+        "を確認してから、もう一度保存してください。",
+        "",
+        "画面上の編集内容は残っています（このまま再保存できます）。",
+    ]
+    lines += _rescue_lines(rescue_path)
+    return "\n".join(lines)
+
+
+def _build_master_save_failed_message(master_path: Path, error: BaseException,
+                                      rescue_path: Optional[Path] = None) -> str:
+    lines = [
+        f"入車時間マスタを保存できませんでした: {master_path}",
+        "",
+        f"原因: {error}",
+        "",
+        "ファイルがExcelで開かれている、またはOneDriveの同期中である可能性があります。",
+        "少し待ってから、もう一度保存してください。",
+        "",
+        "画面上の編集内容は残っています（このまま再保存できます）。",
+    ]
+    lines += _rescue_lines(rescue_path)
+    return "\n".join(lines)
+
+
+def _build_master_read_failed_message(master_path: Path, error: BaseException) -> str:
+    lines = [
+        f"入車時間マスタを読み込めませんでした: {master_path}",
+        "",
+        f"原因: {error}",
+        "",
+        "次を確認してください:",
+        "  ・Excelで開いたままになっていないか（開いていれば閉じる）",
+        "  ・OneDriveの同期が完了しているか（クラウドのみのファイルはダウンロードが必要）",
+        "  ・ファイルが壊れていないか（SharePointのバージョン履歴から復元できます）",
+    ]
+    lines += _conflict_lines(master_path)
+    return "\n".join(lines)
+
+
+def _raise_if_master_locked(master_path: Path, df_save: Optional[pd.DataFrame] = None) -> None:
+    """書き込めない状態なら、既存ファイルに触る前に中断する（データ保全）。"""
+    try:
+        if not master_path.exists():
+            return
+    except OSError:
+        return
+    try:
+        with open(master_path, "r+b"):
+            return
+    except PermissionError as e:
+        raise MasterFileLockedError(
+            _build_master_locked_message(master_path, _rescue_master_dataframe(df_save))
+        ) from e
+    except OSError:
+        # 同期中などで一時的に判定できない場合は、実際の書き込みで判断する
+        return
 
 
 def load_pickup_time_master_xlsx(master_path: Path) -> pd.DataFrame:
-    if not master_path.exists():
-        return pd.DataFrame(columns=["OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"])
-    df = pd.read_excel(master_path, sheet_name=0, dtype=str)
+    master_path = Path(master_path)
+    try:
+        exists = master_path.exists()
+    except OSError:
+        exists = False
+    if not exists:
+        logger.warning(build_master_not_found_message(master_path))
+        return pd.DataFrame(columns=list(MASTER_COLUMNS))
+    try:
+        df = pd.read_excel(master_path, sheet_name=0, dtype=str)
+    except PermissionError as e:
+        raise MasterFileLockedError(
+            _build_master_locked_message(master_path, action="読み込み")
+        ) from e
+    except Exception as e:
+        raise MasterFileReadError(_build_master_read_failed_message(master_path, e)) from e
     df.columns = [str(c).strip() for c in df.columns]
     required_cols = ["OData_納入先", "NONYUHIBIN", "入車時間"]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
-        raise ValueError(f"入車時間マスタに必要な列がありません: {', '.join(missing)}")
+        error = ValueError(f"入車時間マスタに必要な列がありません: {', '.join(missing)}")
+        raise MasterFileReadError(_build_master_read_failed_message(master_path, error)) from error
     # 任意列: セットありフラグ（未設定時は空文字で扱う）
     if "セットありフラグ" not in df.columns:
         df["セットありフラグ"] = ""
@@ -497,12 +759,34 @@ def load_pickup_time_master_xlsx(master_path: Path) -> pd.DataFrame:
 
 def save_pickup_time_master_xlsx(df: pd.DataFrame, master_path: Path):
     df_save = df.copy()
-    expected_cols = ["OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"]
+    expected_cols = list(MASTER_COLUMNS)
     for col in expected_cols:
         if col not in df_save.columns:
             df_save[col] = ""
     df_save = df_save[expected_cols]
-    df_save.to_excel(master_path, index=False, engine="openpyxl", sheet_name="入車時間マスタ")
+
+    master_path = Path(master_path)
+    try:
+        parent_ok = master_path.parent.is_dir()
+    except OSError:
+        parent_ok = False
+    if not parent_ok:
+        # 勝手にローカルフォルダを作らない（SPO同期フォルダの偽物を生むため）
+        raise MasterFileError(
+            _build_master_folder_missing_message(master_path, _rescue_master_dataframe(df_save))
+        )
+
+    _raise_if_master_locked(master_path, df_save=df_save)
+    try:
+        _write_master_excel(df_save, master_path)
+    except PermissionError as e:
+        raise MasterFileLockedError(
+            _build_master_locked_message(master_path, _rescue_master_dataframe(df_save))
+        ) from e
+    except Exception as e:
+        raise MasterFileError(
+            _build_master_save_failed_message(master_path, e, _rescue_master_dataframe(df_save))
+        ) from e
 
 
 def _normalize_excel_time_value(value) -> str:

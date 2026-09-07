@@ -5,15 +5,19 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from src.services import data_loader
 from src.services.data_loader import get_master_path, save_pickup_time_master_xlsx
 
 
 def test_get_master_path_is_redirected_to_tmp_path(tmp_path: Path):
-    repo_master_path = Path(__file__).resolve().parents[2] / "入車時間マスタ.xlsx"
+    real_candidates = data_loader._resolve_master_path_candidates()
+    if not any(path.exists() for path in real_candidates):
+        pytest.skip("実運用の入車時間マスタ候補が存在しないため検証をスキップ")
+
     guarded_path = get_master_path()
 
     assert guarded_path == tmp_path / "入車時間マスタ.xlsx"
-    assert guarded_path != repo_master_path
+    assert guarded_path not in real_candidates
 
 
 def test_save_via_get_master_path_does_not_touch_repo_master(tmp_path: Path):
