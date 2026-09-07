@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import sys
 from pathlib import Path
+from typing import Iterator
 
 import pytest
 
@@ -31,22 +32,32 @@ def guard_master_path_with_tmp_file(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
 
 @pytest.fixture(scope="session", autouse=True)
-def assert_real_master_untouched() -> None:
+def assert_real_master_untouched() -> Iterator[None]:
     """Issue #34の保険（検出型）。guard_master_path_with_tmp_fileが予防型ガード
     （get_master_pathの差し替え）で防ぎきれない抜け穴を、セッション終端の
     ハッシュ差分検出で補う最後の砦。"""
 
-    real_master_path = Path(__file__).resolve().parents[1] / "入車時間マスタ.xlsx"
+    repo_master_path = Path(__file__).resolve().parents[1] / "入車時間マスタ.xlsx"
+    candidates = [repo_master_path]
+    try:
+        candidates.extend(data_loader._resolve_master_path_candidates())
+    except Exception:
+        pass
+    real_master_paths = list(dict.fromkeys(Path(p) for p in candidates))
 
-    def _hash() -> str | None:
-        if not real_master_path.exists():
+    def _hash(path: Path) -> str | None:
+        try:
+            if not path.exists():
+                return None
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
             return None
-        return hashlib.sha256(real_master_path.read_bytes()).hexdigest()
 
-    before_hash = _hash()
+    before_hashes = {path: _hash(path) for path in real_master_paths}
     yield
-    after_hash = _hash()
-    assert before_hash == after_hash, (
+    after_hashes = {path: _hash(path) for path in real_master_paths}
+    changed = [path for path in real_master_paths if before_hashes.get(path) != after_hashes.get(path)]
+    assert not changed, (
         "テストが実マスタ『入車時間マスタ.xlsx』を書き換えました"
-        "（テスト分離違反 / Issue #34）"
+        f"（テスト分離違反 / Issue #34）: {changed}"
     )
