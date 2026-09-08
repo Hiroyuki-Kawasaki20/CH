@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """CHかんばんセット — 仕分けロジック（グループ化・混載・山統合）"""
 
+import os
 import logging
 from typing import Optional, Dict
 import pandas as pd
@@ -31,6 +32,19 @@ TAKAOKA_TARGET_UKEIRE = "K5"
 SIZE17_MERGE_HEIGHT_CAP = 2500.0
 SIZE17_TYPE = "17"
 MERGE_BY_ARRIVAL_VENDORS = ("KVC", "元町")
+
+
+# ===== Issue #135 計測用トレース（既定OFF・挙動は変えない） =====
+# 有効化: 環境変数 CH_TRACE_135=1 もしくは sorter.TRACE_MIX = True
+TRACE_MIX = os.getenv("CH_TRACE_135", "") not in ("", "0", "false", "False")
+
+
+def _trace_on() -> bool:
+    return bool(TRACE_MIX) and logger.isEnabledFor(logging.DEBUG)
+
+
+def _join_uniq(s) -> str:
+    return "/".join(sorted(set(map(str, s))))
 
 
 def _target_takaoka_mask(df: pd.DataFrame) -> pd.Series:
@@ -241,11 +255,53 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
             & (units["高さ合計"] <= margin2)
         ].sort_values("高さ合計", ascending=False)
 
+        if _trace_on():
+            _avail = (~units["山ID"].isin(used)) & (units["山ID"] != id1)
+            _over = pd.Series(
+                np.asarray(units["高さ合計"], dtype=float) > np.asarray(margin2, dtype=float),
+                index=units.index,
+            )
+            _blank = pd.Series("", index=units.index)
+            _tbl = pd.DataFrame({
+                "山ID": units["山ID"],
+                "納入先": units["納入先"].astype(str),
+                "便": units["NONYUHIBIN"].astype(str),
+                "入車": units.get("入車時間", _blank).astype(str),
+                "役割": units.get("_role_class", _blank).astype(str),
+                "高さ合計": units["高さ合計"],
+                "Max移動工数": units.get("Max移動工数", pd.Series(np.nan, index=units.index)),
+                "×禁止": cond_same_dest_diff_bin,
+                "×層": ~cond_layer2,
+                "×時間": ~_time_feasible(g1_floor, g1_deadline, units),
+                "×高さ": _over,
+            }).loc[_avail]
+            logger.debug(
+                "TRACE#135 g1=%d 納入先=%s 便=%s 入車=%s 役割=%s 高さ合計=%.1f Max移動工数=%s "
+                "特例=%s 余裕(通常cap)=%.1f 候補数=%d\n%s",
+                id1, str(g1.get("納入先", "")), str(g1.get("NONYUHIBIN", "")),
+                str(g1.get("入車時間", "")), str(g1.get("_role_class", "")),
+                float(g1["高さ合計"]), g1.get("Max移動工数"), bool(has_special_g1),
+                float(height_cap) - float(g1["高さ合計"]), int(len(cand2)),
+                _tbl.to_string(index=False),
+            )
+
         if cand2.empty:
+            if _trace_on():
+                logger.debug(
+                    "TRACE#135 g1=%d → 相手なし・単独山（納入先=%s 便=%s 高さ合計=%.1f）",
+                    id1, str(g1.get("納入先", "")), str(g1.get("NONYUHIBIN", "")),
+                    float(g1["高さ合計"]),
+                )
             continue
 
         g2 = cand2.iloc[0]
         id2 = int(g2["山ID"])
+        if _trace_on():
+            logger.debug(
+                "TRACE#135   ├ g2採用=%d 納入先=%s 便=%s 高さ合計=%.1f Max移動工数=%s",
+                id2, str(g2.get("納入先", "")), str(g2.get("NONYUHIBIN", "")),
+                float(g2["高さ合計"]), g2.get("Max移動工数"),
+            )
 
         # 【特例品番フィルタ：層3用】g1 + g2 の統合フラグで判定
         has21_g1 = bool(g1.get("_has_size21", False))
@@ -278,6 +334,16 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
             & cond_mix3_final
             & (units["高さ合計"] <= margin3)
         ].sort_values("高さ合計", ascending=False)
+
+        if _trace_on():
+            if cand3.empty:
+                logger.debug("TRACE#135   └ g3なし（余裕(通常cap)=%.1f）",
+                             float(height_cap) - float(g1["高さ合計"]) - float(g2["高さ合計"]))
+            else:
+                _g3 = cand3.iloc[0]
+                logger.debug("TRACE#135   └ g3採用=%d 納入先=%s 便=%s 高さ合計=%.1f",
+                             int(_g3["山ID"]), str(_g3.get("納入先", "")),
+                             str(_g3.get("NONYUHIBIN", "")), float(_g3["高さ合計"]))
 
         used.update({id1, id2})
         id_map[id2] = id1
@@ -338,6 +404,20 @@ def run_pipeline(
             df_sorted = df_sub.sort_values(by=sort_cols, ascending=sort_asc).copy()
 
             has_arrival = "入車時間" in df_sorted.columns and df_sorted["入車時間"].ne("").any()
+            if _trace_on() and has_arrival:
+                _t = df_sorted.copy()
+                _t["_納入日"] = _t["NONYUHIBIN"].astype(str).str.strip().str[:8]
+                _agg = {"件数": ("高さ", "size"),
+                        "納入日数": ("_納入日", "nunique"),
+                        "納入日一覧": ("_納入日", _join_uniq),
+                        "便一覧": ("NONYUHIBIN", _join_uniq)}
+                if "納入先" in _t.columns:
+                    _agg["納入先一覧"] = ("納入先", _join_uniq)
+                logger.debug(
+                    "TRACE#135 基本グループ サイズ%s の入車時間プール（納入日数>1 なら日跨ぎ混在）\n%s",
+                    size_type,
+                    _t.groupby("入車時間", sort=True).agg(**_agg).to_string(),
+                )
             if has_arrival:
                 group_numbers = pd.Series(0, index=df_sorted.index, dtype=int)
                 base_group = 0
@@ -456,6 +536,30 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
         sub_sorted = pd.concat(parts, axis=0) if parts else sub.iloc[0:0].copy()
         packed_list.append(sub_sorted)
     size1_packed = pd.concat(packed_list, axis=0).reset_index(drop=True) if packed_list else size1_df.copy()
+    if _trace_on():
+        _cols = [c for c in ("NONYUHIBIN", "納入先", "納入先コード", "UKEIRE", "入車時間",
+                             "_role_class", "ローカルグループ番号", "ストア", "移動工数", "高さ",
+                             "_has_special_hinban") if c in size1_packed.columns]
+        logger.debug(
+            "TRACE#135 ローカル山の中身（積んだ順）\n%s",
+            size1_packed[_cols].sort_values(
+                by=["NONYUHIBIN", "_role_class", "ローカルグループ番号", "移動工数"],
+                ascending=[True, True, True, False],
+            ).to_string(index=False),
+        )
+        _mix = {"パレット数": ("高さ", "size"),
+                "納入先数": ("納入先", "nunique"),
+                "納入先一覧": ("納入先", _join_uniq),
+                "ローカル山数": ("ローカルグループ番号", "nunique"),
+                "Max移動工数": ("移動工数", "max"),
+                "Min移動工数": ("移動工数", "min")}
+        if "入車時間" in size1_packed.columns:
+            _mix["入車一覧"] = ("入車時間", _join_uniq)
+        logger.debug(
+            "TRACE#135 プール内の混在（納入先数>=2 なら プール跨ぎが発生している）\n%s",
+            size1_packed.groupby(["NONYUHIBIN", "_role_class"], sort=True)
+                        .agg(**_mix).reset_index().to_string(index=False),
+        )
 
     group_table = _build_size1_stack_units(size1_packed, mixing_key)
     # Issue #96: マスタから床・締切を計算してユニットへ付与（混載判定の予防チェック用）
@@ -465,6 +569,15 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
         idx = group_cols.index("_role_class")
         group_cols.insert(idx, "納入先コード")
 
+    if _trace_on():
+        _uc = [c for c in ("山ID", "NONYUHIBIN", "納入先", "納入先コード", "入車時間", "_role_class",
+                           "ローカルグループ番号", "高さ合計", "Max移動工数",
+                           "_has_size1", "_has_size21", "_has_special_hinban", "_床秒", "_締切秒")
+               if c in group_table.columns]
+        logger.debug(
+            "TRACE#135 混載判定の入力ユニット（高さ合計 降順＝処理順）\n%s",
+            group_table[_uc].sort_values("高さ合計", ascending=False).to_string(index=False),
+        )
     id_map = _match_units_with_layer_rules(group_table, float(height_cap))
 
     def repr_id(x: int) -> int:
@@ -576,7 +689,28 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
 
         return out.drop(columns=["_order2"], errors="ignore")
 
+    _before_rescue = size1_with_mountain["山通番"].copy() if _trace_on() else None
     size1_with_mountain = _rescue_split_conflict_vendor(size1_with_mountain)
+    if _trace_on():
+        if _before_rescue is not None:
+            logger.debug(
+                "TRACE#135 救済分割 _rescue_split_conflict_vendor: 変更行数=%d",
+                int((_before_rescue.values != size1_with_mountain["山通番"].values).sum()),
+            )
+        _fa = {"パレット数": ("山通番", "count"),
+               "Max移動工数": ("移動工数", "max"),
+               "Min移動工数": ("移動工数", "min"),
+               "高さ合計": ("高さ", "sum"),
+               "納入先一覧": ("納入先", _join_uniq),
+               "便一覧": ("NONYUHIBIN", _join_uniq)}
+        if "入車時間" in size1_with_mountain.columns:
+            _fa["入車一覧"] = ("入車時間", _join_uniq)
+        if "ストア" in size1_with_mountain.columns:
+            _fa["ストア一覧"] = ("ストア", _join_uniq)
+        _fin = size1_with_mountain.groupby("山通番").agg(**_fa).reset_index()
+        _fin["工数レンジ"] = (_fin["Max移動工数"] - _fin["Min移動工数"]).round(4)
+        logger.debug("TRACE#135 確定した山（サイズ1/21・山通番は採番前）\n%s",
+                     _fin.to_string(index=False))
     size1_with_mountain = size1_with_mountain.drop(
         columns=["_is_size1", "_is_size21", "_role_class", "_床秒", "_締切秒"],
         errors="ignore",

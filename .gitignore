@@ -11,6 +11,7 @@ tmp_*/
 .venv/
 .vscode/
 *.log
+trace_135.log
 
 # 実行時の生成ファイル（テスト・出力用）
 SPOアップロード用_履歴.xlsx
