@@ -134,12 +134,26 @@ def assign_groups_sequential(heights: pd.Series, cap: float, max_pallets: Option
     return out
 
 
+def _size1_local_group_cols(size1_df: pd.DataFrame) -> list:
+    """サイズ1/21のローカル山（便内高さ積み・混載ユニット化）を集約するキー列。
+
+    Issue #135 Step2: NONYUHIBIN（便番号）は納入先ごとに独立に採番されているため、
+    異なる納入先が同一便番号を共有するケースがあり、そのままではローカル山の中で
+    納入先が混在してしまう（プール跨ぎ。Issue #135実測: 89件、ユニーク便ベースで
+    86/143便=60.1%）。「納入先」を追加キーとし、同一便番号内でも納入先が異なれば
+    別のローカル山として積む。NONYUHIBIN自体は _match_units_with_layer_rules の
+    便違い混載禁止判定（KVC/元町の入車時間一致例外を含む）で使うため維持する。
+    """
+    cols = ["NONYUHIBIN", "納入先", "_role_class"]
+    if "納入先コード" in size1_df.columns:
+        idx = cols.index("_role_class")
+        cols.insert(idx, "納入先コード")
+    return cols
+
+
 def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.DataFrame:
     """サイズ1/21のローカル山から、混載判定用ユニット表を生成する。"""
-    group_cols = ["NONYUHIBIN", "_role_class", "ローカルグループ番号"]
-    if "納入先コード" in size1_packed.columns:
-        idx = group_cols.index("_role_class")
-        group_cols.insert(idx, "納入先コード")
+    group_cols = _size1_local_group_cols(size1_packed) + ["ローカルグループ番号"]
 
     aggs = {
         "高さ合計": ("高さ", "sum"),
@@ -150,7 +164,7 @@ def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.
     }
     if mixing_key in size1_packed.columns:
         aggs[mixing_key] = (mixing_key, "first")
-    aggs["納入先"] = ("納入先", "first")
+    # 「納入先」は group_cols（groupbyキー）に含まれるため、aggsには入れない
     if "入車時間" in size1_packed.columns:
         aggs["入車時間"] = ("入車時間", "first")
 
@@ -514,8 +528,9 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
         size1_df["入車時間"] = ""
     size1_df["入車時間"] = size1_df["入車時間"].astype(str).str.strip()
 
-    # まずは便単位×層役割（1/21）で高さ積みしてローカル山を作る。
-    local_group_cols = ["NONYUHIBIN", "_role_class"]
+    # まずは便単位×納入先×層役割（1/21）で高さ積みしてローカル山を作る。
+    # Issue #135 Step2: 「納入先」を追加（詳細は _size1_local_group_cols の docstring）
+    local_group_cols = _size1_local_group_cols(size1_df)
 
     packed_list = []
     for _, sub in size1_df.groupby(local_group_cols, sort=False):
@@ -564,10 +579,7 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
     group_table = _build_size1_stack_units(size1_packed, mixing_key)
     # Issue #96: マスタから床・締切を計算してユニットへ付与（混載判定の予防チェック用）
     group_table = attach_unit_time_bounds(group_table, build_bin_time_map(master_df))
-    group_cols = ["NONYUHIBIN", "_role_class", "ローカルグループ番号"]
-    if "納入先コード" in size1_packed.columns:
-        idx = group_cols.index("_role_class")
-        group_cols.insert(idx, "納入先コード")
+    group_cols = _size1_local_group_cols(size1_packed) + ["ローカルグループ番号"]
 
     if _trace_on():
         _uc = [c for c in ("山ID", "NONYUHIBIN", "納入先", "納入先コード", "入車時間", "_role_class",
