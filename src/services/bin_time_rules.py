@@ -9,14 +9,14 @@
 sorter 従来実装（_timeline_secs）の 06:25 基準との軸ズレ（Issue #27 の親戚 = #96 穴3）を
 ここで解消する。
 
-既知の制限（次PRで process_assigner._get_prev_bin_for_vendor と統合予定 = #96 穴2）:
-- 前便は「便番号 −1 がマスタに存在する場合」のみ解決する。
-  01便の巻き戻り・日野N-2・武部時刻グループ・セットありフラグは未対応
-  （床が 0 または高め に倒れる。高め側は混載を控えめにする安全側の誤り）。
+前便解決（#96 穴2）: 01便の前便は「その納入先の最終便」（河崎様確認済み）。
+process_assigner._get_prev_bin_for_vendor（wrap対応）と
+process_assigner._cycle_aware_prev_floor_secs（前便が前日側に見える場合の-24h補正）を
+そのまま再利用し、ロジックの二重実装を避ける。
 """
 
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -24,6 +24,7 @@ from ..models.constants import PICKUP_DEADLINE_BUFFER_SECS
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
+from .process_assigner import _get_prev_bin_for_vendor, _cycle_aware_prev_floor_secs
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,19 @@ def build_bin_time_map(master_df: Optional[pd.DataFrame]) -> BinTimeMap:
     return result
 
 
+def _vendor_bin_numbers(bin_time_map: BinTimeMap, vendor: str) -> List[int]:
+    """bin_time_map から対象納入先の便番号一覧（int・昇順）を導出する（#96 穴2）。"""
+    bins = set()
+    for (v, order2) in bin_time_map.keys():
+        if v != vendor:
+            continue
+        try:
+            bins.add(int(order2))
+        except (TypeError, ValueError):
+            continue
+    return sorted(bins)
+
+
 def unit_floor_deadline(
     vendor, nonyuhibin, arrival_hhmm, bin_time_map: BinTimeMap
 ) -> Tuple[int, Optional[int]]:
@@ -73,7 +87,8 @@ def unit_floor_deadline(
 
     締切: ユニットに付与済みの「入車時間」を優先（SPLIT_UKEIRE_ROUTES 解決済みのため）。
           無ければマスタ辞書から引く。
-    床  : 前便（便番号 −1）の入車をマスタ辞書から引いて +10分。
+    床  : 前便（01便は最終便へ巻き戻り = process_assigner._get_prev_bin_for_vendor）の
+          入車 + 10分。前便が前日側に見える場合は -24h 補正（_cycle_aware_prev_floor_secs）。
     """
     vendor = _normalize_dest_name(str(vendor).strip())
     nony = str(nonyuhibin).strip().translate(_ZEN2HAN_DIGIT_COLON)
@@ -89,10 +104,18 @@ def unit_floor_deadline(
         b = int(order2)
     except (TypeError, ValueError):
         b = None
-    if b is not None and b > 1:
-        prev_secs = bin_time_map.get((vendor, f"{b - 1:02d}"))
-        if prev_secs is not None:
-            floor = int(prev_secs) + FLOOR_BUFFER_SECS
+    if b is not None:
+        vendor_bins = _vendor_bin_numbers(bin_time_map, vendor)
+        prev_bin = _get_prev_bin_for_vendor(
+            vendor, b, {vendor: vendor_bins}, allow_wrap=True, offset=1,
+        )
+        if prev_bin is not None:
+            prev_secs = bin_time_map.get((vendor, prev_bin))
+            if prev_secs is not None:
+                if arrival is not None:
+                    floor = _cycle_aware_prev_floor_secs(int(prev_secs), int(arrival))
+                else:
+                    floor = int(prev_secs) + FLOOR_BUFFER_SECS
     return floor, deadline
 
 
