@@ -141,8 +141,8 @@ class TestGrouping:
         _, details = _build_size1_mixed(expanded, DEFAULT_HEIGHT_CAP, mixing_key=None)
         assert details["山通番"].nunique() == 2
 
-    def test_special_hinban_one_pallet_different_truck_not_merged(self):
-        """別トラックなら、特例品番を含んでいても混載しない。"""
+    def test_special_hinban_one_pallet_mixed_with_normal_uses_2500_cap(self):
+        """別納入先・別トラックでも、特例品番を含む山は2500mm capで統合する。"""
         def _row(hinban, height, move_cost, nonyuhibin, vendor, arrival_time):
             return {
                 "HINBAN": hinban, "サイズ種類": "1", "NONYUHIBIN": nonyuhibin,
@@ -151,14 +151,14 @@ class TestGrouping:
                 "移動工数": move_cost, "PLANKANBANSU": 1,
             }
 
-        # Issue #135ではトラックを「納入日+入車時間」で定義する。
-        # Issue #79の「別トラックでも特例品番なら合流」例外は廃止済み。
+        # 別納入先間は、同サイズかつ時間条件を満たせば効率化のため統合する。
+        # 特例品番を含むため、2460mmでもIssue #79の2500mm capを適用する。
         expanded = pd.DataFrame([
             _row(SPECIAL_HINBAN, 1300, 10, nonyuhibin="12", vendor="店E", arrival_time="06:45"),
             _row("666666666666", 1160, 9, nonyuhibin="13", vendor="店F", arrival_time="07:30"),
         ])
         _, details = _build_size1_mixed(expanded, DEFAULT_HEIGHT_CAP, mixing_key=None)
-        assert details["山通番"].nunique() == 2
+        assert details["山通番"].nunique() == 1
 
     def test_size1_same_bin_only_is_single_mountain(self):
         """同じNONYUHIBINのみの場合は通常積みで1山になる。"""
@@ -181,16 +181,16 @@ class TestGrouping:
         # Issue #135の入車時間単独truck_keyにより、別トラックは2山に分かれる。
         assert details["山通番"].nunique() == 2
 
-    def test_size1_different_truck_not_merged_even_if_dest_differs(self):
-        """納入先が異なっても、トラックが異なれば混載しない。"""
+    def test_size1_different_vendors_compatible_trucks_are_merged(self):
+        """納入先が異なる別トラックでも、互換条件を満たせば混載する。"""
         expanded = pd.DataFrame([
             {"サイズ種類": "1", "NONYUHIBIN": "01", "入車時間": "06:45", "高さ": 1000, "移動工数": 10, "UKEIRE": "A", "納入先": "高岡"},
             {"サイズ種類": "1", "NONYUHIBIN": "02", "入車時間": "07:30", "高さ": 1000, "移動工数": 9, "UKEIRE": "B", "納入先": "KVC"},
         ])
 
         _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
-        # Issue #135のtruck_key不一致を優先し、Issue #79の納入先違いによる合流例外は廃止済み。
-        assert details["山通番"].nunique() == 2
+        # 別納入先間は、同サイズかつ時間条件を満たせばtruck_keyが異なっても統合する。
+        assert details["山通番"].nunique() == 1
 
     def test_size1_rescue_split_urgent_vendor_when_deadline_floor_conflict(self):
         """混載山で締切/開始下限が衝突する場合、締切が厳しい納入先を単独山へ分離する。"""
