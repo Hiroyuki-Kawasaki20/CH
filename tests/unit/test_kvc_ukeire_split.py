@@ -236,7 +236,8 @@ class TestSize1MixedMergeByArrivalVendorException:
         _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
         assert details["山通番"].nunique() == 2
 
-    def test_non_exception_vendor_same_arrival_different_bins_still_split(self):
+    def test_same_vendor_same_arrival_different_bins_are_merged_as_same_truck(self):
+        """同一納入日・同一入車時間なら便違いでも同一トラックとして統合する。"""
         expanded = pd.DataFrame([
             {
                 "サイズ種類": "1", "NONYUHIBIN": "2026070805", "UKEIRE": "A",
@@ -249,7 +250,8 @@ class TestSize1MixedMergeByArrivalVendorException:
         ])
 
         _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
-        assert details["山通番"].nunique() == 2
+        # Issue #135のトラック定義（納入日+入車時間）に基づき、旧仕様の便違い分割を改める。
+        assert details["山通番"].nunique() == 1
 
     def test_tmk_alias_same_arrival_different_bins_are_merged(self):
         expanded = pd.DataFrame([

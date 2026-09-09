@@ -17,6 +17,7 @@ from ..models.constants import (
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
+from ..utils.master_map import build_master_map_with_duplicate_warning
 from .bin_time_rules import build_bin_time_map, attach_unit_time_bounds
 
 
@@ -31,9 +32,6 @@ TAKAOKA_TARGET_UKEIRE = "K5"
 # 複数出荷先が共通でサイズ17パレットを引き取るため。2026/06 Kawasaki氏確認。
 SIZE17_MERGE_HEIGHT_CAP = 2500.0
 SIZE17_TYPE = "17"
-MERGE_BY_ARRIVAL_VENDORS = ("KVC", "元町")
-
-
 # ===== Issue #135 計測用トレース（既定OFF・挙動は変えない） =====
 # 有効化: 環境変数 CH_TRACE_135=1 もしくは sorter.TRACE_MIX = True
 TRACE_MIX = os.getenv("CH_TRACE_135", "") not in ("", "0", "false", "False")
@@ -77,7 +75,9 @@ def _add_arrival_time_column(df: pd.DataFrame, master_df: pd.DataFrame) -> pd.Da
     master["OData_納入先"] = master["OData_納入先"].astype(str).str.strip().apply(_normalize_dest_name)
     master["NONYUHIBIN"] = master["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
     master["入車時間"] = master["入車時間"].astype(str).str.strip()
-    master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in master.iterrows()}
+    master_map = build_master_map_with_duplicate_warning(
+        master.to_dict("records"), ("OData_納入先", "NONYUHIBIN"), "入車時間", logger
+    )
 
     def _lookup(row):
         vendor = _normalize_dest_name(str(row.get("納入先", row.get("SYUKKASAKI", ""))))
@@ -91,6 +91,21 @@ def _add_arrival_time_column(df: pd.DataFrame, master_df: pd.DataFrame) -> pd.Da
         return master_map.get((vendor, order2), "")
 
     df["入車時間"] = df.apply(_lookup, axis=1)
+    return df
+
+
+def _add_truck_key_column(df: pd.DataFrame) -> pd.DataFrame:
+    """入車時間からIssue #135のトラック単位キーを付与する。"""
+    # 天候不順や稼働停止で出荷日がずれ、同じ便を別の日に運ぶ運用があるため、
+    # 納入日が異なっても同じ入車時間なら物理的に同一トラックとして混載を許可する。
+    # ドラックヤードは1つだけで同時刻に複数トラックは入れないため、入車時間だけで一意に識別できる。
+    def _key(row: pd.Series) -> str:
+        arrival = row.get("入車時間", "")
+        if pd.isna(arrival):
+            arrival = ""
+        return str(arrival).strip()
+
+    df["_truck_key"] = df.apply(_key, axis=1)
     return df
 
 
@@ -161,6 +176,7 @@ def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.
         "_has_size1": ("_is_size1", "any"),
         "_has_size21": ("_is_size21", "any"),
         "_has_special_hinban": ("_has_special_hinban", "any"),
+        "_truck_key": ("_truck_key", "first"),
     }
     if mixing_key in size1_packed.columns:
         aggs[mixing_key] = (mixing_key, "first")
@@ -184,6 +200,9 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
     """層役割と既存条件で2山/3山混載を判定し、山IDの代表マップを返す。"""
     if units is None or units.empty:
         return {}
+
+    if "_truck_key" not in units.columns:
+        units = _add_truck_key_column(units.copy())
 
     used, id_map = set(), {}
     all_true = pd.Series(True, index=units.index)
@@ -217,27 +236,8 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         return (~cross) | (~hino_both) | same_vendor_same_bin
 
     def _forbidden_same_vendor_diff_bin(base_row: pd.Series) -> pd.Series:
-        base_vendor = str(base_row.get("納入先", "")).strip()
-        base_bin = str(base_row.get("NONYUHIBIN", "")).strip()
-        base_arrival = str(base_row.get("入車時間", "")).strip()
-
-        units_vendor = units["納入先"].astype(str).str.strip()
-        units_bin = units["NONYUHIBIN"].astype(str).str.strip()
-        if "入車時間" in units.columns:
-            units_arrival = units["入車時間"].astype(str).str.strip()
-        else:
-            units_arrival = pd.Series("", index=units.index, dtype=str)
-
-        same_vendor = units_vendor.eq(base_vendor)
-        diff_bin = units_bin.ne(base_bin)
-
-        # 例外: KVC/元町（先頭一致）かつ入車時間一致なら便違いでも混載許可
-        allow_vendor = units_vendor.str.startswith(MERGE_BY_ARRIVAL_VENDORS) & bool(
-            base_vendor.startswith(MERGE_BY_ARRIVAL_VENDORS)
-        )
-        allow_by_arrival = allow_vendor & (base_arrival != "") & units_arrival.eq(base_arrival)
-
-        return same_vendor & diff_bin & (~allow_by_arrival)
+        base_truck_key = base_row.get("_truck_key")
+        return units["_truck_key"].map(lambda truck_key: truck_key != base_truck_key)
 
     for _, g1 in units.sort_values("高さ合計", ascending=False).iterrows():
         id1 = int(g1["山ID"])
@@ -395,6 +395,7 @@ def run_pipeline(
 
     # 入車時間列を付与
     expanded = _add_arrival_time_column(expanded, master_df)
+    expanded = _add_truck_key_column(expanded)
     target_mask_expanded = _target_takaoka_mask(expanded)
     if target_mask_expanded.any():
         arrivals = sorted(expanded.loc[target_mask_expanded, "入車時間"].astype(str).unique().tolist()) if "入車時間" in expanded.columns else []
@@ -527,6 +528,8 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
     if "入車時間" not in size1_df.columns:
         size1_df["入車時間"] = ""
     size1_df["入車時間"] = size1_df["入車時間"].astype(str).str.strip()
+    if "_truck_key" not in size1_df.columns:
+        size1_df = _add_truck_key_column(size1_df)
 
     # まずは便単位×納入先×層役割（1/21）で高さ積みしてローカル山を作る。
     # Issue #135 Step2: 「納入先」を追加（詳細は _size1_local_group_cols の docstring）

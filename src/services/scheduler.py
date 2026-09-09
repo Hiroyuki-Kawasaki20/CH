@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
+import logging
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,7 @@ from ..models.constants import (
     PICKUP_DEADLINE_BUFFER_SECS,
 )
 from ..utils.normalizer import _ZEN2HAN_DIGIT_COLON, _normalize_dest_name
+from ..utils.master_map import build_master_map_with_duplicate_warning
 from .process_assigner import (
     _adjust_start_for_breaks,
     _calc_work_end_with_breaks,
@@ -38,6 +40,7 @@ from .process_assigner import (
 # process_assigner.py の既存値と一致
 _SHIFT_START_SECS = [6 * 3600 + 25 * 60, 16 * 3600 + 40 * 60]
 _ARRIVAL_BUFFER_SECS = 10 * 60
+logger = logging.getLogger(__name__)
 
 
 def cluster_by_store(rows: List[dict]) -> List[dict]:
@@ -594,12 +597,17 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
     master["OData_納入先"] = master["OData_納入先"].astype(str).str.strip().apply(_normalize_dest_name)
     master["NONYUHIBIN"] = master["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
     master["入車時間"] = master["入車時間"].astype(str).str.strip()
-    master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in master.iterrows()}
+    master_map = build_master_map_with_duplicate_warning(
+        master.to_dict("records"), ("OData_納入先", "NONYUHIBIN"), "入車時間", logger
+    )
     has_set_flag_col = "セットありフラグ" in master.columns
-    set_flag_map = {
-        (r["OData_納入先"], r["NONYUHIBIN"]): _is_truthy_flag(r.get("セットありフラグ", ""))
-        for _, r in master.iterrows()
-    }
+    set_flag_map = build_master_map_with_duplicate_warning(
+        master.to_dict("records"),
+        ("OData_納入先", "NONYUHIBIN"),
+        "セットありフラグ",
+        logger,
+        value_formatter=_is_truthy_flag,
+    )
 
     vendor_shift_first_bin: Dict[Tuple[str, int], str] = {}
     vendor_shift_first_offset: Dict[Tuple[str, int], int] = {}

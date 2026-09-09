@@ -2,6 +2,7 @@
 """CHかんばんセット — データローダーのユニットテスト"""
 
 import sys
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +17,35 @@ from src.services.data_loader import (
     save_pickup_time_master_xlsx,
 )
 from src.utils.csv_utils import read_csv_ja
+from src.utils.master_map import build_master_map_with_duplicate_warning
+
+
+def test_master_map_warns_on_duplicate_and_keeps_later_value(caplog):
+    rows = [
+        {"vendor": "元町-9P", "bin": "01", "value": "07:28"},
+        {"vendor": "元町-9P", "bin": "01", "value": "17:18"},
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        result = build_master_map_with_duplicate_warning(
+            rows, ("vendor", "bin"), "value", logging.getLogger("test-master-map")
+        )
+
+    assert result[("元町-9P", "01")] == "17:18"
+    assert "重複キー" in caplog.text
+    assert "07:28" in caplog.text
+    assert "17:18" in caplog.text
+
+
+def test_master_map_does_not_warn_without_duplicate(caplog):
+    rows = [{"vendor": "KVC-B7", "bin": "01", "value": "06:45"}]
+
+    with caplog.at_level(logging.WARNING):
+        build_master_map_with_duplicate_warning(
+            rows, ("vendor", "bin"), "value", logging.getLogger("test-master-map")
+        )
+
+    assert not caplog.records
 
 
 def test_read_csv_ja_raises_clear_error_for_empty_file(tmp_path):

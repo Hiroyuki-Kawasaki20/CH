@@ -141,22 +141,24 @@ class TestGrouping:
         _, details = _build_size1_mixed(expanded, DEFAULT_HEIGHT_CAP, mixing_key=None)
         assert details["山通番"].nunique() == 2
 
-    def test_special_hinban_one_pallet_mixed_with_normal_applies_2500_cap(self):
-        """Issue #79 仕様#6: 特例品番1件＋通常品番の混載でも、山全体にcap=2500が適用されて合流すること（異なる便・納入先でのクロス統合パス）。"""
-        def _row(hinban, height, move_cost, nonyuhibin, vendor):
+    def test_special_hinban_one_pallet_different_truck_not_merged(self):
+        """別トラックなら、特例品番を含んでいても混載しない。"""
+        def _row(hinban, height, move_cost, nonyuhibin, vendor, arrival_time):
             return {
                 "HINBAN": hinban, "サイズ種類": "1", "NONYUHIBIN": nonyuhibin,
                 "納入先": vendor, "SYUKKASAKI": vendor,
-                "高さ": height, "移動工数": move_cost, "PLANKANBANSU": 1,
+                "入車時間": arrival_time, "高さ": height,
+                "移動工数": move_cost, "PLANKANBANSU": 1,
             }
 
-        # 特例品番側(店E/便12)と通常側(店F/便13)を別便・別納入先で用意し、統合段階でのマージを検証する。
+        # Issue #135ではトラックを「納入日+入車時間」で定義する。
+        # Issue #79の「別トラックでも特例品番なら合流」例外は廃止済み。
         expanded = pd.DataFrame([
-            _row(SPECIAL_HINBAN, 1300, 10, nonyuhibin="12", vendor="店E"),
-            _row("666666666666", 1160, 9, nonyuhibin="13", vendor="店F"),
+            _row(SPECIAL_HINBAN, 1300, 10, nonyuhibin="12", vendor="店E", arrival_time="06:45"),
+            _row("666666666666", 1160, 9, nonyuhibin="13", vendor="店F", arrival_time="07:30"),
         ])
         _, details = _build_size1_mixed(expanded, DEFAULT_HEIGHT_CAP, mixing_key=None)
-        assert details["山通番"].nunique() == 1
+        assert details["山通番"].nunique() == 2
 
     def test_size1_same_bin_only_is_single_mountain(self):
         """同じNONYUHIBINのみの場合は通常積みで1山になる。"""
@@ -169,25 +171,26 @@ class TestGrouping:
         assert details["山通番"].nunique() == 1
 
     def test_size1_forbid_same_dest_diff_bin(self):
-        """納入先が同じで NONYUHIBINが異なる場合は混載禁止。"""
+        """同じ納入先でも、入車時間が異なる別トラックの場合は混載禁止。"""
         expanded = pd.DataFrame([
-            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 1000, "移動工数": 10, "UKEIRE": "A", "納入先": "日野"},
-            {"サイズ種類": "1", "NONYUHIBIN": "02", "高さ": 1000, "移動工数": 9, "UKEIRE": "B", "納入先": "日野"},
+            {"サイズ種類": "1", "NONYUHIBIN": "01", "入車時間": "06:45", "高さ": 1000, "移動工数": 10, "UKEIRE": "A", "納入先": "日野"},
+            {"サイズ種類": "1", "NONYUHIBIN": "02", "入車時間": "07:30", "高さ": 1000, "移動工数": 9, "UKEIRE": "B", "納入先": "日野"},
         ])
 
         _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
-        # 同じ納入先でNONYUHIBINが異なるので2つの山に分かれる
+        # Issue #135の入車時間単独truck_keyにより、別トラックは2山に分かれる。
         assert details["山通番"].nunique() == 2
 
-    def test_size1_allow_diff_bin_when_dest_differs(self):
-        """納入先が異なれば NONYUHIBIN が異なっても混載を許容する。"""
+    def test_size1_different_truck_not_merged_even_if_dest_differs(self):
+        """納入先が異なっても、トラックが異なれば混載しない。"""
         expanded = pd.DataFrame([
-            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 1000, "移動工数": 10, "UKEIRE": "A", "納入先": "高岡"},
-            {"サイズ種類": "1", "NONYUHIBIN": "02", "高さ": 1000, "移動工数": 9, "UKEIRE": "B", "納入先": "KVC"},
+            {"サイズ種類": "1", "NONYUHIBIN": "01", "入車時間": "06:45", "高さ": 1000, "移動工数": 10, "UKEIRE": "A", "納入先": "高岡"},
+            {"サイズ種類": "1", "NONYUHIBIN": "02", "入車時間": "07:30", "高さ": 1000, "移動工数": 9, "UKEIRE": "B", "納入先": "KVC"},
         ])
 
         _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key="UKEIRE")
-        assert details["山通番"].nunique() == 1
+        # Issue #135のtruck_key不一致を優先し、Issue #79の納入先違いによる合流例外は廃止済み。
+        assert details["山通番"].nunique() == 2
 
     def test_size1_rescue_split_urgent_vendor_when_deadline_floor_conflict(self):
         """混載山で締切/開始下限が衝突する場合、締切が厳しい納入先を単独山へ分離する。"""
