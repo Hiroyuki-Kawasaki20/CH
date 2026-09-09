@@ -2,7 +2,7 @@
 """Issue #96: (納入先, 便) → (開始床, 締切) の共通計算ヘルパー。
 
 定義:
-- 締切 = 自便の入車時刻 − 10分（山はこの時刻までに完了していること）
+- 締切 = 自便の入車時刻 − 20分（山はこの時刻までに完了していること）
 - 床   = 前便の入車時刻 + 10分（前便が落ち着くまで着手しない）
 
 日跨ぎ軸は process_assigner と同じ 03:00 基準（03:00未満は +24h）に統一する。
@@ -20,13 +20,14 @@ from typing import Dict, Optional, Tuple
 
 import pandas as pd
 
+from ..models.constants import PICKUP_DEADLINE_BUFFER_SECS
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
 
 logger = logging.getLogger(__name__)
 
-TEN_MIN_SECS = 10 * 60
+FLOOR_BUFFER_SECS = 10 * 60
 DAY_ROLLOVER_SECS = 3 * 3600
 
 BinTimeMap = Dict[Tuple[str, str], int]
@@ -81,7 +82,7 @@ def unit_floor_deadline(
     arrival = timeline_secs(arrival_hhmm)
     if arrival is None:
         arrival = bin_time_map.get((vendor, order2))
-    deadline = max(0, int(arrival) - TEN_MIN_SECS) if arrival is not None else None
+    deadline = max(0, int(arrival) - PICKUP_DEADLINE_BUFFER_SECS) if arrival is not None else None
 
     floor = 0
     try:
@@ -91,7 +92,7 @@ def unit_floor_deadline(
     if b is not None and b > 1:
         prev_secs = bin_time_map.get((vendor, f"{b - 1:02d}"))
         if prev_secs is not None:
-            floor = int(prev_secs) + TEN_MIN_SECS
+            floor = int(prev_secs) + FLOOR_BUFFER_SECS
     return floor, deadline
 
 

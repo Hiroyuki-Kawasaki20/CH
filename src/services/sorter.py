@@ -12,7 +12,7 @@ from ..models.constants import (
     SPECIAL_HINBAN, SPECIAL_HINBAN_HEIGHT_CAP,
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     SIZE5_TYPE, SIZE5_MAX_PALLETS_PER_YAMA,
-    SPLIT_UKEIRE_ROUTES, HINO_VENDOR_PREFIX,
+    SPLIT_UKEIRE_ROUTES, HINO_VENDOR_PREFIX, PICKUP_DEADLINE_BUFFER_SECS,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -662,7 +662,7 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
                     continue
                 pickup_secs = vendor_bin_time.get((vendor, order2))
                 if pickup_secs is not None:
-                    deadline = max(0, int(pickup_secs) - 10 * 60)
+                    deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
                     min_deadline = deadline if min_deadline is None else min(min_deadline, deadline)
                 try:
                     b = int(order2)
@@ -689,7 +689,7 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
                 pickup_secs = vendor_bin_time.get((vendor, order2))
                 if pickup_secs is None:
                     continue
-                d = max(0, int(pickup_secs) - 10 * 60)
+                d = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
                 if vendor not in vendor_deadline or d < vendor_deadline[vendor]:
                     vendor_deadline[vendor] = d
 
