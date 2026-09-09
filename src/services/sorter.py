@@ -236,8 +236,11 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         return (~cross) | (~hino_both) | same_vendor_same_bin
 
     def _forbidden_same_vendor_diff_bin(base_row: pd.Series) -> pd.Series:
+        base_vendor = str(base_row.get("納入先", "")).strip()
         base_truck_key = base_row.get("_truck_key")
-        return units["_truck_key"].map(lambda truck_key: truck_key != base_truck_key)
+        same_vendor = units["納入先"].astype(str).str.strip().eq(base_vendor)
+        diff_truck = units["_truck_key"].map(lambda truck_key: truck_key != base_truck_key)
+        return same_vendor & diff_truck
 
     for _, g1 in units.sort_values("高さ合計", ascending=False).iterrows():
         id1 = int(g1["山ID"])
