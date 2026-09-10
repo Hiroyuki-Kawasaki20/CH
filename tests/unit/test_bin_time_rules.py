@@ -33,3 +33,37 @@ def test_bin01_has_no_floor_and_missing_arrival_has_no_deadline():
     assert floor == 0
     assert deadline == 12 * 3600
     assert unit_floor_deadline("拠点X", "05", "", m) == (0, None)
+
+
+def _takaoka_like_master():
+    """01便が深夜・05便が最終便という高岡便のような周期スケジュール（#96 穴2）。"""
+    return _master([
+        ("拠点D", "01", "22:59"),
+        ("拠点D", "02", "06:45"),
+        ("拠点D", "03", "10:51"),
+        ("拠点D", "04", "14:40"),
+        ("拠点D", "05", "18:46"),
+    ])
+
+
+def test_bin01_prev_wraps_to_last_bin_of_vendor():
+    """01便の前便は最終便（05便）＝18:46＋10分になる（河崎様確認済みルール）。"""
+    m = build_bin_time_map(_takaoka_like_master())
+    floor, deadline = unit_floor_deadline("拠点D", "01", "22:59", m)
+    assert floor == 18 * 3600 + 46 * 60 + 10 * 60  # 05便18:46 + 10分
+    assert deadline == 22 * 3600 + 59 * 60 - 20 * 60
+
+
+def test_prev_bin_across_midnight_does_not_invert_floor_past_deadline():
+    """前便が深夜(22:59)・現行便が翌早朝(06:45)でも floor が締切を超えない（#96 穴2）。"""
+    m = build_bin_time_map(_takaoka_like_master())
+    floor, deadline = unit_floor_deadline("拠点D", "02", "06:45", m)
+    assert floor <= deadline
+    assert floor == 0  # 前便22:59は前日側と判定され-24h補正後0（下限なし相当）
+
+def test_prev_bin_same_day_no_crossing_matches_naive_calculation():
+    """日跨ぎが無い通常ケース（03便の前便=02便）は従来の素朴な加算と同じ結果になる（regression）。"""
+    m = build_bin_time_map(_takaoka_like_master())
+    floor, deadline = unit_floor_deadline("拠点D", "03", "10:51", m)
+    assert floor == 6 * 3600 + 45 * 60 + 10 * 60  # 02便06:45 + 10分
+    assert deadline == 10 * 3600 + 51 * 60 - 20 * 60
