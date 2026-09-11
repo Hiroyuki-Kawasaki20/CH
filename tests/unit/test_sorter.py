@@ -1322,7 +1322,7 @@ class TestSecondPassMatching:
 
         calls = []
 
-        def fake_single_pass(units_arg, height_cap_arg):
+        def fake_single_pass(units_arg, height_cap_arg, **kwargs):
             calls.append(set(units_arg["山ID"]))
             if len(calls) == 1:
                 return {2: 1}  # 1周目: 山3・山4はあまり
@@ -1347,6 +1347,42 @@ class TestSecondPassMatching:
 
         assert id_map == {}
 
+class TestAislePreference:
+    """Issue #146: 同アイル(ストア先頭1文字)優先による山組みの検証。"""
+
+    def test_prefers_same_aisle_partner_over_closer_height_fit(self):
+        """アイル一致が高さフィットより優先されること（山1ケース）。"""
+        expanded = pd.DataFrame([
+            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 1000, "移動工数": 10, "納入先": "店A", "ストア": "C10-A-1"},
+            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 990, "移動工数": 9, "納入先": "店B", "ストア": "C20-B-2"},
+            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 995, "移動工数": 8, "納入先": "店C", "ストア": "D10-A-1"},
+        ])
+
+        _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key=None)
+
+        yama_a = details.loc[details["納入先"] == "店A", "山通番"].iloc[0]
+        yama_b = details.loc[details["納入先"] == "店B", "山通番"].iloc[0]
+        yama_c = details.loc[details["納入先"] == "店C", "山通番"].iloc[0]
+
+        assert yama_a == yama_b, "アイル一致(C)の店Bと同じ山になるべき"
+        assert yama_a != yama_c, "アイル不一致(D)の店Cとは別山になるべき"
+
+    def test_falls_back_to_height_fit_when_aisle_unknown(self):
+        """ストア列が無い/空でアイル不明の場合は従来の高さフィット優先にフォールバックすること（山4ケース）。"""
+        expanded = pd.DataFrame([
+            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 1000, "移動工数": 10, "納入先": "店A"},
+            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 990, "移動工数": 9, "納入先": "店B"},
+            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 995, "移動工数": 8, "納入先": "店C"},
+        ])
+
+        _, details = _build_size1_mixed(expanded, height_cap=2450, mixing_key=None)
+
+        yama_a = details.loc[details["納入先"] == "店A", "山通番"].iloc[0]
+        yama_b = details.loc[details["納入先"] == "店B", "山通番"].iloc[0]
+        yama_c = details.loc[details["納入先"] == "店C", "山通番"].iloc[0]
+
+        assert yama_a == yama_c, "アイル不明時は高さが一番合う店C(995)と同じ山になるべき（従来ルール）"
+        assert yama_a != yama_b
 
 
 if __name__ == "__main__":
