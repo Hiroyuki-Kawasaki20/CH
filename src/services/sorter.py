@@ -44,6 +44,27 @@ def _trace_on() -> bool:
 def _join_uniq(s) -> str:
     return "/".join(sorted(set(map(str, s))))
 
+# ===== Issue #146: アイル(ストア先頭1文字)ヘルパー =====
+def _aisle_of(store) -> str:
+    """ストア列（例: C15-A-3）からアイル（先頭1文字）を取り出す。空/欠損は空文字。"""
+    if store is None or (isinstance(store, float) and pd.isna(store)):
+        return ""
+    s = str(store).strip()
+    return s[:1] if s else ""
+
+
+def _add_aisle_column(df: pd.DataFrame) -> pd.DataFrame:
+    """ストア列からアイル（先頭1文字）を _aisle 列として付与する。"""
+    if "ストア" not in df.columns:
+        df["_aisle"] = ""
+        return df
+    df["_aisle"] = df["ストア"].apply(_aisle_of)
+    return df
+
+
+def _aisle_set(series: pd.Series) -> frozenset:
+    """グループ内に出現するアイルの集合（空文字は除外）を返す。"""
+    return frozenset(a for a in series.astype(str) if a)
 
 def _target_takaoka_mask(df: pd.DataFrame) -> pd.Series:
     if df is None or df.empty:
@@ -168,6 +189,8 @@ def _size1_local_group_cols(size1_df: pd.DataFrame) -> list:
 
 def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.DataFrame:
     """サイズ1/21のローカル山から、混載判定用ユニット表を生成する。"""
+    if "_aisle" not in size1_packed.columns:
+        size1_packed = _add_aisle_column(size1_packed.copy())
     group_cols = _size1_local_group_cols(size1_packed) + ["ローカルグループ番号"]
 
     aggs = {
@@ -177,6 +200,7 @@ def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.
         "_has_size21": ("_is_size21", "any"),
         "_has_special_hinban": ("_has_special_hinban", "any"),
         "_truck_key": ("_truck_key", "first"),
+        "_aisle_set": ("_aisle", _aisle_set),  # Issue #146
     }
     if mixing_key in size1_packed.columns:
         aggs[mixing_key] = (mixing_key, "first")
@@ -196,13 +220,23 @@ def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.
     return units
 
 
-def _match_units_with_layer_rules_single_pass(units: pd.DataFrame, height_cap: float) -> dict:
-    """層役割と既存条件で2山/3山混載を判定し、山IDの代表マップを返す（1回きりのマッチング）。"""
+def _match_units_with_layer_rules_single_pass(
+    units: pd.DataFrame, height_cap: float, require_aisle_match: bool = False
+) -> dict:
+    """層役割と既存条件で2山/3山混載を判定し、山IDの代表マップを返す（1回きりのマッチング）。
+
+    require_aisle_match=True の場合、Issue #146のアイル（ストア先頭1文字）優先ルールを適用する。
+    双方にアイル情報がある場合のみ一致を必須とし、いずれかのアイルが不明な場合は
+    従来ルール（高さフィット優先）にフォールバックする。
+    """
     if units is None or units.empty:
         return {}
 
     if "_truck_key" not in units.columns:
         units = _add_truck_key_column(units.copy())
+    if "_aisle_set" not in units.columns:
+        units = units.copy()
+        units["_aisle_set"] = [frozenset()] * len(units)
 
     used, id_map = set(), {}
     all_true = pd.Series(True, index=units.index)
@@ -215,7 +249,12 @@ def _match_units_with_layer_rules_single_pass(units: pd.DataFrame, height_cap: f
         merged_floor = np.maximum(candidates["_床秒"].astype(float), float(base_floor))
         merged_deadline = np.minimum(candidates["_締切秒"].astype(float), float(base_deadline))
         return pd.Series(merged_floor <= merged_deadline, index=candidates.index)
-
+    def _aisle_compatible(base_aisles, candidates: pd.DataFrame) -> pd.Series:
+        """Issue #146: アイル一致を優先するが必須ではない（フォールバックあり）。"""
+        if not require_aisle_match or not base_aisles:
+            return pd.Series(True, index=candidates.index)
+        cand_sets = candidates["_aisle_set"]
+        return cand_sets.map(lambda s: True if not s else bool(base_aisles & s))
     def _cap_for_merge(base_has_special: bool, candidates: pd.DataFrame, normal_cap: float):
         """統合対象(g1やg1+g2)または候補が特例品番を含むならSPECIAL_HINBAN_HEIGHT_CAP、それ以外は通常capを返す（候補ごとのSeries）。"""
         combined = candidates.get("_has_special_hinban", pd.Series(False, index=candidates.index)).astype(bool) | bool(base_has_special)
@@ -263,7 +302,8 @@ def _match_units_with_layer_rules_single_pass(units: pd.DataFrame, height_cap: f
             cond_layer2 &= ~units["_has_size21"]
         g1_floor = float(g1["_床秒"]) if has_time_cols else 0.0
         g1_deadline = float(g1["_締切秒"]) if has_time_cols else float("inf")
-        cond_mix2_final = cond_mix2 & cond_layer2 & _time_feasible(g1_floor, g1_deadline, units)
+        cond_aisle2 = _aisle_compatible(g1.get("_aisle_set", frozenset()), units)
+        cond_mix2_final = cond_mix2 & cond_layer2 & cond_aisle2 & _time_feasible(g1_floor, g1_deadline, units)
 
         cand2 = units[
             (~units["山ID"].isin(used))
@@ -340,8 +380,13 @@ def _match_units_with_layer_rules_single_pass(units: pd.DataFrame, height_cap: f
             cond_layer3 &= ~units["_has_size21"]
         g2_floor = float(g2["_床秒"]) if has_time_cols else 0.0
         g2_deadline = float(g2["_締切秒"]) if has_time_cols else float("inf")
+        base_aisles_12 = (
+            (g1.get("_aisle_set", frozenset()) or frozenset())
+            | (g2.get("_aisle_set", frozenset()) or frozenset())
+        )
+        cond_aisle3 = _aisle_compatible(base_aisles_12, units)
         cond_mix3_final = (
-            cond_mix3_1 & cond_mix3_2 & cond_layer3
+            cond_mix3_1 & cond_mix3_2 & cond_layer3 & cond_aisle3
             & _time_feasible(max(g1_floor, g2_floor), min(g1_deadline, g2_deadline), units)
         )
 
@@ -373,8 +418,9 @@ def _match_units_with_layer_rules_single_pass(units: pd.DataFrame, height_cap: f
 
 
 def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dict:
-    """1周目マッチング後、あまったユニットのみで2周目を試す薄いラッパー（Issue #135）。"""
-    id_map_1 = _match_units_with_layer_rules_single_pass(units, height_cap)
+    """1巡目はアイル一致必須でマッチングし、残りを2巡目で従来ルール（アイル制約なし）にて
+    マッチングする2スイープ方式のラッパー（Issue #135 Step3 / Issue #146）。"""
+    id_map_1 = _match_units_with_layer_rules_single_pass(units, height_cap, require_aisle_match=True)
 
     if units is None or units.empty:
         return id_map_1
@@ -387,7 +433,7 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
         return id_map_1
 
     leftover_units = units[units["山ID"].astype(int).isin(leftover_ids)]
-    id_map_2 = _match_units_with_layer_rules_single_pass(leftover_units, height_cap)
+    id_map_2 = _match_units_with_layer_rules_single_pass(leftover_units, height_cap, require_aisle_match=False)
 
     assert not (set(id_map_1.keys()) & set(id_map_2.keys())), (
         "2周目のid_mapが1周目とキー重複しています（想定外）"
@@ -559,6 +605,9 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
     size1_df["入車時間"] = size1_df["入車時間"].astype(str).str.strip()
     if "_truck_key" not in size1_df.columns:
         size1_df = _add_truck_key_column(size1_df)
+    size1_df = _add_aisle_column(size1_df)  # Issue #146: アイル(ストア先頭1文字)列を付与
+
+    # まずは便単位×納入先×層役割（1/21）で高さ積みしてローカル山を作る。
 
     # まずは便単位×納入先×層役割（1/21）で高さ積みしてローカル山を作る。
     # Issue #135 Step2: 「納入先」を追加（詳細は _size1_local_group_cols の docstring）
