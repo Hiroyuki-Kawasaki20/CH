@@ -196,8 +196,8 @@ def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.
     return units
 
 
-def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dict:
-    """層役割と既存条件で2山/3山混載を判定し、山IDの代表マップを返す。"""
+def _match_units_with_layer_rules_single_pass(units: pd.DataFrame, height_cap: float) -> dict:
+    """層役割と既存条件で2山/3山混載を判定し、山IDの代表マップを返す（1回きりのマッチング）。"""
     if units is None or units.empty:
         return {}
 
@@ -370,6 +370,32 @@ def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dic
             id_map[id3] = id1
 
     return id_map
+
+
+def _match_units_with_layer_rules(units: pd.DataFrame, height_cap: float) -> dict:
+    """1周目マッチング後、あまったユニットのみで2周目を試す薄いラッパー（Issue #135）。"""
+    id_map_1 = _match_units_with_layer_rules_single_pass(units, height_cap)
+
+    if units is None or units.empty:
+        return id_map_1
+
+    all_ids = set(units["山ID"].astype(int))
+    matched_ids = set(id_map_1.keys()) | set(id_map_1.values())
+    leftover_ids = all_ids - matched_ids
+
+    if len(leftover_ids) < 2:
+        return id_map_1
+
+    leftover_units = units[units["山ID"].astype(int).isin(leftover_ids)]
+    id_map_2 = _match_units_with_layer_rules_single_pass(leftover_units, height_cap)
+
+    assert not (set(id_map_1.keys()) & set(id_map_2.keys())), (
+        "2周目のid_mapが1周目とキー重複しています（想定外）"
+    )
+    if id_map_2 and _trace_on():
+        logger.debug("TRACE#135 2周目マージ発生: %s", id_map_2)
+
+    return {**id_map_1, **id_map_2}
 
 
 # ===== メインパイプライン =====

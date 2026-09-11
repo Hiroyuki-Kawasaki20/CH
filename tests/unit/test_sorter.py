@@ -10,6 +10,7 @@ import pytest
 import pandas as pd
 import numpy as np
 
+from src.services import sorter as sorter_module
 from src.services.sorter import (
     assign_groups_sequential,
     build_all_mountain_details,
@@ -1305,6 +1306,46 @@ class TestSize1And21Stacking:
         id_map = _match_units_with_layer_rules(units, height_cap=2450)
 
         assert id_map.get(2) == 1
+
+
+class TestSecondPassMatching:
+    """Issue #135 Step3: 1周目のあまりを対象とした2周目マッチングのラッパー検証。"""
+
+    def test_second_pass_merges_units_left_over_by_first_pass(self, monkeypatch):
+        """1周目single_passのあまりID同士が、2周目のsingle_pass呼び出しでマージされる。"""
+        units = pd.DataFrame([
+            {"山ID": 1, "高さ合計": 1000, "NONYUHIBIN": "01", "納入先": "高岡", "_has_size1": False, "_has_size21": False},
+            {"山ID": 2, "高さ合計": 900, "NONYUHIBIN": "02", "納入先": "高岡", "_has_size1": False, "_has_size21": False},
+            {"山ID": 3, "高さ合計": 500, "NONYUHIBIN": "03", "納入先": "高岡", "_has_size1": False, "_has_size21": False},
+            {"山ID": 4, "高さ合計": 400, "NONYUHIBIN": "04", "納入先": "高岡", "_has_size1": False, "_has_size21": False},
+        ])
+
+        calls = []
+
+        def fake_single_pass(units_arg, height_cap_arg):
+            calls.append(set(units_arg["山ID"]))
+            if len(calls) == 1:
+                return {2: 1}  # 1周目: 山3・山4はあまり
+            return {4: 3}  # 2周目: あまり同士がマージ
+
+        monkeypatch.setattr(sorter_module, "_match_units_with_layer_rules_single_pass", fake_single_pass)
+
+        id_map = _match_units_with_layer_rules(units, height_cap=2450)
+
+        assert id_map == {2: 1, 4: 3}
+        assert len(calls) == 2
+        assert calls[1] == {3, 4}
+
+    def test_second_pass_keeps_leftover_units_separate_when_forbidden(self):
+        """同一納入先×別トラック禁止に該当するあまり同士は、2周目でもマージされず単独のまま。"""
+        units = pd.DataFrame([
+            {"山ID": 1, "高さ合計": 500, "NONYUHIBIN": "01", "納入先": "高岡", "入車時間": "08:00", "_has_size1": False, "_has_size21": False},
+            {"山ID": 2, "高さ合計": 400, "NONYUHIBIN": "02", "納入先": "高岡", "入車時間": "09:00", "_has_size1": False, "_has_size21": False},
+        ])
+
+        id_map = _match_units_with_layer_rules(units, height_cap=2450)
+
+        assert id_map == {}
 
 
 
