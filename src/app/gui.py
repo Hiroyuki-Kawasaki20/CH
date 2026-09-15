@@ -37,7 +37,6 @@ from src.models.constants import (
 from src.services.data_loader import (
     load_data, DataManager,
     get_master_path, load_pickup_time_master_xlsx, save_pickup_time_master_xlsx,
-    MasterFileLockedError, MasterFileReadError,
     _resolve_shipments_path,
     parse_ukeire_ch_excel, load_config, save_config, get_export_dir,
     set_flag_value_to_checkbox_mark, checkbox_mark_to_set_flag_value,
@@ -74,7 +73,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-09-05 afb922d 束ねキー修正+警告化"
+APP_VERSION = "2026-09-16 <commit-hash> 織機3分割+マスタ保存時自動整列"
 
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
@@ -2128,8 +2127,6 @@ class App(ctk.CTk):
             self.master_data = load_pickup_time_master_xlsx(master_path)
             self.refresh_master_tree()
             self.refresh_routes()
-        except (MasterFileLockedError, MasterFileReadError) as e:
-            messagebox.showwarning("入車時間マスタ読込", str(e))
         except Exception as e:
             print(f"入車時間マスタ読込エラー: {e}")
 

@@ -764,7 +764,15 @@ def save_pickup_time_master_xlsx(df: pd.DataFrame, master_path: Path):
         if col not in df_save.columns:
             df_save[col] = ""
     df_save = df_save[expected_cols]
-
+    # 保存時にOData_納入先→NONYUHIBIN順で自動整列する（parse_haisha_excel等の
+    # 自動抽出経路と同じ並び替えロジックを保存経路にも適用。GUI上の並びが
+    # ばらついても、保存すれば常に整った順序でExcelに書き出される）。
+    df_save["_sort_bin"] = pd.to_numeric(df_save["NONYUHIBIN"], errors="coerce").fillna(0)
+    df_save = (
+        df_save.sort_values(["OData_納入先", "_sort_bin"])
+        .drop(columns=["_sort_bin"])
+        .reset_index(drop=True)
+    )
     master_path = Path(master_path)
     try:
         parent_ok = master_path.parent.is_dir()
