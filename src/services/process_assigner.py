@@ -510,9 +510,12 @@ def _schedule_edf_lane_rows(lane_rows: List[dict], lane_floor: int) -> List[dict
     result = []
     lane_end = int(lane_floor or 0)
     real_count = 0
+    break_times = _breaks_for_proc(lane_label)
     for row in lane_rows:
         inspection_delay = 180 if real_count >= 2 and real_count % 2 == 0 else 0
         candidate = max(lane_end + inspection_delay, int(row.get("start_floor_secs", 0) or 0))
+        start = _adjust_start_for_breaks(candidate, int(row["work_secs"]), break_times=break_times)  # ← 追加
+        end = _calc_work_end_with_breaks(start, int(row["work_secs"]), break_times=break_times)  # ← 追加
         start = _adjust_start_for_breaks(candidate, int(row["work_secs"]))
         end = _calc_work_end_with_breaks(start, int(row["work_secs"]))
         scheduled = dict(row)
@@ -1996,18 +1999,6 @@ def _legacy_assign_processes_by_arrival_time(
         return late_count, late_seconds, finish_secs, len(used_lanes)
 
     def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int]:
-        """既存解とEDF解の比較用スコア（タプル比較、小さいほど良い）。
-
-        Issue #124 A案(2026-09-16): 従来は (late_count, relief_overflow_count,
-        finish_secs) の順で比較しており、締切超過0件同士では「メイン以外に
-        入った山の数」が最終完了時刻より優先されていた。これにより、17山
-        ケースで最終完了時刻が1時間20分以上早いEDF候補(relief_overflow=9,
-        finish=12:16)より、リリーフ山数が少ないだけの既存探索解
-        (relief_overflow=3, finish=13:36)が誤って選ばれ、絶対基準(締切)を
-        超過する結果を採用してしまっていた。締切超過0件同士では最終完了
-        時刻(finish_secs)を優先し、リリーフ/あふれ山数(relief_overflow_count)
-        はタイブレークに留める。
-        """
         late_count = 0
         relief_overflow_count = 0
         finish_secs = 0
@@ -2019,19 +2010,22 @@ def _legacy_assign_processes_by_arrival_time(
                 continue
             if str(row.get("山工程", "")) != PROC_MAIN:
                 relief_overflow_count += 1
-            start = _time_to_seconds(row.get("実開始時間", ""))
-            if start is None:
-                continue
-            end = _calc_work_end_with_breaks(
-                start,
-                int(mtn_work_map.get(yama_no, 0)),
-                break_times=_breaks_for_proc(row.get("山工程")),
-            )
+            # 実際の終了時刻を優先して使う(再計算しない)。無ければフォールバックで再計算。
+            end = row.get("_end_secs")
+            if end is None:
+                start = _time_to_seconds(row.get("実開始時間", ""))
+                if start is None:
+                    continue
+                end = _calc_work_end_with_breaks(
+                    start, int(mtn_work_map.get(yama_no, 0)),
+                    break_times=_breaks_for_proc(row.get("山工程")),
+                )
             finish_secs = max(finish_secs, int(end))
             deadline = mtn_deadline_map.get(yama_no)
             if deadline is not None:
-                deadline_eval = _deadline_for_eval(deadline, start)
-                if deadline_eval is not None and end > int(deadline_eval):
+                start_for_eval = row.get("_end_secs") and _time_to_seconds(row.get("実開始時間", ""))
+                deadline_eval = _deadline_for_eval(deadline, start_for_eval)
+                if deadline_eval is not None and int(end) > int(deadline_eval):
                     late_count += 1
         return late_count, finish_secs, relief_overflow_count
 
@@ -2781,6 +2775,7 @@ def _legacy_assign_processes_by_arrival_time(
         edf_baseline_score = _final_score_rows(edf_result_clean)
         if cleaned_score > edf_baseline_score:
             selected_rows[:] = edf_result_clean
+            _serialize_lanes_final(selected_rows)
             _logger.info("EDF品質保護: cleanup後(%s) > EDF基準(%s) → 復帰", cleaned_score, edf_baseline_score)
 
     for r in selected_rows:
