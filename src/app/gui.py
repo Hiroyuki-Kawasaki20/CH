@@ -52,7 +52,8 @@ from src.services.process_assigner import (
     compute_proc_summary,
     _time_to_seconds, _seconds_to_hhmm, _to_operational_timeline_secs,
     _calc_work_end_with_breaks, ARRIVAL_BUFFER_SECS,
-)
+    PICKUP_DEADLINE_BUFFER_SECS,   # ← 締切は20分。ARRIVAL_BUFFER_SECS(10分)は前便入車+10分の「床」用で別物
+ )
 from src.services.scheduler import (
     cluster_by_store,
     _mountain_context,
@@ -1574,7 +1575,7 @@ class App(ctk.CTk):
         return pd.concat([out, virtual_df], axis=0, ignore_index=True)
 
     def _collect_late_relief_warnings(self, master_df: pd.DataFrame):
-        """リリーフに割り振っても締切(入車10分前)を超過する山を抽出する。"""
+        """リリーフに割り振っても締切(入車20分前)を超過する山を抽出する。"""
         warnings = []
         if self.proc_details is None or self.proc_details.empty:
             return warnings
@@ -1634,7 +1635,7 @@ class App(ctk.CTk):
                 pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup)) if pickup else None
                 if pickup_secs is None:
                     continue
-                deadline_candidates.append(max(0, int(pickup_secs) - ARRIVAL_BUFFER_SECS))
+                deadline_candidates.append(max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS))
 
             if not deadline_candidates:
                 continue
@@ -1675,7 +1676,7 @@ class App(ctk.CTk):
         if not overflow_yamas:
             return
         lines = [
-            "全割当パターンを探索しても締切(入車10分前)に間に合わない山があります。",
+            "全割当パターンを探索しても締切(入車20分前)に間に合わない山があります。",
             f"対象山数: {len(overflow_yamas)}山（人工追加が必要）",
             "",
         ]
