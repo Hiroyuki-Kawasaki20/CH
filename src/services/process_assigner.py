@@ -1996,7 +1996,6 @@ def _legacy_assign_processes_by_arrival_time(
         return late_count, late_seconds, finish_secs, len(used_lanes)
 
     def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int]:
-    def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int]:
         """既存解とEDF解の比較用スコア（タプル比較、小さいほど良い）。
 
         Issue #124 A案(2026-09-16): 従来は (late_count, relief_overflow_count,
