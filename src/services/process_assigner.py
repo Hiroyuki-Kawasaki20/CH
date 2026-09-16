@@ -1859,12 +1859,13 @@ def _legacy_assign_processes_by_arrival_time(
             new_proc = yama_to_proc.get(yno, PROC_MAIN)
             if r.get("山工程") != new_proc:
                 _reset_row_after_lane_change(r, new_proc)
-        # Issue #123: 初回貪欲パス由来の_is_anchoredは「その時の山順序でしか
-        # 成立しない実時刻の凍結」。探索の各候補ではメイン内訳が変わるため、
-        # 床(#93・前便入車+10分)は尊重したまま実時刻を再計算しないと、
-        # 本来間に合う組合せを探索が見逃す。ここで解除して再導出させる。
-        for r in trial:
-            r["_is_anchored"] = False                
+        # Issue #123 検証結果(2026-09-16): 全trialで_is_anchoredを一律解除すると、
+        # 探索の再スケジュール(_schedule_proc_rows)は簡易な締切順チェインへ
+        # フォールバックし、元の貪欲アルゴリズム(_pick_next_main_mountain)が持つ
+        # 「前倒しで他山を新たに遅延させない」等の安全策が失われる。実データ
+        # (tests/test_issue_edf_integration.py)で締切超過が大幅に悪化したため、
+        # 本対応は撤回し、_reset_row_after_lane_changeによる変更山のみの
+        # 解除(既存動作)に戻す。
         _reschedule_rows(trial)
         return trial
 
