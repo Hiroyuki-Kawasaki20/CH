@@ -1996,6 +1996,19 @@ def _legacy_assign_processes_by_arrival_time(
         return late_count, late_seconds, finish_secs, len(used_lanes)
 
     def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int]:
+    def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int]:
+        """既存解とEDF解の比較用スコア（タプル比較、小さいほど良い）。
+
+        Issue #124 A案(2026-09-16): 従来は (late_count, relief_overflow_count,
+        finish_secs) の順で比較しており、締切超過0件同士では「メイン以外に
+        入った山の数」が最終完了時刻より優先されていた。これにより、17山
+        ケースで最終完了時刻が1時間20分以上早いEDF候補(relief_overflow=9,
+        finish=12:16)より、リリーフ山数が少ないだけの既存探索解
+        (relief_overflow=3, finish=13:36)が誤って選ばれ、絶対基準(締切)を
+        超過する結果を採用してしまっていた。締切超過0件同士では最終完了
+        時刻(finish_secs)を優先し、リリーフ/あふれ山数(relief_overflow_count)
+        はタイブレークに留める。
+        """
         late_count = 0
         relief_overflow_count = 0
         finish_secs = 0
@@ -2021,7 +2034,7 @@ def _legacy_assign_processes_by_arrival_time(
                 deadline_eval = _deadline_for_eval(deadline, start)
                 if deadline_eval is not None and end > int(deadline_eval):
                     late_count += 1
-        return late_count, relief_overflow_count, finish_secs
+        return late_count, finish_secs, relief_overflow_count
 
     def _edf_candidate_to_rows(candidate_rows: List[dict]) -> List[dict]:
         out_rows: List[dict] = []
