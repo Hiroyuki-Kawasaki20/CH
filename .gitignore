@@ -39,3 +39,7 @@ _export_archive/
 
 # Excel のロックファイル
 ~$*
+
+scripts/tmp/
+_pool_*
+trace135_*
