@@ -505,8 +505,17 @@ def _edf_schedule_score(schedule: dict) -> Tuple[int, int, int, int]:
     return len(late_rows), late_seconds, used_lanes, finish_secs
 
 
-def _schedule_edf_lane_rows(lane_rows: List[dict], lane_floor: int) -> List[dict]:
-    """1レーン分を休憩・照合込みで再計算する。"""
+def _schedule_edf_lane_rows(
+    lane_rows: List[dict],
+    lane_floor: int,
+    lane_label: str = PROC_MAIN,
+) -> List[dict]:
+    """1レーン分を休憩・照合込みで再計算する。
+
+    lane_label: このレーンの工程(メイン/リリーフ/あふれ)。
+    Issue #119のリリーフ短縮休憩を正しく適用するために必須。
+    既定値PROC_MAINは呼び出し元未対応箇所との互換のため。
+    """
     result = []
     lane_end = int(lane_floor or 0)
     real_count = 0
@@ -514,10 +523,8 @@ def _schedule_edf_lane_rows(lane_rows: List[dict], lane_floor: int) -> List[dict
     for row in lane_rows:
         inspection_delay = 180 if real_count >= 2 and real_count % 2 == 0 else 0
         candidate = max(lane_end + inspection_delay, int(row.get("start_floor_secs", 0) or 0))
-        start = _adjust_start_for_breaks(candidate, int(row["work_secs"]), break_times=break_times)  # ← 追加
-        end = _calc_work_end_with_breaks(start, int(row["work_secs"]), break_times=break_times)  # ← 追加
-        start = _adjust_start_for_breaks(candidate, int(row["work_secs"]))
-        end = _calc_work_end_with_breaks(start, int(row["work_secs"]))
+        start = _adjust_start_for_breaks(candidate, int(row["work_secs"]), break_times=break_times)
+        end = _calc_work_end_with_breaks(start, int(row["work_secs"]), break_times=break_times)
         scheduled = dict(row)
         scheduled.update({"start_secs": int(start), "end_secs": int(end), "inspection_delay": int(inspection_delay)})
         result.append(scheduled)
@@ -552,7 +559,7 @@ def _swap_repair_break_boundary(
                     trial_lanes = copy.deepcopy(repaired["lanes"])
                     trial_rows = trial_lanes[lane]
                     trial_rows[first_idx], trial_rows[second_idx] = trial_rows[second_idx], trial_rows[first_idx]
-                    trial_lanes[lane] = _schedule_edf_lane_rows(trial_rows, int(repaired["lane_floors"].get(lane, 0)))
+                    trial_lanes[lane] = _schedule_edf_lane_rows(trial_rows, int(repaired["lane_floors"].get(lane, 0)), lane_label=lane)
                     trial = dict(repaired)
                     trial["lanes"] = trial_lanes
                     trial["rows"] = [row for rows in trial_lanes.values() for row in rows]
@@ -596,6 +603,7 @@ def _swap_repair_break_boundary(
                                 trial_lanes[candidate_lane] = _schedule_edf_lane_rows(
                                     trial_lanes[candidate_lane],
                                     int(repaired["lane_floors"].get(candidate_lane, 0)),
+                                    lane_label=candidate_lane,
                                 )
                             trial = dict(repaired)
                             trial["lanes"] = trial_lanes
@@ -662,7 +670,7 @@ def _edf_list_schedule(
                     item
                     for candidate_lane in enabled_lanes
                     for item in _schedule_edf_lane_rows(
-                        trial[candidate_lane], int(lane_floors.get(candidate_lane, 0) or 0)
+                        trial[candidate_lane], int(lane_floors.get(candidate_lane, 0) or 0), lane_label=candidate_lane
                     )
                 ]
                 late_count = sum(
@@ -701,7 +709,7 @@ def _edf_list_schedule(
                     item
                     for candidate_lane in enabled_lanes
                     for item in _schedule_edf_lane_rows(
-                        trial[candidate_lane], int(lane_floors.get(candidate_lane, 0) or 0)
+                        trial[candidate_lane], int(lane_floors.get(candidate_lane, 0) or 0), lane_label=candidate_lane
                     )
                 ]
                 finish_secs = max((int(item["end_secs"]) for item in scheduled_rows), default=0)
@@ -714,13 +722,13 @@ def _edf_list_schedule(
             "rows": [
                 item
                 for lane in enabled_lanes
-                for item in _schedule_edf_lane_rows(state[lane], int(lane_floors.get(lane, 0) or 0))
+                for item in _schedule_edf_lane_rows(state[lane], int(lane_floors.get(lane, 0) or 0), lane_label=lane)
             ],
             "used_lanes": [lane for lane in enabled_lanes if state[lane]],
         }),
     )
     for lane in lanes:
-        lanes[lane] = _schedule_edf_lane_rows(lanes[lane], int(lane_floors.get(lane, 0)))
+        lanes[lane] = _schedule_edf_lane_rows(lanes[lane], int(lane_floors.get(lane, 0)), lane_label=lane)
     rows = [row for lane_rows in lanes.values() for row in lane_rows]
     for lane, lane_rows in lanes.items():
         for row in lane_rows:
