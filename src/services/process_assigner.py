@@ -29,7 +29,7 @@ from ..models.constants import (
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
-
+from ..utils.master_map import build_master_map_with_duplicate_warning, resolve_with_ukeire_fallback
 
 # 各直の開始時刻（秒）: 1直=06:25, 2直=16:40
 SHIFT_START_SECS = [6 * 3600 + 25 * 60, 16 * 3600 + 40 * 60]
@@ -859,7 +859,9 @@ def _legacy_assign_processes_by_arrival_time(
     master["OData_納入先"] = master["OData_納入先"].astype(str).str.strip().apply(_normalize_dest_name)
     master["NONYUHIBIN"] = master["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
     master["入車時間"] = master["入車時間"].astype(str).str.strip()
-    master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in master.iterrows()}
+    master_map = build_master_map_with_duplicate_warning(
+        master.to_dict("records"), ("OData_納入先", "NONYUHIBIN"), "入車時間", _logger
+    )
     has_set_flag_col = "セットありフラグ" in master.columns
     set_flag_map = {
         (r["OData_納入先"], r["NONYUHIBIN"]): _is_truthy_flag(r.get("セットありフラグ", ""))
@@ -959,6 +961,12 @@ def _legacy_assign_processes_by_arrival_time(
             nony = str(row.get("NONYUHIBIN", "")).strip().translate(_ZEN2HAN_DIGIT_COLON)
             order2 = nony[-2:] if len(nony) >= 2 else ""
             if not vendor or not order2:
+                _logger.warning(
+                    "山%s: 納入先または便番号が空のため明細を除外します 納入先=%r NONYUHIBIN=%r",
+                    yama_int,
+                    _dest_raw,
+                    str(row.get("NONYUHIBIN", "")),
+                )
                 continue
             # Issue #57: 日野オーダーの便番号（末尾2桁）を収集
             if _is_hino_2lane_target(vendor):
@@ -969,9 +977,29 @@ def _legacy_assign_processes_by_arrival_time(
                 lookup_vendor = f"{vendor}-{_ukeire}" if _ukeire else vendor
             else:
                 lookup_vendor = vendor
-            pickup = master_map.get((lookup_vendor, order2), "")
+            pickup, resolved_vendor = resolve_with_ukeire_fallback(
+                master_map,
+                vendor,
+                lookup_vendor,
+                order2,
+                logger=_logger,
+                label=f"入車時間マスタ(山{yama_int})",
+            )
+            if resolved_vendor is not None:
+                # 前便照合(997/1044/1076/1103/1131)とセットフラグ照合も
+                # 実際にヒットしたキーで引く必要があるため差し替える。
+                lookup_vendor = resolved_vendor
             pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup)) if pickup else None
             if pickup_secs is None:
+                _logger.warning(
+                    "山%s: 入車時間が引けないため明細を除外します 納入先=%s UKEIRE=%s 便=%s 照合キー=%s"
+                    " → この山の締切・開始下限が未確定になります",
+                    yama_int,
+                    vendor,
+                    str(row.get("UKEIRE", "")).strip(),
+                    order2,
+                    (lookup_vendor, order2),
+                )
                 continue
             set_flag = bool(set_flag_map.get((lookup_vendor, order2), False))
             shift_idx = _shift_index_for_secs(pickup_secs)
@@ -1169,6 +1197,12 @@ def _legacy_assign_processes_by_arrival_time(
             "日野便番号セット": hino_bins_for_mountain,  # Issue #57
         })
         mtn_prev_arrival_floor_map[yama_int] = int(prev_arrival_floor_secs or 0)
+        if deadline_secs is None:
+            _logger.warning(
+                "山%s: 締切が確定しませんでした（全明細がマスタ未照合）。"
+                "この山は締切超過判定・EDF並べ替えの対象外になります",
+                yama_int,
+            )
 
     if not mountain_info:
         return pd.DataFrame(columns=["山通番", "山工程", "実開始時間", "照合追加180秒"])
@@ -2785,7 +2819,7 @@ def _legacy_assign_processes_by_arrival_time(
             selected_rows[:] = edf_result_clean
             _serialize_lanes_final(selected_rows)
             _logger.info("EDF品質保護: cleanup後(%s) > EDF基準(%s) → 復帰", cleaned_score, edf_baseline_score)
-
+            _logger.info("EDF品質保護: 復帰後の再検証スコア=%s", _final_score_rows(selected_rows))
     for r in selected_rows:
         r.pop("_is_anchored", None)
     lane_end_times = {PROC_MAIN: 0, PROC_RELIEF: 0, PROC_OVERFLOW: 0}
