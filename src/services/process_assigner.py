@@ -2778,6 +2778,76 @@ def _legacy_assign_processes_by_arrival_time(
             )
             if before == after:
                 break
+    def _demote_main_deadline_violations(
+        target_rows: List[dict],
+        max_rounds: int = 5,
+    ) -> List[int]:
+        """【最終ガード】メイン工程に締切超過を残さない（2026-09-19 Kawasaki氏要件）。
+
+        判定は _serialize_lanes_final が書き込む「締切超過」列を直接参照する。
+        画面・出力に出る列と完全に同一基準のため、表示上メインに超過が残らない。
+
+        背景: _enforce_main_deadline_strict は探索フェーズ内でのみ動作し、
+        その後段（_serialize_lanes_final の後ろ倒し / EDF候補の採用 /
+        _post_serialize_front_pack のメイン昇格）で生じたメイン超過は
+        格下げされずに出力されていた。
+
+        メイン側の時刻は動かさない（超過ゼロで確定している配置を壊さないため）。
+        落とした山はリリーフへ、リリーフでも間に合わなければ
+        _reapply_overflow_for_relief により あふれ へ回る。
+        """
+        demoted_all: List[int] = []
+        for _ in range(int(max_rounds)):
+            late_main = sorted({
+                int(rr["山通番"])
+                for rr in target_rows
+                if str(rr.get("山工程", "")) == PROC_MAIN and bool(rr.get("締切超過"))
+            })
+            if not late_main:
+                break
+
+            late_set = set(late_main)
+            for rr in target_rows:
+                if int(rr["山通番"]) in late_set and str(rr.get("山工程", "")) == PROC_MAIN:
+                    _reset_row_after_lane_change(rr, PROC_RELIEF)
+                    rr.pop("_end_secs", None)
+                    rr["締切超過"] = False
+
+            _schedule_proc_rows(
+                [rr for rr in target_rows if rr.get("山工程") == PROC_RELIEF],
+                PROC_RELIEF,
+                prefer_deadline_order=True,
+            )
+            _reapply_overflow_for_relief(target_rows)
+
+            # 2026-09-19 追記: 格下げの再配置(prefer_deadline_order)で既存のリリーフ山が
+            # 後ろへ追いやられ、新たにあふれ化することがある。本ガードはパイプラインの
+            # 最後に位置するため、既存の救済策(①あふれ→リリーフ復帰 / ②空き窓前詰め)を
+            # 呼び直さないと、新規あふれだけが救済されずに確定してしまう。
+            # (実例: 山2が締切まで2時間超の余裕を残したまま不要にあふれ化した)
+            while _try_repromote_overflow_to_relief(target_rows):
+                pass
+            _post_serialize_front_pack(target_rows)
+
+            _serialize_lanes_final(target_rows)
+
+            demoted_all.extend(late_main)
+            _logger.warning(
+                "最終ガード: メイン工程の締切超過山をリリーフへ格下げしました yamas=%s",
+                late_main,
+            )
+
+        still_late = sorted(
+            int(rr["山通番"])
+            for rr in target_rows
+            if str(rr.get("山工程", "")) == PROC_MAIN and bool(rr.get("締切超過"))
+        )
+        if still_late:
+            _logger.error(
+                "最終ガード: %d周でもメイン工程の締切超過が解消しませんでした yamas=%s",
+                int(max_rounds), still_late,
+            )
+        return demoted_all
 
     for _ in range(3):
         _finalize_inspection_delay_flags(results)
@@ -2820,6 +2890,10 @@ def _legacy_assign_processes_by_arrival_time(
             _serialize_lanes_final(selected_rows)
             _logger.info("EDF品質保護: cleanup後(%s) > EDF基準(%s) → 復帰", cleaned_score, edf_baseline_score)
             _logger.info("EDF品質保護: 復帰後の再検証スコア=%s", _final_score_rows(selected_rows))
+    # 【最終ガード】メイン工程に締切超過を残さない（2026-09-19 Kawasaki氏要件）。
+    # EDF採用・cleanup・前詰め昇格の"すべての後"に置くことが必須。
+    _demote_main_deadline_violations(selected_rows)
+
     for r in selected_rows:
         r.pop("_is_anchored", None)
     lane_end_times = {PROC_MAIN: 0, PROC_RELIEF: 0, PROC_OVERFLOW: 0}
