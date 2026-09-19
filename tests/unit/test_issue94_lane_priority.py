@@ -90,8 +90,21 @@ def test_overflow_rows_are_only_rows_that_miss_deadline_on_relief():
             ],
             int(case["lane_floors"][PROC_RELIEF]),
         )
+        # 2026-09-19: 返却キーの有無を先に切り分ける（KeyError: 'yama_no' の発生源特定用）。
+        _trial_keys = sorted({k for item in trial_rows for k in item.keys()})
+        assert all("yama_no" in item for item in trial_rows), (
+            f"_schedule_edf_lane_rows の返却に yama_no が含まれていません: keys={_trial_keys}"
+        )
+
         relief_trial = next(item for item in trial_rows if item["yama_no"] == int(row["山通番"]))
         assert mountain["deadline_secs"] is not None
+
+        # 2026-09-19 バグ修正: row は DataFrame の行なので列名は「山通番」。
+        #   旧コード row['yama_no'] は必ず KeyError になり、assert 失敗時に
+        #   本来のメッセージが読めなくなっていた（あふれ0件の間は未踏だったため露見せず）。
         assert relief_trial["end_secs"] > int(mountain["deadline_secs"]), (
-            f"山{row['yama_no']} はリリーフで締切内に収まるため、あふれにできない"
+            f"山{int(row['山通番'])} はリリーフで締切内に収まるため、あふれにできない / "
+            f"trial_end={relief_trial['end_secs']} deadline={int(mountain['deadline_secs'])} "
+            f"差={int(mountain['deadline_secs']) - relief_trial['end_secs']}秒 / "
+            f"リリーフ同乗={[r['yama_no'] for r in relief_rows]}"
         )
