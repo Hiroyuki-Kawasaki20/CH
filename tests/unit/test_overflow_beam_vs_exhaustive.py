@@ -18,8 +18,13 @@ def _load_input_files() -> Tuple[pd.DataFrame, pd.DataFrame]:
     spo_path = root / "SPOアップロード用.xlsx"
     master_path = root / "入車時間マスタ.xlsx"
 
-    assert spo_path.exists(), f"SPO file not found: {spo_path}"
-    assert master_path.exists(), f"Master file not found: {master_path}"
+    if not spo_path.exists() or not master_path.exists():
+        import pytest  # 環境依存のためローカル import
+        pytest.skip(
+            "実データ(SPOアップロード用.xlsx / 入車時間マスタ.xlsx)がリポジトリ直下に"
+            f"存在しないためスキップします。spo={spo_path.exists()} master={master_path.exists()} / "
+            "両ファイルは .gitignore 対象（Git管理外）であり、欠損はテスト失敗ではなく環境未整備として扱う。"
+        )
 
     spo_df = pd.read_excel(spo_path, engine="openpyxl")
     master_df = pd.read_excel(master_path, engine="openpyxl")

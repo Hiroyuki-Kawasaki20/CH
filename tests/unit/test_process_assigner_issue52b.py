@@ -355,8 +355,24 @@ def test_issue52b_synthetic_deadline_overflow_flag_true_false_is_consistent():
             f"start={start_secs}, end={end_secs}, deadline={deadline_secs}"
         )
 
-    assert any(actual_flags), f"締切超過=True が存在しません: {actual_flags}"
-    assert any(not x for x in actual_flags), f"締切超過=False が存在しません: {actual_flags}"
+    # 2026-09-19 要件変更（メイン工程に締切超過を残さない / 最終ガード導入）:
+    #   旧: any(actual_flags)     … メイン側に True が存在することを要求していた（Issue #52 当時の仕様）
+    #   新: メイン側は必ず全て False。超過山はリリーフ/あふれへ格下げされる。
+    # 各行の flag が手計算と一致すること（上の assert）は引き続き検証対象。
+    assert not any(actual_flags), (
+        f"メイン工程に締切超過が残っています: {actual_flags} / "
+        f"山={[int(rr['山通番']) for rr in lane_rows]}"
+    )
+
+    # 格下げが実際に起きたこと（＝ガードが素通りしていないこと）を確認する。
+    non_main = result[result["山工程"] != PROC_MAIN].drop_duplicates("山通番")
+    assert not non_main.empty, (
+        "締切に間に合わない山が存在するはずだが、メイン工程以外の行が1つも無い"
+    )
+    print(
+        "[新仕様] メイン超過=0件 / メイン外へ格下げ="
+        + str({int(r["山通番"]): str(r["山工程"]) for _, r in non_main.iterrows()})
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
