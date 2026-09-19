@@ -29,7 +29,7 @@ from ..models.constants import (
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
-
+from ..utils.master_map import build_master_map_with_duplicate_warning, resolve_with_ukeire_fallback
 
 # 各直の開始時刻（秒）: 1直=06:25, 2直=16:40
 SHIFT_START_SECS = [6 * 3600 + 25 * 60, 16 * 3600 + 40 * 60]
@@ -505,16 +505,26 @@ def _edf_schedule_score(schedule: dict) -> Tuple[int, int, int, int]:
     return len(late_rows), late_seconds, used_lanes, finish_secs
 
 
-def _schedule_edf_lane_rows(lane_rows: List[dict], lane_floor: int) -> List[dict]:
-    """1レーン分を休憩・照合込みで再計算する。"""
+def _schedule_edf_lane_rows(
+    lane_rows: List[dict],
+    lane_floor: int,
+    lane_label: str = PROC_MAIN,
+) -> List[dict]:
+    """1レーン分を休憩・照合込みで再計算する。
+
+    lane_label: このレーンの工程(メイン/リリーフ/あふれ)。
+    Issue #119のリリーフ短縮休憩を正しく適用するために必須。
+    既定値PROC_MAINは呼び出し元未対応箇所との互換のため。
+    """
     result = []
     lane_end = int(lane_floor or 0)
     real_count = 0
+    break_times = _breaks_for_proc(lane_label)
     for row in lane_rows:
         inspection_delay = 180 if real_count >= 2 and real_count % 2 == 0 else 0
         candidate = max(lane_end + inspection_delay, int(row.get("start_floor_secs", 0) or 0))
-        start = _adjust_start_for_breaks(candidate, int(row["work_secs"]))
-        end = _calc_work_end_with_breaks(start, int(row["work_secs"]))
+        start = _adjust_start_for_breaks(candidate, int(row["work_secs"]), break_times=break_times)
+        end = _calc_work_end_with_breaks(start, int(row["work_secs"]), break_times=break_times)
         scheduled = dict(row)
         scheduled.update({"start_secs": int(start), "end_secs": int(end), "inspection_delay": int(inspection_delay)})
         result.append(scheduled)
@@ -549,7 +559,7 @@ def _swap_repair_break_boundary(
                     trial_lanes = copy.deepcopy(repaired["lanes"])
                     trial_rows = trial_lanes[lane]
                     trial_rows[first_idx], trial_rows[second_idx] = trial_rows[second_idx], trial_rows[first_idx]
-                    trial_lanes[lane] = _schedule_edf_lane_rows(trial_rows, int(repaired["lane_floors"].get(lane, 0)))
+                    trial_lanes[lane] = _schedule_edf_lane_rows(trial_rows, int(repaired["lane_floors"].get(lane, 0)), lane_label=lane)
                     trial = dict(repaired)
                     trial["lanes"] = trial_lanes
                     trial["rows"] = [row for rows in trial_lanes.values() for row in rows]
@@ -593,6 +603,7 @@ def _swap_repair_break_boundary(
                                 trial_lanes[candidate_lane] = _schedule_edf_lane_rows(
                                     trial_lanes[candidate_lane],
                                     int(repaired["lane_floors"].get(candidate_lane, 0)),
+                                    lane_label=candidate_lane,
                                 )
                             trial = dict(repaired)
                             trial["lanes"] = trial_lanes
@@ -659,7 +670,7 @@ def _edf_list_schedule(
                     item
                     for candidate_lane in enabled_lanes
                     for item in _schedule_edf_lane_rows(
-                        trial[candidate_lane], int(lane_floors.get(candidate_lane, 0) or 0)
+                        trial[candidate_lane], int(lane_floors.get(candidate_lane, 0) or 0), lane_label=candidate_lane
                     )
                 ]
                 late_count = sum(
@@ -698,7 +709,7 @@ def _edf_list_schedule(
                     item
                     for candidate_lane in enabled_lanes
                     for item in _schedule_edf_lane_rows(
-                        trial[candidate_lane], int(lane_floors.get(candidate_lane, 0) or 0)
+                        trial[candidate_lane], int(lane_floors.get(candidate_lane, 0) or 0), lane_label=candidate_lane
                     )
                 ]
                 finish_secs = max((int(item["end_secs"]) for item in scheduled_rows), default=0)
@@ -711,13 +722,13 @@ def _edf_list_schedule(
             "rows": [
                 item
                 for lane in enabled_lanes
-                for item in _schedule_edf_lane_rows(state[lane], int(lane_floors.get(lane, 0) or 0))
+                for item in _schedule_edf_lane_rows(state[lane], int(lane_floors.get(lane, 0) or 0), lane_label=lane)
             ],
             "used_lanes": [lane for lane in enabled_lanes if state[lane]],
         }),
     )
     for lane in lanes:
-        lanes[lane] = _schedule_edf_lane_rows(lanes[lane], int(lane_floors.get(lane, 0)))
+        lanes[lane] = _schedule_edf_lane_rows(lanes[lane], int(lane_floors.get(lane, 0)), lane_label=lane)
     rows = [row for lane_rows in lanes.values() for row in lane_rows]
     for lane, lane_rows in lanes.items():
         for row in lane_rows:
@@ -848,7 +859,9 @@ def _legacy_assign_processes_by_arrival_time(
     master["OData_納入先"] = master["OData_納入先"].astype(str).str.strip().apply(_normalize_dest_name)
     master["NONYUHIBIN"] = master["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
     master["入車時間"] = master["入車時間"].astype(str).str.strip()
-    master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in master.iterrows()}
+    master_map = build_master_map_with_duplicate_warning(
+        master.to_dict("records"), ("OData_納入先", "NONYUHIBIN"), "入車時間", _logger
+    )
     has_set_flag_col = "セットありフラグ" in master.columns
     set_flag_map = {
         (r["OData_納入先"], r["NONYUHIBIN"]): _is_truthy_flag(r.get("セットありフラグ", ""))
@@ -948,6 +961,12 @@ def _legacy_assign_processes_by_arrival_time(
             nony = str(row.get("NONYUHIBIN", "")).strip().translate(_ZEN2HAN_DIGIT_COLON)
             order2 = nony[-2:] if len(nony) >= 2 else ""
             if not vendor or not order2:
+                _logger.warning(
+                    "山%s: 納入先または便番号が空のため明細を除外します 納入先=%r NONYUHIBIN=%r",
+                    yama_int,
+                    _dest_raw,
+                    str(row.get("NONYUHIBIN", "")),
+                )
                 continue
             # Issue #57: 日野オーダーの便番号（末尾2桁）を収集
             if _is_hino_2lane_target(vendor):
@@ -958,9 +977,29 @@ def _legacy_assign_processes_by_arrival_time(
                 lookup_vendor = f"{vendor}-{_ukeire}" if _ukeire else vendor
             else:
                 lookup_vendor = vendor
-            pickup = master_map.get((lookup_vendor, order2), "")
+            pickup, resolved_vendor = resolve_with_ukeire_fallback(
+                master_map,
+                vendor,
+                lookup_vendor,
+                order2,
+                logger=_logger,
+                label=f"入車時間マスタ(山{yama_int})",
+            )
+            if resolved_vendor is not None:
+                # 前便照合(997/1044/1076/1103/1131)とセットフラグ照合も
+                # 実際にヒットしたキーで引く必要があるため差し替える。
+                lookup_vendor = resolved_vendor
             pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup)) if pickup else None
             if pickup_secs is None:
+                _logger.warning(
+                    "山%s: 入車時間が引けないため明細を除外します 納入先=%s UKEIRE=%s 便=%s 照合キー=%s"
+                    " → この山の締切・開始下限が未確定になります",
+                    yama_int,
+                    vendor,
+                    str(row.get("UKEIRE", "")).strip(),
+                    order2,
+                    (lookup_vendor, order2),
+                )
                 continue
             set_flag = bool(set_flag_map.get((lookup_vendor, order2), False))
             shift_idx = _shift_index_for_secs(pickup_secs)
@@ -1158,6 +1197,12 @@ def _legacy_assign_processes_by_arrival_time(
             "日野便番号セット": hino_bins_for_mountain,  # Issue #57
         })
         mtn_prev_arrival_floor_map[yama_int] = int(prev_arrival_floor_secs or 0)
+        if deadline_secs is None:
+            _logger.warning(
+                "山%s: 締切が確定しませんでした（全明細がマスタ未照合）。"
+                "この山は締切超過判定・EDF並べ替えの対象外になります",
+                yama_int,
+            )
 
     if not mountain_info:
         return pd.DataFrame(columns=["山通番", "山工程", "実開始時間", "照合追加180秒"])
@@ -1713,6 +1758,97 @@ def _legacy_assign_processes_by_arrival_time(
         late_total, late_relief, late_main = _late_score(target_rows)
         relief_count = sum(1 for rr in target_rows if rr.get("山工程") == PROC_RELIEF)
         return (late_total, late_main, late_relief, relief_count)
+    
+    def _serialized_state_score(target_rows: List[dict]) -> Tuple[int, int, int, int]:
+        """探索の採点を、最終整列(_serialize_lanes_final)後の実際の締切超過で行う。
+
+        画面に出る「締切超過」列と同じ判定基準を使うことで、探索が選んだ
+        組合せが最終出力でも本当に超過ゼロであることを保証する(#124配線C)。
+        """
+        trial_rows = copy.deepcopy(target_rows)
+        _serialize_lanes_final(trial_rows)
+        late_main = sum(1 for rr in trial_rows if rr.get("山工程") == PROC_MAIN and rr.get("締切超過"))
+        late_relief = sum(1 for rr in trial_rows if rr.get("山工程") == PROC_RELIEF and rr.get("締切超過"))
+        late_total = sum(
+            1 for rr in trial_rows
+            if rr.get("締切超過") and str(rr.get("山工程")) in (PROC_MAIN, PROC_RELIEF)
+        )
+        relief_count = sum(1 for rr in trial_rows if rr.get("山工程") == PROC_RELIEF)
+        return (late_total, late_main, late_relief, relief_count)
+
+    def _serialize_lanes_final(target_rows: List[dict]):
+        # Issue #36: 出力直前の最終直列化。探索・前詰め試行(trial_rows評価)には
+        # 一切関与しない独立ステップ。山工程は不変とし、
+        # 同一レーン内で重複する山だけを運用タイムライン秒上で後ろ倒しして解消する。
+        def _op_start(rr: dict):
+            st = _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", ""))))
+            return (st is None, st if st is not None else float("inf"), int(rr.get("山通番", 0)))
+
+        lane_labels = []
+        for rr in target_rows:
+            label = rr.get("山工程")
+            if label not in lane_labels:
+                lane_labels.append(label)
+
+        for proc_label in lane_labels:
+            lane_rows = [rr for rr in target_rows if rr.get("山工程") == proc_label]
+            lane_rows.sort(key=_op_start)
+            lane_breaks = _breaks_for_proc(proc_label)
+            prev_end = None
+            valid_idx = 0
+            for rr in lane_rows:
+                current_start = _to_operational_timeline_secs(
+                    _time_to_seconds(str(rr.get("実開始時間", "")))
+                )
+                if current_start is None:
+                    rr["照合追加180秒"] = False
+                    rr["締切超過"] = False
+                    continue
+                yama_no = int(rr["山通番"])
+                work_dur = int(mtn_work_map.get(yama_no, 0))
+                inspection_delay = 180 if (valid_idx >= 2 and valid_idx % 2 == 0) else 0
+                rr["照合追加180秒"] = bool(inspection_delay)
+
+                candidate = int(current_start)
+                if prev_end is not None:
+                    candidate = max(candidate, int(prev_end) + inspection_delay)
+
+                if candidate > int(current_start):
+                    new_start = int(
+                        _adjust_start_for_breaks(
+                            candidate, work_dur, break_times=lane_breaks
+                        )
+                    )
+                    rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
+                    end_secs = int(
+                        _calc_work_end_with_breaks(
+                            new_start, work_dur, break_times=lane_breaks
+                        )
+                    )
+                    rr["_end_secs"] = end_secs
+                    if "実終了時間" in rr:
+                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
+                else:
+                    new_start = int(current_start)
+                    end_secs = int(
+                        _calc_work_end_with_breaks(
+                            new_start, work_dur, break_times=lane_breaks
+                        )
+                    )
+                    rr["_end_secs"] = end_secs
+                    if "実終了時間" in rr:
+                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
+
+                ddl = mtn_deadline_map.get(yama_no)
+                ddl_for_eval = _deadline_for_eval(ddl, new_start) if ddl is not None else None
+                rr["締切超過"] = bool(
+                    ddl is not None
+                    and ddl_for_eval is not None
+                    and int(end_secs) > int(ddl_for_eval)
+                )
+
+                prev_end = int(end_secs)
+                valid_idx += 1
 
     def _state_key(target_rows: List[dict]) -> Tuple[Tuple[int, str], ...]:
         return tuple(sorted((int(rr["山通番"]), str(rr.get("山工程", PROC_MAIN))) for rr in target_rows))
@@ -1768,18 +1904,25 @@ def _legacy_assign_processes_by_arrival_time(
             new_proc = yama_to_proc.get(yno, PROC_MAIN)
             if r.get("山工程") != new_proc:
                 _reset_row_after_lane_change(r, new_proc)
+        # Issue #123 検証結果(2026-09-16): 全trialで_is_anchoredを一律解除すると、
+        # 探索の再スケジュール(_schedule_proc_rows)は簡易な締切順チェインへ
+        # フォールバックし、元の貪欲アルゴリズム(_pick_next_main_mountain)が持つ
+        # 「前倒しで他山を新たに遅延させない」等の安全策が失われる。実データ
+        # (tests/test_issue_edf_integration.py)で締切超過が大幅に悪化したため、
+        # 本対応は撤回し、_reset_row_after_lane_changeによる変更山のみの
+        # 解除(既存動作)に戻す。
         _reschedule_rows(trial)
         return trial
 
     if n_yamas <= EXHAUSTIVE_THRESHOLD:
         best_snapshot = copy.deepcopy(results)
         _reschedule_rows(best_snapshot)
-        best_score = _state_score(best_snapshot)
+        best_score = _serialized_state_score(best_snapshot)
 
         total_patterns = 1 << n_yamas
         for bits in range(total_patterns):
             trial = _build_trial_from_assignment(bits)
-            trial_score = _state_score(trial)
+            trial_score = _serialized_state_score(trial)
             if trial_score < best_score:
                 best_score = trial_score
                 best_snapshot = trial
@@ -1789,7 +1932,7 @@ def _legacy_assign_processes_by_arrival_time(
     else:
         # フォールバック: ビーム探索（山数が多い場合）
         best_snapshot = copy.deepcopy(results)
-        best_score = _state_score(best_snapshot)
+        best_score = _serialized_state_score(best_snapshot)
         beam: List[List[dict]] = [best_snapshot]
         seen_scores = {_state_key(best_snapshot): best_score}
 
@@ -1839,7 +1982,7 @@ def _legacy_assign_processes_by_arrival_time(
             unique_next = {}
             for trial in candidate_snapshots:
                 key = _state_key(trial)
-                trial_score = _state_score(trial)
+                trial_score = _serialized_state_score(trial)
                 prev_score = seen_scores.get(key)
                 if prev_score is not None and prev_score <= trial_score:
                     continue
@@ -1852,7 +1995,7 @@ def _legacy_assign_processes_by_arrival_time(
             if not unique_next:
                 break
 
-            beam = sorted(unique_next.values(), key=_state_score)[:beam_width]
+            beam = sorted(unique_next.values(), key=_serialized_state_score)[:beam_width]
 
     results = best_snapshot
 
@@ -1909,21 +2052,24 @@ def _legacy_assign_processes_by_arrival_time(
                 continue
             if str(row.get("山工程", "")) != PROC_MAIN:
                 relief_overflow_count += 1
-            start = _time_to_seconds(row.get("実開始時間", ""))
-            if start is None:
-                continue
-            end = _calc_work_end_with_breaks(
-                start,
-                int(mtn_work_map.get(yama_no, 0)),
-                break_times=_breaks_for_proc(row.get("山工程")),
-            )
+            # 実際の終了時刻を優先して使う(再計算しない)。無ければフォールバックで再計算。
+            end = row.get("_end_secs")
+            if end is None:
+                start = _time_to_seconds(row.get("実開始時間", ""))
+                if start is None:
+                    continue
+                end = _calc_work_end_with_breaks(
+                    start, int(mtn_work_map.get(yama_no, 0)),
+                    break_times=_breaks_for_proc(row.get("山工程")),
+                )
             finish_secs = max(finish_secs, int(end))
             deadline = mtn_deadline_map.get(yama_no)
             if deadline is not None:
-                deadline_eval = _deadline_for_eval(deadline, start)
-                if deadline_eval is not None and end > int(deadline_eval):
+                start_for_eval = row.get("_end_secs") and _time_to_seconds(row.get("実開始時間", ""))
+                deadline_eval = _deadline_for_eval(deadline, start_for_eval)
+                if deadline_eval is not None and int(end) > int(deadline_eval):
                     late_count += 1
-        return late_count, relief_overflow_count, finish_secs
+        return late_count, finish_secs, relief_overflow_count
 
     def _edf_candidate_to_rows(candidate_rows: List[dict]) -> List[dict]:
         out_rows: List[dict] = []
@@ -2598,79 +2744,6 @@ def _legacy_assign_processes_by_arrival_time(
         return False
 
 
-    def _serialize_lanes_final(target_rows: List[dict]):
-        # Issue #36: 出力直前の最終直列化。探索・前詰め試行(trial_rows評価)には
-        # 一切関与しない独立ステップ。山工程は不変とし、
-        # 同一レーン内で重複する山だけを運用タイムライン秒上で後ろ倒しして解消する。
-        def _op_start(rr: dict):
-            st = _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", ""))))
-            return (st is None, st if st is not None else float("inf"), int(rr.get("山通番", 0)))
-
-        lane_labels = []
-        for rr in target_rows:
-            label = rr.get("山工程")
-            if label not in lane_labels:
-                lane_labels.append(label)
-
-        for proc_label in lane_labels:
-            lane_rows = [rr for rr in target_rows if rr.get("山工程") == proc_label]
-            lane_rows.sort(key=_op_start)
-            lane_breaks = _breaks_for_proc(proc_label)
-            prev_end = None
-            valid_idx = 0
-            for rr in lane_rows:
-                current_start = _to_operational_timeline_secs(
-                    _time_to_seconds(str(rr.get("実開始時間", "")))
-                )
-                if current_start is None:
-                    rr["照合追加180秒"] = False
-                    rr["締切超過"] = False
-                    continue
-                yama_no = int(rr["山通番"])
-                work_dur = int(mtn_work_map.get(yama_no, 0))
-                inspection_delay = 180 if (valid_idx >= 2 and valid_idx % 2 == 0) else 0
-                rr["照合追加180秒"] = bool(inspection_delay)
-
-                candidate = int(current_start)
-                if prev_end is not None:
-                    candidate = max(candidate, int(prev_end) + inspection_delay)
-
-                if candidate > int(current_start):
-                    new_start = int(
-                        _adjust_start_for_breaks(
-                            candidate, work_dur, break_times=lane_breaks
-                        )
-                    )
-                    rr["実開始時間"] = _seconds_to_hhmm(new_start % 86400)
-                    end_secs = int(
-                        _calc_work_end_with_breaks(
-                            new_start, work_dur, break_times=lane_breaks
-                        )
-                    )
-                    rr["_end_secs"] = end_secs
-                    if "実終了時間" in rr:
-                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
-                else:
-                    new_start = int(current_start)
-                    end_secs = int(
-                        _calc_work_end_with_breaks(
-                            new_start, work_dur, break_times=lane_breaks
-                        )
-                    )
-                    rr["_end_secs"] = end_secs
-                    if "実終了時間" in rr:
-                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
-
-                ddl = mtn_deadline_map.get(yama_no)
-                ddl_for_eval = _deadline_for_eval(ddl, new_start) if ddl is not None else None
-                rr["締切超過"] = bool(
-                    ddl is not None
-                    and ddl_for_eval is not None
-                    and int(end_secs) > int(ddl_for_eval)
-                )
-
-                prev_end = int(end_secs)
-                valid_idx += 1
 
     def _post_serialize_front_pack(target_rows: List[dict]):
         """直列化後の最終空き窓へ前詰めする（#97/#101）。
@@ -2705,6 +2778,76 @@ def _legacy_assign_processes_by_arrival_time(
             )
             if before == after:
                 break
+    def _demote_main_deadline_violations(
+        target_rows: List[dict],
+        max_rounds: int = 5,
+    ) -> List[int]:
+        """【最終ガード】メイン工程に締切超過を残さない（2026-09-19 Kawasaki氏要件）。
+
+        判定は _serialize_lanes_final が書き込む「締切超過」列を直接参照する。
+        画面・出力に出る列と完全に同一基準のため、表示上メインに超過が残らない。
+
+        背景: _enforce_main_deadline_strict は探索フェーズ内でのみ動作し、
+        その後段（_serialize_lanes_final の後ろ倒し / EDF候補の採用 /
+        _post_serialize_front_pack のメイン昇格）で生じたメイン超過は
+        格下げされずに出力されていた。
+
+        メイン側の時刻は動かさない（超過ゼロで確定している配置を壊さないため）。
+        落とした山はリリーフへ、リリーフでも間に合わなければ
+        _reapply_overflow_for_relief により あふれ へ回る。
+        """
+        demoted_all: List[int] = []
+        for _ in range(int(max_rounds)):
+            late_main = sorted({
+                int(rr["山通番"])
+                for rr in target_rows
+                if str(rr.get("山工程", "")) == PROC_MAIN and bool(rr.get("締切超過"))
+            })
+            if not late_main:
+                break
+
+            late_set = set(late_main)
+            for rr in target_rows:
+                if int(rr["山通番"]) in late_set and str(rr.get("山工程", "")) == PROC_MAIN:
+                    _reset_row_after_lane_change(rr, PROC_RELIEF)
+                    rr.pop("_end_secs", None)
+                    rr["締切超過"] = False
+
+            _schedule_proc_rows(
+                [rr for rr in target_rows if rr.get("山工程") == PROC_RELIEF],
+                PROC_RELIEF,
+                prefer_deadline_order=True,
+            )
+            _reapply_overflow_for_relief(target_rows)
+
+            # 2026-09-19 追記: 格下げの再配置(prefer_deadline_order)で既存のリリーフ山が
+            # 後ろへ追いやられ、新たにあふれ化することがある。本ガードはパイプラインの
+            # 最後に位置するため、既存の救済策(①あふれ→リリーフ復帰 / ②空き窓前詰め)を
+            # 呼び直さないと、新規あふれだけが救済されずに確定してしまう。
+            # (実例: 山2が締切まで2時間超の余裕を残したまま不要にあふれ化した)
+            while _try_repromote_overflow_to_relief(target_rows):
+                pass
+            _post_serialize_front_pack(target_rows)
+
+            _serialize_lanes_final(target_rows)
+
+            demoted_all.extend(late_main)
+            _logger.warning(
+                "最終ガード: メイン工程の締切超過山をリリーフへ格下げしました yamas=%s",
+                late_main,
+            )
+
+        still_late = sorted(
+            int(rr["山通番"])
+            for rr in target_rows
+            if str(rr.get("山工程", "")) == PROC_MAIN and bool(rr.get("締切超過"))
+        )
+        if still_late:
+            _logger.error(
+                "最終ガード: %d周でもメイン工程の締切超過が解消しませんでした yamas=%s",
+                int(max_rounds), still_late,
+            )
+        return demoted_all
 
     for _ in range(3):
         _finalize_inspection_delay_flags(results)
@@ -2744,7 +2887,12 @@ def _legacy_assign_processes_by_arrival_time(
         edf_baseline_score = _final_score_rows(edf_result_clean)
         if cleaned_score > edf_baseline_score:
             selected_rows[:] = edf_result_clean
+            _serialize_lanes_final(selected_rows)
             _logger.info("EDF品質保護: cleanup後(%s) > EDF基準(%s) → 復帰", cleaned_score, edf_baseline_score)
+            _logger.info("EDF品質保護: 復帰後の再検証スコア=%s", _final_score_rows(selected_rows))
+    # 【最終ガード】メイン工程に締切超過を残さない（2026-09-19 Kawasaki氏要件）。
+    # EDF採用・cleanup・前詰め昇格の"すべての後"に置くことが必須。
+    _demote_main_deadline_violations(selected_rows)
 
     for r in selected_rows:
         r.pop("_is_anchored", None)

@@ -18,9 +18,10 @@ from ..models.constants import (
     PROC_RELIEF,
     SHIFT_FIRST_TRIP_BUFFER_SECS, FIRST_BIN_RELEASE_BUFFER_SECS,
     PICKUP_DEADLINE_BUFFER_SECS,
+    SPLIT_UKEIRE_ROUTES,
 )
 from ..utils.normalizer import _ZEN2HAN_DIGIT_COLON, _normalize_dest_name
-from ..utils.master_map import build_master_map_with_duplicate_warning
+from ..utils.master_map import build_master_map_with_duplicate_warning, resolve_with_ukeire_fallback
 from .process_assigner import (
     _adjust_start_for_breaks,
     _calc_work_end_with_breaks,
@@ -682,17 +683,31 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
             if not vendor or not order2:
                 continue
 
-            pickup = master_map.get((vendor, order2), "")
+            _ukeire = str(row.get("UKEIRE", "")).strip()
+            lookup_vendor = (
+                f"{vendor}-{_ukeire}" if (vendor in SPLIT_UKEIRE_ROUTES and _ukeire) else vendor
+            )
+            _pickup, _resolved = resolve_with_ukeire_fallback(
+                master_map,
+                vendor,
+                lookup_vendor,
+                order2,
+                logger=logger,
+                label="scheduler入車時間マスタ",
+            )
+            if _resolved is not None:
+                lookup_vendor = _resolved
+            pickup = _pickup or ""
             if not pickup:
                 continue
             pickup_secs = _to_operational_timeline_secs(_time_to_seconds(pickup))
             if pickup_secs is None:
                 continue
 
-            set_flag = bool(set_flag_map.get((vendor, order2), False))
+            set_flag = bool(set_flag_map.get((lookup_vendor, order2), False))
             shift_idx = _shift_index_for_secs(pickup_secs)
             strict_deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
-            is_first_trip_in_shift = (vendor_shift_first_bin.get((vendor, shift_idx), "") == order2)
+            is_first_trip_in_shift = (vendor_shift_first_bin.get((lookup_vendor, shift_idx), "") == order2)
 
             if not has_set_flag_col:
                 if vendor == "武部":
@@ -717,7 +732,7 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
                             lane_parity=(current_bin % 2) if _is_hino_2lane_target(vendor) and lane_count == 2 else None,
                         )
                         if prev_bin is not None:
-                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                             if prev_secs is not None:
                                 st = prev_secs + 10 * 60
@@ -754,7 +769,7 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
                             lane_parity=(current_bin % 2) if _is_hino_2lane_target(vendor) and lane_count == 2 else None,
                         )
                         if prev_bin is not None:
-                            prev_pickup = master_map.get((vendor, prev_bin), "")
+                            prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                             prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                             if prev_secs is not None:
                                 st = prev_secs + 10 * 60
@@ -780,7 +795,7 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
                         offset=1,
                     )
                     if prev_bin is not None:
-                        prev_pickup = master_map.get((vendor, prev_bin), "")
+                        prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                         st_prev = (prev_secs + 10 * 60) if prev_secs is not None else 0
                     else:
@@ -809,7 +824,7 @@ def _mountain_context(proc_details: pd.DataFrame, master_df: pd.DataFrame) -> Tu
                         lane_parity=(current_bin % 2) if _is_hino_2lane_target(vendor) and lane_count == 2 else None,
                     )
                     if prev_bin is not None:
-                        prev_pickup = master_map.get((vendor, prev_bin), "")
+                        prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
                         if prev_secs is not None:
                             st = prev_secs + 10 * 60
