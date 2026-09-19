@@ -75,7 +75,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-09-16 7fc87d4 織機3分割+マスタ保存時自動整列"
+APP_VERSION = "2026-09-19 a4e579d メイン工程締切超過ガード追加(Issue157/PatchA+A-2)"
 
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
