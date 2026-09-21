@@ -519,6 +519,10 @@ def run_pipeline(
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap)
                     elif str(size_type) == SIZE5_TYPE:
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap, max_pallets=SIZE5_MAX_PALLETS_PER_YAMA)
+                    elif str(size_type) == SIZE17_TYPE:
+                       # サイズ17は全出荷先で高さ2500まで積載可（最大3パレット）。2026/06 Kawasaki氏確認。
+                       # 初回積み付けから2500で積み、2450で不要に山を割らないようにする。
+                       part_groups = assign_groups_sequential(part["高さ"], cap=SIZE17_MERGE_HEIGHT_CAP)
                     else:
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap)
                     group_numbers.loc[part.index] = [g + base_group for g in part_groups]

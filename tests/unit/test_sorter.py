@@ -1384,6 +1384,35 @@ class TestAislePreference:
         assert yama_a == yama_c, "アイル不明時は高さが一番合う店C(995)と同じ山になるべき（従来ルール）"
         assert yama_a != yama_b
 
+class TestSize17InitialPacking:
+    """Refs #163 原因1: サイズ17は初回積み付けから2500まで積む（2450で山を割らない）。"""
+
+    def test_size17_cap_2500_keeps_three_pallets_in_one_yama(self):
+        from src.models.constants import SIZE17_MERGE_HEIGHT_CAP
+        heights = pd.Series([830, 830, 830])          # 合計 2490mm（2450超・2500以下）
+        # 現状の2450だと3枚目が別山に割れてしまう ＝ これが #163 原因1 の症状
+        assert assign_groups_sequential(heights, cap=DEFAULT_HEIGHT_CAP) == [1, 1, 2]
+        # 2500なら3枚が1山に収まる
+        assert assign_groups_sequential(heights, cap=SIZE17_MERGE_HEIGHT_CAP) == [1, 1, 1]
+
+    def test_size17_cap_2500_still_splits_when_over(self):
+        from src.models.constants import SIZE17_MERGE_HEIGHT_CAP
+        heights = pd.Series([900, 900, 900])          # 合計 2700mm > 2500
+        assert assign_groups_sequential(heights, cap=SIZE17_MERGE_HEIGHT_CAP) == [1, 1, 2]
+
+    def test_size17_cap_boundary_2500_is_inclusive(self):
+        """上限は「以下」で判定（既存テストの2450ちょうど＝1山と同じ挙動）。"""
+        from src.models.constants import SIZE17_MERGE_HEIGHT_CAP
+        assert assign_groups_sequential(pd.Series([1300, 1200]), cap=SIZE17_MERGE_HEIGHT_CAP) == [1, 1]  # 2500
+        assert assign_groups_sequential(pd.Series([1300, 1201]), cap=SIZE17_MERGE_HEIGHT_CAP) == [1, 2]  # 2501
+
+    def test_sorter_local_size17_constants_match_constants_module(self):
+        """#163 原因4: SIZE17系定数が constants.py と sorter.py に二重定義されている。
+        撤去は別Issueとし、ここでは値がズレたら即気付けるようにしておく。"""
+        from src.models import constants as C
+        from src.services import sorter as S
+        assert S.SIZE17_MERGE_HEIGHT_CAP == C.SIZE17_MERGE_HEIGHT_CAP
+        assert S.SIZE17_TYPE == C.SIZE17_TYPE
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
