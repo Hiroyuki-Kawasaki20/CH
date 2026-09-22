@@ -2364,7 +2364,16 @@ def _legacy_assign_processes_by_arrival_time(
             )
             new_start = _adjust_start_for_breaks(max(relief_end, floor), int(mtn_work_map.get(yama_no, 0)))
             target["実開始時間"] = _seconds_to_hhmm(new_start)
-            target["_end_secs"] = int(_calc_work_end_with_breaks(new_start, int(mtn_work_map.get(yama_no, 0))))
+            new_end = int(_calc_work_end_with_breaks(new_start, int(mtn_work_map.get(yama_no, 0))))
+            target["_end_secs"] = new_end
+
+            # Issue #166 followup: 移動対象自身の締切超過が解消されない場合は
+            # あふれ→リリーフの表示上の付け替えに過ぎず、3人目投入の要否という
+            # 実務上の意味を損なうため採用しない。
+            candidate_deadline_eval = _deadline_for_eval(mtn_deadline_map.get(yama_no), new_start)
+            if candidate_deadline_eval is not None and new_end > int(candidate_deadline_eval):
+                continue
+
             new_violations = _deadline_violation_set(trial_rows) - existing_violations
             if new_violations:
                 continue
@@ -2895,12 +2904,12 @@ def _legacy_assign_processes_by_arrival_time(
             edf_was_adopted = True
         _logger.info("EDF比較: existing=%s edf=%s n=%d", existing_evaluation, edf_evaluation, n_yamas)
 
-    # Issue #101: 常に cleanup 処理を実施
-    # EDF採用時は事後的に品質チェック
-    if n_yamas > EXHAUSTIVE_THRESHOLD:
-        while _try_repromote_overflow_to_relief(selected_rows):
-            pass
-        _serialize_lanes_final(selected_rows)
+    # Issue #101/#166: 常に cleanup 処理を実施する。
+    # 全探索(n<=14)はメイン/リリーフの2値配分のみを最適化しており、
+    # あふれ判定は探索後の別ステップのため、山数に関わらず再降格を試す。
+    while _try_repromote_overflow_to_relief(selected_rows):
+        pass
+    _serialize_lanes_final(selected_rows)
 
     _post_serialize_front_pack(selected_rows)
     
