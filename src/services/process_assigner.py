@@ -1780,6 +1780,12 @@ def _legacy_assign_processes_by_arrival_time(
         # Issue #36: 出力直前の最終直列化。探索・前詰め試行(trial_rows評価)には
         # 一切関与しない独立ステップ。山工程は不変とし、
         # 同一レーン内で重複する山だけを運用タイムライン秒上で後ろ倒しして解消する。
+        #
+        # Issue #166派生の nan 修正: リリーフ/あふれ生成経路は「実終了時間」キーを
+        # 一度も持たないまま出力に到達することがあった(_end_secsのみ更新)。
+        # 従来はEDF品質保護の復帰(selected_rows[:] = edf_result_clean)が必ず発火し、
+        # キーを持つEDF側の行に丸ごと置き換わっていたため露出しなかった。
+        # ここでは「キーが既にある行だけ更新する」ガードを外し、常に書き込む。
         def _op_start(rr: dict):
             st = _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", ""))))
             return (st is None, st if st is not None else float("inf"), int(rr.get("山通番", 0)))
@@ -1826,8 +1832,7 @@ def _legacy_assign_processes_by_arrival_time(
                         )
                     )
                     rr["_end_secs"] = end_secs
-                    if "実終了時間" in rr:
-                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
+                    rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
                 else:
                     new_start = int(current_start)
                     end_secs = int(
@@ -1836,8 +1841,7 @@ def _legacy_assign_processes_by_arrival_time(
                         )
                     )
                     rr["_end_secs"] = end_secs
-                    if "実終了時間" in rr:
-                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
+                    rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
 
                 ddl = mtn_deadline_map.get(yama_no)
                 ddl_for_eval = _deadline_for_eval(ddl, new_start) if ddl is not None else None
