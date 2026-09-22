@@ -519,6 +519,10 @@ def run_pipeline(
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap)
                     elif str(size_type) == SIZE5_TYPE:
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap, max_pallets=SIZE5_MAX_PALLETS_PER_YAMA)
+                    elif str(size_type) == SIZE17_TYPE:
+                       # サイズ17は全出荷先で高さ2500まで積載可（最大3パレット）。2026/06 Kawasaki氏確認。
+                       # 初回積み付けから2500で積み、2450で不要に山を割らないようにする。
+                       part_groups = assign_groups_sequential(part["高さ"], cap=SIZE17_MERGE_HEIGHT_CAP)
                     else:
                         part_groups = assign_groups_sequential(part["高さ"], cap=height_cap)
                     group_numbers.loc[part.index] = [g + base_group for g in part_groups]
@@ -864,10 +868,12 @@ def _merge_adjacent_size17_mountains(all_df: pd.DataFrame) -> pd.DataFrame:
             "nony": (next(iter(nony_set)) if len(nony_set) == 1 else ""),
             "arrival": (next(iter(arrival_set)) if len(arrival_set) == 1 else ""),
             "stype": (next(iter(stype_set)) if len(stype_set) == 1 else ""),
+            # 便(NONYUHIBIN)の単一性は要求しない。_add_truck_key_column() の設計原則
+            # （入車時間が同じなら物理的に同一トラック。ドラックヤードは1つしかない）に揃える。
+            # サイズ17は複数出荷先が共通で引き取るため、便が複数でも入車時間が単一なら対象とする。
             "eligible": (
                 len(stype_set) == 1
                 and next(iter(stype_set), "") == SIZE17_TYPE
-                and len(nony_set) == 1
                 and len(arrival_set) == 1
             ),
         }
@@ -883,8 +889,6 @@ def _merge_adjacent_size17_mountains(all_df: pd.DataFrame) -> pd.DataFrame:
         can_merge = (
             cs["eligible"]
             and ns["eligible"]
-            and cs["nony"]
-            and cs["nony"] == ns["nony"]
             and cs["arrival"]
             and cs["arrival"] == ns["arrival"]
             and (cs["height"] + ns["height"]) <= float(SIZE17_MERGE_HEIGHT_CAP)
