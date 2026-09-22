@@ -1780,6 +1780,12 @@ def _legacy_assign_processes_by_arrival_time(
         # Issue #36: 出力直前の最終直列化。探索・前詰め試行(trial_rows評価)には
         # 一切関与しない独立ステップ。山工程は不変とし、
         # 同一レーン内で重複する山だけを運用タイムライン秒上で後ろ倒しして解消する。
+        #
+        # Issue #166派生の nan 修正: リリーフ/あふれ生成経路は「実終了時間」キーを
+        # 一度も持たないまま出力に到達することがあった(_end_secsのみ更新)。
+        # 従来はEDF品質保護の復帰(selected_rows[:] = edf_result_clean)が必ず発火し、
+        # キーを持つEDF側の行に丸ごと置き換わっていたため露出しなかった。
+        # ここでは「キーが既にある行だけ更新する」ガードを外し、常に書き込む。
         def _op_start(rr: dict):
             st = _to_operational_timeline_secs(_time_to_seconds(str(rr.get("実開始時間", ""))))
             return (st is None, st if st is not None else float("inf"), int(rr.get("山通番", 0)))
@@ -1826,8 +1832,7 @@ def _legacy_assign_processes_by_arrival_time(
                         )
                     )
                     rr["_end_secs"] = end_secs
-                    if "実終了時間" in rr:
-                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
+                    rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
                 else:
                     new_start = int(current_start)
                     end_secs = int(
@@ -1836,8 +1841,7 @@ def _legacy_assign_processes_by_arrival_time(
                         )
                     )
                     rr["_end_secs"] = end_secs
-                    if "実終了時間" in rr:
-                        rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
+                    rr["実終了時間"] = _seconds_to_hhmm(end_secs % 86400)
 
                 ddl = mtn_deadline_map.get(yama_no)
                 ddl_for_eval = _deadline_for_eval(ddl, new_start) if ddl is not None else None
@@ -2040,9 +2044,25 @@ def _legacy_assign_processes_by_arrival_time(
                 late_seconds += int(end - deadline_eval)
         return late_count, late_seconds, finish_secs, len(used_lanes)
 
-    def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int]:
+    def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int, int]:
+        """最終結果を採点する(小さいほど良い)。
+
+        並び順の意図(Issue #166):
+          1. late_count     … 締切超過ゼロが最優先(安全側・従来どおり先頭)
+          2. overflow_count … あふれ工程=3人目。1山でも減れば必ず改善とみなす
+          3. relief_count   … リリーフ工程の山数
+          4. finish_secs    … 全体の終了時刻
+
+        旧実装は (late_count, finish_secs, relief_overflow_count) で、
+        終了時刻が人員より優先されていた。あふれ→リリーフ/メインへの救済は
+        定義上ほぼ必ず全体の終了時刻を伸ばすため、救済が成功しても
+        「悪化」と判定され EDF品質保護で丸ごと巻き戻っていた。
+        またリリーフとあふれを1つのカウンタで合算していたため、
+        あふれ→リリーフの移動が改善として評価されなかった。
+        """
         late_count = 0
-        relief_overflow_count = 0
+        overflow_count = 0
+        relief_count = 0
         finish_secs = 0
         by_yama = {int(r["山通番"]): r for r in target_rows}
         for mountain in mountain_info:
@@ -2050,8 +2070,11 @@ def _legacy_assign_processes_by_arrival_time(
             row = by_yama.get(yama_no)
             if row is None:
                 continue
-            if str(row.get("山工程", "")) != PROC_MAIN:
-                relief_overflow_count += 1
+            lane = str(row.get("山工程", ""))
+            if lane == PROC_OVERFLOW:
+                overflow_count += 1
+            elif lane != PROC_MAIN:
+                relief_count += 1
             # 実際の終了時刻を優先して使う(再計算しない)。無ければフォールバックで再計算。
             end = row.get("_end_secs")
             if end is None:
@@ -2069,7 +2092,7 @@ def _legacy_assign_processes_by_arrival_time(
                 deadline_eval = _deadline_for_eval(deadline, start_for_eval)
                 if deadline_eval is not None and int(end) > int(deadline_eval):
                     late_count += 1
-        return late_count, finish_secs, relief_overflow_count
+        return late_count, overflow_count, relief_count, finish_secs
 
     def _edf_candidate_to_rows(candidate_rows: List[dict]) -> List[dict]:
         out_rows: List[dict] = []
@@ -2341,7 +2364,16 @@ def _legacy_assign_processes_by_arrival_time(
             )
             new_start = _adjust_start_for_breaks(max(relief_end, floor), int(mtn_work_map.get(yama_no, 0)))
             target["実開始時間"] = _seconds_to_hhmm(new_start)
-            target["_end_secs"] = int(_calc_work_end_with_breaks(new_start, int(mtn_work_map.get(yama_no, 0))))
+            new_end = int(_calc_work_end_with_breaks(new_start, int(mtn_work_map.get(yama_no, 0))))
+            target["_end_secs"] = new_end
+
+            # Issue #166 followup: 移動対象自身の締切超過が解消されない場合は
+            # あふれ→リリーフの表示上の付け替えに過ぎず、3人目投入の要否という
+            # 実務上の意味を損なうため採用しない。
+            candidate_deadline_eval = _deadline_for_eval(mtn_deadline_map.get(yama_no), new_start)
+            if candidate_deadline_eval is not None and new_end > int(candidate_deadline_eval):
+                continue
+
             new_violations = _deadline_violation_set(trial_rows) - existing_violations
             if new_violations:
                 continue
@@ -2872,12 +2904,12 @@ def _legacy_assign_processes_by_arrival_time(
             edf_was_adopted = True
         _logger.info("EDF比較: existing=%s edf=%s n=%d", existing_evaluation, edf_evaluation, n_yamas)
 
-    # Issue #101: 常に cleanup 処理を実施
-    # EDF採用時は事後的に品質チェック
-    if n_yamas > EXHAUSTIVE_THRESHOLD:
-        while _try_repromote_overflow_to_relief(selected_rows):
-            pass
-        _serialize_lanes_final(selected_rows)
+    # Issue #101/#166: 常に cleanup 処理を実施する。
+    # 全探索(n<=14)はメイン/リリーフの2値配分のみを最適化しており、
+    # あふれ判定は探索後の別ステップのため、山数に関わらず再降格を試す。
+    while _try_repromote_overflow_to_relief(selected_rows):
+        pass
+    _serialize_lanes_final(selected_rows)
 
     _post_serialize_front_pack(selected_rows)
     
