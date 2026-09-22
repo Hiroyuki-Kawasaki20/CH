@@ -2040,9 +2040,25 @@ def _legacy_assign_processes_by_arrival_time(
                 late_seconds += int(end - deadline_eval)
         return late_count, late_seconds, finish_secs, len(used_lanes)
 
-    def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int]:
+    def _final_score_rows(target_rows: List[dict]) -> Tuple[int, int, int, int]:
+        """最終結果を採点する(小さいほど良い)。
+
+        並び順の意図(Issue #166):
+          1. late_count     … 締切超過ゼロが最優先(安全側・従来どおり先頭)
+          2. overflow_count … あふれ工程=3人目。1山でも減れば必ず改善とみなす
+          3. relief_count   … リリーフ工程の山数
+          4. finish_secs    … 全体の終了時刻
+
+        旧実装は (late_count, finish_secs, relief_overflow_count) で、
+        終了時刻が人員より優先されていた。あふれ→リリーフ/メインへの救済は
+        定義上ほぼ必ず全体の終了時刻を伸ばすため、救済が成功しても
+        「悪化」と判定され EDF品質保護で丸ごと巻き戻っていた。
+        またリリーフとあふれを1つのカウンタで合算していたため、
+        あふれ→リリーフの移動が改善として評価されなかった。
+        """
         late_count = 0
-        relief_overflow_count = 0
+        overflow_count = 0
+        relief_count = 0
         finish_secs = 0
         by_yama = {int(r["山通番"]): r for r in target_rows}
         for mountain in mountain_info:
@@ -2050,8 +2066,11 @@ def _legacy_assign_processes_by_arrival_time(
             row = by_yama.get(yama_no)
             if row is None:
                 continue
-            if str(row.get("山工程", "")) != PROC_MAIN:
-                relief_overflow_count += 1
+            lane = str(row.get("山工程", ""))
+            if lane == PROC_OVERFLOW:
+                overflow_count += 1
+            elif lane != PROC_MAIN:
+                relief_count += 1
             # 実際の終了時刻を優先して使う(再計算しない)。無ければフォールバックで再計算。
             end = row.get("_end_secs")
             if end is None:
@@ -2069,7 +2088,7 @@ def _legacy_assign_processes_by_arrival_time(
                 deadline_eval = _deadline_for_eval(deadline, start_for_eval)
                 if deadline_eval is not None and int(end) > int(deadline_eval):
                     late_count += 1
-        return late_count, finish_secs, relief_overflow_count
+        return late_count, overflow_count, relief_count, finish_secs
 
     def _edf_candidate_to_rows(candidate_rows: List[dict]) -> List[dict]:
         out_rows: List[dict] = []
