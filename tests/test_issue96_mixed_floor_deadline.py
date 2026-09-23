@@ -9,10 +9,9 @@
 import pandas as pd
 import pytest
 
-from src.models.constants import DEFAULT_HEIGHT_CAP
+from src.models.constants import DEFAULT_HEIGHT_CAP, PICKUP_DEADLINE_BUFFER_SECS
+from src.services.process_assigner import ARRIVAL_BUFFER_SECS
 from src.services.sorter import run_pipeline
-
-_TEN_MIN = 10 * 60
 
 
 class _StubDataManager:
@@ -49,15 +48,15 @@ def _master(rows):
 
 
 def _floor_deadline_from_master(master_df, vendor, order2):
-    """(床, 締切) をマスタから計算（前便=便番号-1 / 床=前便入車+10分 / 締切=入車-10分）。"""
+    """(床, 締切) をマスタから計算（前便=便番号-1 / 床=前便入車+10分 / 締切=入車-20分）。"""
     m = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in master_df.iterrows()}
     arrival = m.get((vendor, order2))
-    deadline = _hhmm_to_secs(arrival) - _TEN_MIN if arrival else None
+    deadline = _hhmm_to_secs(arrival) - PICKUP_DEADLINE_BUFFER_SECS if arrival else None
     floor = 0
     if int(order2) > 1:
         prev = m.get((vendor, f"{int(order2) - 1:02d}"))
         if prev:
-            floor = _hhmm_to_secs(prev) + _TEN_MIN
+            floor = _hhmm_to_secs(prev) + ARRIVAL_BUFFER_SECS
     return floor, deadline
 
 

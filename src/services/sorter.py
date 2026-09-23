@@ -18,7 +18,7 @@ from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
 from ..utils.master_map import build_master_map_with_duplicate_warning
-from .bin_time_rules import build_bin_time_map, attach_unit_time_bounds
+from .bin_time_rules import build_bin_time_map, attach_unit_time_bounds, unit_floor_deadline
 
 
 logger = logging.getLogger(__name__)
@@ -662,8 +662,11 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
         )
 
     group_table = _build_size1_stack_units(size1_packed, mixing_key)
-    # Issue #96: マスタから床・締切を計算してユニットへ付与（混載判定の予防チェック用）
-    group_table = attach_unit_time_bounds(group_table, build_bin_time_map(master_df))
+    # Issue #96/#170: マスタから床・締切を計算してユニットへ付与（混載判定の予防チェック用）。
+    # bin_time_map は変数化し、後段の _rescue_split_conflict_vendor（同じ関数内のクロージャ）
+    # からも参照する。これにより救済分割の床計算を bin_time_rules に一本化できる。
+    bin_time_map = build_bin_time_map(master_df)
+    group_table = attach_unit_time_bounds(group_table, bin_time_map)
     group_cols = _size1_local_group_cols(size1_packed) + ["ローカルグループ番号"]
 
     if _trace_on():
@@ -691,19 +694,6 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
         on=group_cols, how="left"
     )
 
-    def _timeline_secs(hhmm_text: str) -> Optional[int]:
-        t = _normalize_hhmm(hhmm_text)
-        if not t:
-            return None
-        try:
-            hh, mm = t.split(":", 1)
-            secs = int(hh) * 3600 + int(mm) * 60
-            # 00:00〜06:24 は業務日の翌日帯へ寄せる
-            if secs < (6 * 3600 + 25 * 60):
-                secs += 24 * 3600
-            return secs
-        except Exception:
-            return None
 
     def _rescue_split_conflict_vendor(df_with_mountain: pd.DataFrame) -> pd.DataFrame:
         if df_with_mountain.empty:
@@ -715,15 +705,22 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
 
         out = df_with_mountain.copy()
         out["納入先"] = out.get("納入先", "").astype(str).map(_normalize_dest_name)
-        nony = out.get("NONYUHIBIN", "").astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
-        out["_order2"] = nony.str[-2:]
 
-        # 納入先×便の入車時刻辞書
-        vendor_bin_time: Dict[tuple, Optional[int]] = {}
+        # Issue #170: 床・締切は bin_time_rules.unit_floor_deadline に一本化する。
+        # 従来の自前実装（前便 = 便番号-1、補正なし）は、同一入車時間（=同一トラック）の
+        # 便を前便と誤認して不要な床を立ててしまうため撤去する。
+        # bin_time_map はこの関数の外側（_build_size1_mixed）で定義済みの変数を
+        # クロージャとして参照する（引数追加は不要）。
+        floors, deadlines = [], []
         for _, rr in out.iterrows():
-            key = (str(rr.get("納入先", "")).strip(), str(rr.get("_order2", "")).strip())
-            if key not in vendor_bin_time:
-                vendor_bin_time[key] = _timeline_secs(str(rr.get("入車時間", "")).strip())
+            floor_secs, deadline_secs = unit_floor_deadline(
+                rr.get("納入先", ""), rr.get("NONYUHIBIN", ""),
+                rr.get("入車時間", ""), bin_time_map,
+            )
+            floors.append(int(floor_secs))
+            deadlines.append(deadline_secs)
+        out["_rescue_床秒"] = floors
+        out["_rescue_締切秒"] = deadlines
 
         next_yama = int(pd.to_numeric(out["山通番"], errors="coerce").fillna(0).max()) + 1
         for yama in sorted(pd.to_numeric(out["山通番"], errors="coerce").fillna(0).astype(int).unique()):
@@ -732,26 +729,9 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
                 continue
             sub = out.loc[sub_idx]
 
-            min_deadline = None
-            max_floor = 0
-            for _, rr in sub.iterrows():
-                vendor = str(rr.get("納入先", "")).strip()
-                order2 = str(rr.get("_order2", "")).strip()
-                if not vendor or not order2:
-                    continue
-                pickup_secs = vendor_bin_time.get((vendor, order2))
-                if pickup_secs is not None:
-                    deadline = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
-                    min_deadline = deadline if min_deadline is None else min(min_deadline, deadline)
-                try:
-                    b = int(order2)
-                    if b > 1:
-                        prev_key = (vendor, f"{b-1:02d}")
-                        prev_secs = vendor_bin_time.get(prev_key)
-                        if prev_secs is not None:
-                            max_floor = max(max_floor, int(prev_secs) + 10 * 60)
-                except Exception:
-                    pass
+            deadlines_in_yama = sub["_rescue_締切秒"].dropna()
+            min_deadline = int(deadlines_in_yama.min()) if not deadlines_in_yama.empty else None
+            max_floor = int(sub["_rescue_床秒"].max())
 
             if min_deadline is None:
                 continue
@@ -762,13 +742,10 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
             vendor_deadline: Dict[str, int] = {}
             for _, rr in sub.iterrows():
                 vendor = str(rr.get("納入先", "")).strip()
-                order2 = str(rr.get("_order2", "")).strip()
-                if not vendor or not order2:
+                d = rr.get("_rescue_締切秒")
+                if not vendor or pd.isna(d):
                     continue
-                pickup_secs = vendor_bin_time.get((vendor, order2))
-                if pickup_secs is None:
-                    continue
-                d = max(0, int(pickup_secs) - PICKUP_DEADLINE_BUFFER_SECS)
+                d = int(d)
                 if vendor not in vendor_deadline or d < vendor_deadline[vendor]:
                     vendor_deadline[vendor] = d
 
@@ -784,7 +761,7 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
             out.loc[split_idx, "山通番"] = int(next_yama)
             next_yama += 1
 
-        return out.drop(columns=["_order2"], errors="ignore")
+        return out.drop(columns=["_rescue_床秒", "_rescue_締切秒"], errors="ignore")
 
     _before_rescue = size1_with_mountain["山通番"].copy() if _trace_on() else None
     size1_with_mountain = _rescue_split_conflict_vendor(size1_with_mountain)
