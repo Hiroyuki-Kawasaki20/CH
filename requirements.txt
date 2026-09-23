@@ -1,12 +1,11 @@
 # CHかんばんセット — 依存パッケージ
-# Python 3.8 以上で実行してください
-# Python 3.11.14 で動作確認
+# Python 3.11 系で実行してください（3.11.14 で動作確認）
 #
 # インストール方法:
 #   pip install -r requirements.txt
 #
 # または Conda をお勧めします:
-#   conda create -n DIG_new python=3.8
+#   conda create -n DIG_new python=3.11
 #   conda activate DIG_new
 #   pip install -r requirements.txt
 
