@@ -77,7 +77,8 @@ gui.py
 - `exporter.py` は `spo_export.py` を経由してSPO出力の競合リスクを低減します。
 
 ## 4. 実行フロー（GUI）
-
+> 要件定義における機能一覧との対応は [requirements.md](requirements.md) 3節を参照してください（旧 requirements.md 5節「データフロー」は本節に統合済み）。
++
 ```text
 入力データ読込（CSV/Excel + 設定）
   ↓
