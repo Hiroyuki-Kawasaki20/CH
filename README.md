@@ -68,7 +68,7 @@ qt_setboard/   PySide6/QML 版セットボード（別系統）
 config/        設定 JSON
 tests/         ユニット・結合テスト
 docs/          要件定義・アーキテクチャ
-prompts/       AI開発支援プロンプト（要点は CLAUDE.md に統合
+prompts/       AI開発支援プロンプト（要点は CLAUDE.md に統合）
 ```
 
 ## 参照ドキュメント
