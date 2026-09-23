@@ -2352,7 +2352,45 @@ class App(ctk.CTk):
         messagebox.showinfo("取込完了", f"{master_path.name} から {len(df)} 件を取込しました。")
 
 
+# ============================================================
+# Issue #169: ログ設定（環境変数だけでトレースを採取できるようにする）
+# ============================================================
+def _setup_logging() -> None:
+    """起動時に一度だけログ設定を行う。
+
+    CH_LOG_LEVEL  : 既定 INFO。DEBUG/WARNING 等を指定可。
+    CH_TRACE_135  : 有効なら自動で DEBUG へ引き下げる（専用ランチャ不要にする）。
+    """
+    root = logging.getLogger()
+    if root.handlers:          # 二重設定防止（テスト・再import時）
+        return
+
+    trace_on = os.getenv("CH_TRACE_135", "") not in ("", "0", "false", "False")
+    level_name = os.getenv("CH_LOG_LEVEL", "DEBUG" if trace_on else "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    log_dir = Path(LOCAL_OUTPUT_DIR) / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / ("trace_135.log" if trace_on else "ch_kanban.log")
+
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=[
+            logging.FileHandler(log_path, mode="w", encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+    # 他ライブラリの DEBUG でログが埋まるのを防ぐ
+    for noisy in ("matplotlib", "PIL", "openpyxl", "asyncio", "urllib3", "comtypes"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    logger.info("log level=%s trace135=%s file=%s",
+                logging.getLevelName(level), trace_on, log_path)
+
+
 def main():
+    _setup_logging()          # ★ App() より前に呼ぶ（ここが唯一の必須順序）
     try:
         app = App()
     except Exception as e:
