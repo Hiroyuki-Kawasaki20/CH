@@ -1116,7 +1116,7 @@ def _legacy_assign_processes_by_arrival_time(
                         st = 0
                         st_prev = 0
             elif is_first_trip_in_shift:
-                # セットなし × 各直1便目は納入先に関わらず各直開始+15分。
+                # セットなし × 各直1便目は納入先に関わらず各直開始+SHIFT_FIRST_TRIP_BUFFER_SECS（移動15分+仕分け10分=25分）。
                 st = _shift_start_secs(shift_idx) + SHIFT_FIRST_TRIP_BUFFER_SECS
                 try:
                     current_bin = int(order2)
@@ -2628,7 +2628,7 @@ def _legacy_assign_processes_by_arrival_time(
             int(mtn_start_floor_map.get(yama_no) or 0),
         )
         # Issue #119: リリーフは仕分け猶予20分中も引取を開始できるため、
-        # 短休憩を純休憩10分として評価する(食事45分・朝一35分は不変)。
+        # 短休憩を純休憩10分として評価する(食事45分・朝一バッファ SHIFT_FIRST_TRIP_BUFFER_SECS は不変)。
         relief_breaks = _breaks_for_proc(PROC_RELIEF)
         shift_floor = _shift_start_secs(_shift_index_for_secs(int(gap_start)))
         break_floor = int(gap_start)

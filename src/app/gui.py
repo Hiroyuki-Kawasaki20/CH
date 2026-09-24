@@ -75,7 +75,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-09-24 環境構築手順書をmd化"
+APP_VERSION = "2026-09-24 朝一・昼明け25分/締切入車10分前"
 
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
@@ -1575,7 +1575,7 @@ class App(ctk.CTk):
         return pd.concat([out, virtual_df], axis=0, ignore_index=True)
 
     def _collect_late_relief_warnings(self, master_df: pd.DataFrame):
-        """リリーフに割り振っても締切(入車20分前)を超過する山を抽出する。"""
+        """リリーフに割り振っても締切(入車 − PICKUP_DEADLINE_BUFFER_SECS)を超過する山を抽出する。"""
         warnings = []
         if self.proc_details is None or self.proc_details.empty:
             return warnings
@@ -1676,7 +1676,7 @@ class App(ctk.CTk):
         if not overflow_yamas:
             return
         lines = [
-            "全割当パターンを探索しても締切(入車20分前)に間に合わない山があります。",
+            f"全割当パターンを探索しても締切(入車{PICKUP_DEADLINE_BUFFER_SECS // 60}分前)に間に合わない山があります。",
             f"対象山数: {len(overflow_yamas)}山（人工追加が必要）",
             "",
         ]

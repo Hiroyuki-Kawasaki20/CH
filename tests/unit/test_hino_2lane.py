@@ -27,7 +27,7 @@ def _run_once(detail_rows: list, master_rows: list) -> pd.DataFrame:
 
 class TestHino2LaneWraparound:
     def test_hino_real_master_set_off_order9_is_clamped_to_shift_floor_main(self):
-        """実マスタ値: セットなし9便は07便(00:24)参照でも開始が07:00未満にならない。"""
+        """実マスタ値: セットなし9便は07便(00:24)参照でも開始が各直開始+SHIFT_FIRST_TRIP_BUFFER_SECS(06:50)未満にならない。"""
         result = _run_once(
             detail_rows=[
                 {"山通番": 1, "移動工数": 0, "納入先": "日野", "NONYUHIBIN": "2026070709", "高さ": 300},
@@ -44,7 +44,7 @@ class TestHino2LaneWraparound:
         floor_secs = _shift_start_secs(0) + SHIFT_FIRST_TRIP_BUFFER_SECS
         assert start_secs is not None
         assert start_secs >= floor_secs
-        assert str(row["実開始時間"]) == "07:00"
+        assert str(row["実開始時間"]) == _seconds_to_hhmm(floor_secs)
 
     def test_hino_real_master_set_true_keeps_reference_priority(self):
         """実マスタ値: セットあり8便は参照時刻優先(下限クランプなし)のまま。"""
@@ -64,7 +64,7 @@ class TestHino2LaneWraparound:
         assert str(row["実開始時間"]) == expected
 
     def test_hino_split_loop_has_set_off_floor_clamp(self):
-        """yama_split_units_map側にも set_flag=False の06:40下限クランプが必要。"""
+        """yama_split_units_map側にも set_flag=False の各直開始+SHIFT_FIRST_TRIP_BUFFER_SECS 下限クランプが必要。"""
         src = inspect.getsource(_legacy_assign_processes_by_arrival_time)
         split_part = src.split("yama_split_units_map", 1)[1]
         assert "if not set_flag:" in split_part
@@ -105,7 +105,7 @@ class TestHino2LaneWraparound:
         assert str(row["実開始時間"]) == expected
 
     def test_hino_set_flag_off_first_trip_uses_shift_start_plus_buffer(self):
-        """セットなしの先頭便は各直開始+35分を開始下限にする。"""
+        """セットなしの先頭便は各直開始+SHIFT_FIRST_TRIP_BUFFER_SECS(25分)を開始下限にする。"""
         result = _run_once(
             detail_rows=[
                 {"山通番": 1, "移動工数": 0, "納入先": "日野", "NONYUHIBIN": "2026060101", "高さ": 300},
@@ -121,7 +121,7 @@ class TestHino2LaneWraparound:
         assert str(row["実開始時間"]) == expected
 
     def test_hino_set_flag_off_order9_uses_order8_not_order7(self):
-        """セットなしの日野9便は同レーン直前便を参照しつつ、2直開始+35分を下回らない。"""
+        """セットなしの日野9便は同レーン直前便を参照しつつ、2直開始+SHIFT_FIRST_TRIP_BUFFER_SECS(25分)を下回らない。"""
         result = _run_once(
             detail_rows=[
                 {"山通番": 1, "移動工数": 0, "納入先": "日野", "NONYUHIBIN": "2026060109", "高さ": 300},
@@ -178,7 +178,7 @@ class TestHino2LaneWraparound:
         assert "_is_hino_2lane_target(vendor)" in split_part
 
     def test_oriki_set_flag_off_first_trip_keeps_shift_floor(self):
-        """セットなし織機の1便目は 07:00 未満にならない。"""
+        """セットなし織機の1便目は 各直開始+SHIFT_FIRST_TRIP_BUFFER_SECS(06:50) 未満にならない。"""
         result = _run_once(
             detail_rows=[
                 {"山通番": 1, "移動工数": 0, "納入先": "織機", "NONYUHIBIN": "2026060101", "高さ": 300},
@@ -244,7 +244,7 @@ class TestHino2LaneWraparound:
         assert _seconds_to_hhmm(secs) == "06:00"
 
     def test_hino01_without_flag_does_not_wrap_and_uses_shift_plus_buffer(self):
-        """フラグなし先頭便は巻き戻らず、従来どおり各直開始+35分(07:00)になる。"""
+        """フラグなし先頭便は巻き戻らず、従来どおり各直開始+SHIFT_FIRST_TRIP_BUFFER_SECS(06:50)になる。"""
         result = _run_once(
             detail_rows=[
                 {"山通番": 1, "移動工数": 0, "納入先": "日野", "NONYUHIBIN": "2026060101", "高さ": 300},
@@ -261,7 +261,7 @@ class TestHino2LaneWraparound:
             ],
         )
         row = result.loc[result["山通番"] == 1].iloc[0]
-        assert str(row["実開始時間"]) == "07:00"
+        assert str(row["実開始時間"]) == _seconds_to_hhmm(_shift_start_secs(0) + SHIFT_FIRST_TRIP_BUFFER_SECS)
 
 
 class TestBackwardCompatibility:
