@@ -52,7 +52,7 @@ from src.services.process_assigner import (
     compute_proc_summary,
     _time_to_seconds, _seconds_to_hhmm, _to_operational_timeline_secs,
     _calc_work_end_with_breaks, ARRIVAL_BUFFER_SECS,
-    PICKUP_DEADLINE_BUFFER_SECS,   # ← 締切は20分。ARRIVAL_BUFFER_SECS(10分)は前便入車+10分の「床」用で別物
+    PICKUP_DEADLINE_BUFFER_SECS,   # ← 締切(入車10分前)。ARRIVAL_BUFFER_SECS(同じ10分)は前便入車+10分の「床」用で別物
  )
 from src.services.scheduler import (
     cluster_by_store,

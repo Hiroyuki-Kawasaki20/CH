@@ -323,23 +323,23 @@ class TestProcessAssigner:
 
     def test_lunch_break_limits_last_mountain_end_to_10min_before(self):
         """10:40/20:55の長休憩は、休憩10分前を超える作業を休憩後へ送る。"""
-        # 10:20開始 + 15分作業 = 10:35（10:30制限を超過）→ 12:00開始へ繰り下げ
+        # 10:20開始 + 15分作業 = 10:35（10:30制限を超過）→ 11:50開始へ繰り下げ
         start_1 = 10 * 3600 + 20 * 60
         adjusted_1 = _adjust_start_for_breaks(start_1, 15 * 60)
         assert adjusted_1 == 11 * 3600 + 50 * 60
 
-        # 20:40開始 + 10分作業 = 20:50（20:45制限を超過）→ 22 * 3600 + 5 * 60開始へ繰り下げ
+        # 20:40開始 + 10分作業 = 20:50（20:45制限を超過）→ 22:05開始へ繰り下げ
         start_2 = 20 * 3600 + 40 * 60
         adjusted_2 = _adjust_start_for_breaks(start_2, 10 * 60)
         assert adjusted_2 == 22 * 3600 + 5 * 60
 
     def test_lunch_break_first_mountain_starts_buffer_after_break(self):
-        """長休憩中に入る開始時刻は、休憩終了35分後へ調整する。"""
-        # 11:30は10:40-11:25休憩の直後帯 → 12:00
+        """長休憩中に入る開始時刻は、休憩終了25分後へ調整する。"""
+        # 11:30は10:40-11:25休憩の直後帯 → 11:50
         adjusted_1 = _adjust_start_for_breaks(11 * 3600 + 30 * 60)
         assert adjusted_1 == 11 * 3600 + 50 * 60
 
-        # 21:45は20:55-21:40休憩の直後帯 → 22 * 3600 + 5 * 60
+        # 21:45は20:55-21:40休憩の直後帯 → 22:05
         adjusted_2 = _adjust_start_for_breaks(21 * 3600 + 45 * 60)
         assert adjusted_2 == 22 * 3600 + 5 * 60
 
@@ -705,7 +705,7 @@ class TestProcessAssigner:
 
         result = assign_processes_by_arrival_time(compute_proc_details(df), master_df)
         start_1 = result.loc[result["山通番"] == 1, "実開始時間"].iloc[0]
-        # 1直始業06:25 + 35分 = 07:00
+        # 1直始業06:25 + 25分 = 06:50
         assert start_1 == "06:50"
 
     def test_overnight_hino_01_is_not_misclassified_as_shift_first_trip(self):
