@@ -18,3 +18,6 @@ openpyxl==3.1.5
 
 # GUI フレームワーク（CustomTkinter）
 customtkinter==5.2.2
+
+# テスト（開発時のみ必要。environment.yml 経由の場合は conda が導入する）
+pytest==9.0.3
