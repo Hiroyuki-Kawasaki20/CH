@@ -24,14 +24,14 @@ def test_floor_comes_from_master_even_if_prev_bin_absent_from_daily_data():
     m = build_bin_time_map(_master([("拠点A", "06", "13:00"), ("拠点A", "07", "13:30")]))
     floor, deadline = unit_floor_deadline("拠点A", "07", "13:30", m)
     assert floor == 13 * 3600 + 10 * 60      # 前便13:00 + 10分
-    assert deadline == 13 * 3600 + 10 * 60   # 入車13:30 − 20分
+    assert deadline == 13 * 3600 + 20 * 60   # 入車13:30 − 10分
 
 
 def test_bin01_has_no_floor_and_missing_arrival_has_no_deadline():
     m = build_bin_time_map(_master([("拠点B", "01", "12:20")]))
     floor, deadline = unit_floor_deadline("拠点B", "01", "12:20", m)
     assert floor == 0
-    assert deadline == 12 * 3600
+    assert deadline == 12 * 3600 + 10 * 60
     assert unit_floor_deadline("拠点X", "05", "", m) == (0, None)
 
 
@@ -51,7 +51,7 @@ def test_bin01_prev_wraps_to_last_bin_of_vendor():
     m = build_bin_time_map(_takaoka_like_master())
     floor, deadline = unit_floor_deadline("拠点D", "01", "22:59", m)
     assert floor == 18 * 3600 + 46 * 60 + 10 * 60  # 05便18:46 + 10分
-    assert deadline == 22 * 3600 + 59 * 60 - 20 * 60
+    assert deadline == 22 * 3600 + 59 * 60 - 10 * 60
 
 
 def test_prev_bin_across_midnight_does_not_invert_floor_past_deadline():
@@ -66,4 +66,4 @@ def test_prev_bin_same_day_no_crossing_matches_naive_calculation():
     m = build_bin_time_map(_takaoka_like_master())
     floor, deadline = unit_floor_deadline("拠点D", "03", "10:51", m)
     assert floor == 6 * 3600 + 45 * 60 + 10 * 60  # 02便06:45 + 10分
-    assert deadline == 10 * 3600 + 51 * 60 - 20 * 60
+    assert deadline == 10 * 3600 + 51 * 60 - 10 * 60

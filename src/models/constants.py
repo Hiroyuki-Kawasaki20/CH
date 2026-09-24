@@ -51,31 +51,42 @@ SPO_EXPORT_REQUIRED_COLUMNS = (
 )
 
 # ===== 休憩時間（秒単位） =====
+# ===== 短休憩（2026-09-24 現場合意：仕分け猶予 20分→10分） =====
+SHORT_BREAK_PURE_SECS = 10 * 60      # 純休憩（リリーフはこの10分だけを休憩として扱う）
+SHORT_BREAK_SORTING_SECS = 10 * 60   # 仕分け猶予（旧 20分）
+SHORT_BREAK_TOTAL_SECS = SHORT_BREAK_PURE_SECS + SHORT_BREAK_SORTING_SECS  # 引取できない時間 20分（旧 30分）
 BREAK_TIMES = [
     # 1直
-    (8 * 3600 + 30 * 60, 9 * 3600),                # 8:30~9:00
-    (10 * 3600 + 40 * 60, 11 * 3600 + 25 * 60),   # 10:40~11:25
-    (12 * 3600 + 55 * 60, 13 * 3600 + 25 * 60),   # 12:55~13:25
+    (8 * 3600 + 30 * 60, 8 * 3600 + 30 * 60 + SHORT_BREAK_TOTAL_SECS),    # 8:30~8:50
+    (10 * 3600 + 40 * 60, 11 * 3600 + 25 * 60),                           # 10:40~11:25（食事・変更なし）
+    (12 * 3600 + 55 * 60, 12 * 3600 + 55 * 60 + SHORT_BREAK_TOTAL_SECS),  # 12:55~13:15
     # 2直
-    (18 * 3600 + 45 * 60, 19 * 3600 + 15 * 60),   # 18:45~19:15
-    (20 * 3600 + 55 * 60, 21 * 3600 + 40 * 60),   # 20:55~21:40
-    (23 * 3600 + 10 * 60, 23 * 3600 + 40 * 60),   # 23:10~23:40
+    (18 * 3600 + 45 * 60, 18 * 3600 + 45 * 60 + SHORT_BREAK_TOTAL_SECS),  # 18:45~19:05
+    (20 * 3600 + 55 * 60, 21 * 3600 + 40 * 60),                           # 20:55~21:40（食事・変更なし）
+    (23 * 3600 + 10 * 60, 23 * 3600 + 10 * 60 + SHORT_BREAK_TOTAL_SECS),  # 23:10~23:30
 ]
 
 # ===== 時間バッファ（秒単位） =====
+# 朝一・昼明けの作業開始バッファの内訳（2026-09-24 現場合意: 35分 → 25分）
+#   移動15分 + 仕分け10分（旧: 仕分け20分）
+START_MOVE_SECS = 15 * 60
+START_SORTING_SECS = 10 * 60
+
 # 各直1便目の引取開始バッファ（直開始時刻 + この時間）
-SHIFT_FIRST_TRIP_BUFFER_SECS = 35 * 60
+SHIFT_FIRST_TRIP_BUFFER_SECS = START_MOVE_SECS + START_SORTING_SECS
 # 1便目クラスターの解禁バッファ（その便の入車時刻 + この時間）
-FIRST_BIN_RELEASE_BUFFER_SECS = 35 * 60
+FIRST_BIN_RELEASE_BUFFER_SECS = START_MOVE_SECS + START_SORTING_SECS
 # 長休憩（昼休憩）前: 休憩開始の何分前までに山を完了させるか
 LUNCH_PRE_MARGIN_SECS = 10 * 60
 # 長休憩後: 作業再開までのバッファ
-LUNCH_POST_RESUME_SECS = 35 * 60
+LUNCH_POST_RESUME_SECS = START_MOVE_SECS + START_SORTING_SECS
 # 長休憩後: 新しい山の開始をロックする時間
-LUNCH_POST_LOCK_SECS = 35 * 60
+LUNCH_POST_LOCK_SECS = START_MOVE_SECS + START_SORTING_SECS
 
 # 集荷完了の締切: 各便の入車時刻の何分前までに山を完了させるか
-PICKUP_DEADLINE_BUFFER_SECS = 20 * 60
+#   2026-09-24 現場合意: 20分 → 10分（1工程で引き取れる幅を広げるため）
+#   ※ ARRIVAL_BUFFER_SECS（前便入車+10分の開始下限）と同じ10分だが、意味が別なので1つにまとめない
+PICKUP_DEADLINE_BUFFER_SECS = 10 * 60
 # EDF比較の下限値。実運用データに 15 山ケースがあるため 15 に緩和するが、
 # 15 山の通常ビーム探索経路では既存の安定動作を優先し、EDF比較は 16 山以上でのみ適用する。
 EDF_COMPARE_MIN_YAMAS = 15
