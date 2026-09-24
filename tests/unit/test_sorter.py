@@ -316,10 +316,10 @@ class TestProcessAssigner:
         assert _seconds_to_hhmm(8 * 3600 + 30 * 60) == "08:30"
 
     def test_adjust_start_for_breaks(self):
-        # 8:35は休憩中(8:30-9:00)なので9:01に調整
+        # 8:35は休憩中(8:30-8:50)なので8:51に調整（C-6: 短休憩30分→20分）
         start = 8 * 3600 + 35 * 60
         adjusted = _adjust_start_for_breaks(start)
-        assert adjusted == 9 * 3600 + 1 * 60  # 9:01
+        assert adjusted == 8 * 3600 + 51 * 60  # 8:51
 
     def test_lunch_break_limits_last_mountain_end_to_10min_before(self):
         """10:40/20:55の長休憩は、休憩10分前を超える作業を休憩後へ送る。"""

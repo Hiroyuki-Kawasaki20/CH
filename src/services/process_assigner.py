@@ -18,7 +18,7 @@ _logger = logging.getLogger(__name__)
 from ..models.constants import (
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, PROC_MAIN_LABEL, PROC_RELIEF_LABEL,
-    BREAK_TIMES, is_virtual_yama,
+    BREAK_TIMES, SHORT_BREAK_PURE_SECS, is_virtual_yama,
     SHIFT_FIRST_TRIP_BUFFER_SECS, FIRST_BIN_RELEASE_BUFFER_SECS,
     LUNCH_PRE_MARGIN_SECS, LUNCH_POST_RESUME_SECS, LUNCH_POST_LOCK_SECS,
     PICKUP_DEADLINE_BUFFER_SECS,
@@ -54,13 +54,14 @@ def _break_policy(bs: int, be: int) -> Tuple[int, int, int]:
         return LUNCH_PRE_MARGIN_SECS, LUNCH_POST_RESUME_SECS, LUNCH_POST_LOCK_SECS
     return 0, 60, 0
 # ── Issue #119: リリーフ工程における短休憩の読み替え ──────────────
-# BREAK_TIMES の30分帯は「純休憩10分 + 仕分け猶予20分」の合計値
-# (docs/仕分け・割り振りルール.md §4.6)。仕分け猶予は1工程が仕分けを
+# BREAK_TIMES の短休憩帯(20分)は「純休憩10分 + 仕分け猶予10分」の合計値
+# (docs/仕分け・割り振りルール.md §4.6。2026-09-24 現場合意で猶予を20分→10分に短縮)。
+# 仕分け猶予は1工程が仕分けを
 # 終えるための猶予であり、リリーフ工程は猶予中も引取を開始してよい
 # (2026-08-28 現場確認)。そこでリリーフ評価時のみ短休憩を純休憩10分へ
 # 読み替える。食事休憩(SPECIAL_LUNCH_BREAKS・45分)と各直朝一バッファは
 # 一切変更しない。
-SHORT_BREAK_PURE_SECS = 10 * 60
+# SHORT_BREAK_PURE_SECS の定義は src/models/constants.py へ移動(C-6)。
 
 
 def _relief_break_times() -> List[Tuple[int, int]]:
@@ -2627,8 +2628,8 @@ def _legacy_assign_processes_by_arrival_time(
             int(mtn_prev_arrival_floor_map.get(yama_no) or 0),
             int(mtn_start_floor_map.get(yama_no) or 0),
         )
-        # Issue #119: リリーフは仕分け猶予20分中も引取を開始できるため、
-        # 短休憩を純休憩10分として評価する(食事45分・朝一バッファ SHIFT_FIRST_TRIP_BUFFER_SECS は不変)。
+        # Issue #119: リリーフは仕分け猶予(10分)中も引取を開始できるため、
+        # 短休憩を純休憩10分として評価する(食事休憩・朝一バッファは不変)。
         relief_breaks = _breaks_for_proc(PROC_RELIEF)
         shift_floor = _shift_start_secs(_shift_index_for_secs(int(gap_start)))
         break_floor = int(gap_start)
