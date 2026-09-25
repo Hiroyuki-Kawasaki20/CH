@@ -355,8 +355,6 @@ def _pick_next_main_mountain(
     latest_primary_start = _latest_start_to_meet_deadline(primary_deadline, primary_work)
     if latest_primary_start is not None and primary_start_now > latest_primary_start:
         return primary, False
-    if latest_primary_start is not None and primary_start_now > latest_primary_start:
-        return primary, False
 
     # ↓↓ 追加（C-7）ここから
     # main_end_time は初回 0 のため、実際にメインが空く時刻(lane_floor)で穴埋め可否を判定する

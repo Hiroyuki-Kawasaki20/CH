@@ -451,15 +451,22 @@ class TestProcessAssigner:
         assert summary.loc[summary["山通番"] == 1, "メイン工程"].values[0] == 1
         assert summary.loc[summary["山通番"] == 2, "リリーフ工程"].values[0] == 1
 
-    def test_dynamic_prefetch_keeps_primary_deadline(self):
-        """主対象の締切を守れる場合のみ、別第の山を前倒しできる。
+    def test_dynamic_prefetch_keeps_primary_deadline(self, monkeypatch):
+        """主対象の締切を守れる場合のみ、別の山を前倒しできる（旧ロジック=GAP_ONLY無効時の確認）。
+
+        C-7(MAIN_PREFETCH_GAP_ONLY)は、この土台判定に「主対象の待ち時間に収まる場合だけ」
+        という制約を追加でかぶせるため、既定True環境では山2は前倒しされない
+        （山1の開始下限が0=待ち時間なしのため）。このテストは土台のロジックを
+        GAP_ONLY=False に固定して確認する。GAP_ONLY有効時の挙動は
+        test_c7_prefetch_gap_only.py で確認する。
 
         シナリオ:
-          山通番1 (A-01, 締分1 09:20) ... 最早締切 = primary
-          山通番2 (B-01, 締分2 10:00) ... start_floor=0（初便）→前倒し可能
-          山通番3 (A-02, 締分3 14:00) ... start_floor=09:30→mountain1時刻超過のため前倒し不可
+          山通番1 (A-01, 締切1 09:20) ... 最早締切 = primary
+          山通番2 (B-01, 締切2 10:00) ... start_floor=0（初便）→前倒し可能
+          山通番3 (A-02, 締切3 14:00) ... start_floor=09:30→mountain1時刻超過のため前倒し不可
         期待: mountain2が前倒し(True)、全山MAIN。
         """
+        monkeypatch.setattr("src.services.process_assigner.MAIN_PREFETCH_GAP_ONLY", False)
         df = pd.DataFrame({
             "山通番": [1, 2, 3],
             "移動工数": [0, 0, 0],
