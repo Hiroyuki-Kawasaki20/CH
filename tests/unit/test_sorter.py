@@ -644,7 +644,7 @@ class TestProcessAssigner:
             assert end_secs <= int(deadline_map[yama])
 
     def test_start_floor_shift_first_trip_without_set_flag_uses_shift_start_plus_buffer(self):
-        """セットなし各直1便目は「各直開始+35分」を開始下限にする。"""
+        """セットなし各直1便目は「各直開始+25分」を開始下限にする。"""
         df = pd.DataFrame({
             "山通番": [1, 2],
             "移動工数": [0, 0],
@@ -688,7 +688,7 @@ class TestProcessAssigner:
         assert start_1 != "06:40"
 
     def test_hino_01_without_set_flag_uses_shift_start_plus_buffer(self):
-        """日野でもセットなし各直1便目は「各直開始+35分」を開始下限にする。"""
+        """日野でもセットなし各直1便目は「各直開始+25分」を開始下限にする。"""
         df = pd.DataFrame({
             "山通番": [1],
             "移動工数": [0],
