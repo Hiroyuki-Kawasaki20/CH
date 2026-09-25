@@ -135,5 +135,6 @@ def is_virtual_yama(yama) -> bool:
 # False: 従来どおり。主対象の締切を守れれば、締切の遅い山も先に割り込める
 # True : 締切が違う山の前倒しは「主対象が待たされている時間」に収まる場合だけ許可
 #        （同じ締切＝同じ便どうしの入れ替えは従来どおり）
-# 実データでの検証と現場の合意が済むまでは False のまま運用する。
-MAIN_PREFETCH_GAP_ONLY: bool = False
+# 実データでの検証と現場の合意が済むまでは True のまま運用する。
+MAIN_PREFETCH_GAP_ONLY: bool = True
+
