@@ -25,6 +25,7 @@ from ..models.constants import (
     EDF_COMPARE_MIN_YAMAS,
     EDF_SWAP_MAX_ITERATIONS,
     SPLIT_UKEIRE_ROUTES,
+    MAIN_PREFETCH_GAP_ONLY
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -317,6 +318,7 @@ def _pick_next_main_mountain(
     unscheduled: List[dict],
     main_end_time: int,
     main_mountain_count: int,
+    lane_floor: int = 0,
 ) -> Tuple[dict, bool]:
     """
     次にメイン工程で処理する山を返す。
@@ -353,7 +355,17 @@ def _pick_next_main_mountain(
     latest_primary_start = _latest_start_to_meet_deadline(primary_deadline, primary_work)
     if latest_primary_start is not None and primary_start_now > latest_primary_start:
         return primary, False
+    if latest_primary_start is not None and primary_start_now > latest_primary_start:
+        return primary, False
 
+    # ↓↓ 追加（C-7）ここから
+    # main_end_time は初回 0 のため、実際にメインが空く時刻(lane_floor)で穴埋め可否を判定する
+    if MAIN_PREFETCH_GAP_ONLY:
+        gap_now = max(int(main_end_time), int(lane_floor or 0))
+        gap_primary_start, _, _ = _floored_schedule(
+            gap_now, main_mountain_count, primary_work, primary_floor
+        )
+    # ↑↑ 追加（C-7）ここまで
     safe_prefetch = []
     for cand in unscheduled:
         if int(cand["山通番"]) == int(primary["山通番"]):
@@ -364,7 +376,16 @@ def _pick_next_main_mountain(
         )
         cand_floor = cand.get("開始時間_秒")
         cand_start, cand_end, _ = _floored_schedule(main_end_time, main_mountain_count, cand_work, cand_floor)
-
+        # ↓↓ 追加（C-7）ここから
+        # 締切が違う山は、主対象の待ち時間にまるごと収まるときだけ前倒し可
+        # （締切が同じ＝同じ便どうしの入れ替えは従来どおり）
+        if MAIN_PREFETCH_GAP_ONLY and cand_deadline != primary_deadline:
+            _, gap_cand_end, _ = _floored_schedule(
+                gap_now, main_mountain_count, cand_work, cand_floor
+            )
+            if gap_cand_end > gap_primary_start:
+                continue
+        # ↑↑ 追加（C-7）ここまで
         # 候補山自身の締切を守れない前倒しは不可
         if cand_deadline is not None and cand_end > cand_deadline:
             continue
@@ -1403,6 +1424,7 @@ def _legacy_assign_processes_by_arrival_time(
             unscheduled=unscheduled,
             main_end_time=main_end_time,
             main_mountain_count=main_mountain_count,
+            lane_floor=prev_main_end,
         )
 
         yama = int(m["山通番"])
