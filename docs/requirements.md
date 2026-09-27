@@ -87,7 +87,7 @@ CHかんばんセットは、CH受入で発行されるかんばんの仕分け�
 ```
 引取工数 = Max移動工数 + BASE_ONE_TIME + (パレット数 - 1) × MIDDLE_WORK + パレット数 × BASE_PER_PAL
 ```
-- `BASE_ONE_TIME` = 187.64
+- `BASE_ONE_TIME` = 127.64
 - `MIDDLE_WORK` = 3.247
 - `BASE_PER_PAL` = 52
 ## 4. 非機能要件
