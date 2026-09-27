@@ -10,7 +10,7 @@ DEFAULT_HEIGHT_CAP = 2450               # 高さ上限（mm）
 # それ以外の通常山はDEFAULT_HEIGHT_CAP(2450mm)のまま（#78のDEFAULT一律2500案は不採用）。
 SPECIAL_HINBAN = "631426010000"         # 種類1の特例対象品番
 SPECIAL_HINBAN_HEIGHT_CAP = 2500         # 特例品番を1件でも含む山の高さ上限（mm）
-BASE_ONE_TIME = 187.64                  # 基礎一回工数
+BASE_ONE_TIME = 127.64                  # 基礎一回工数
 MIDDLE_WORK = 3.247                     # 中間作業工数
 BASE_PER_PAL = 52                       # パレット単位工数
 
