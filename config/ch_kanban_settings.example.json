@@ -1,6 +1,6 @@
 {
-  "base_dir": "C:\\Users\\1588386\\トヨタ自動車株式会社\\資材物流課　車体部　連絡・共有 - 発注情報_河崎",
-  "export_dir": "C:\\Users\\1588386\\トヨタ自動車株式会社\\資材物流課　車体部　連絡・共有 - テスト_河崎",
+  "base_dir": "C:\\Users\\YOUR_NUMBER\\YOUR_COMPANY\\YOUR_DEPARTMENT\\SharedFolder - 発注情報",
+  "export_dir": "C:\\Users\\YOUR_NUMBER\\YOUR_COMPANY\\YOUR_DEPARTMENT\\SharedFolder - テスト",
   "height_cap": 2450,
   "worker_speed_sec_per_unit": 3.0,
   "work_start_time": "08:00",
