@@ -12,6 +12,7 @@ test_size1_21_matches_worker_grouping / test_yama_count_is_minimum が失敗す�
 test_other_sizes_keep_current_grouping は今のままで通る（回帰防止）。
 """
 
+import logging
 import math
 from collections import Counter
 
@@ -19,7 +20,15 @@ import pandas as pd
 import pytest
 
 from src.models.constants import DEFAULT_HEIGHT_CAP
-from src.services.sorter import UNKNOWN_STORE_AREA, _area_row_of, _build_size1_mixed, run_pipeline
+from src.services import sorter
+from src.services.sorter import (
+    UNKNOWN_STORE_AREA,
+    _add_arrival_time_column,
+    _add_truck_key_column,
+    _area_row_of,
+    _build_size1_mixed,
+    run_pipeline,
+)
 
 
 class _StubDataManager:
@@ -231,6 +240,7 @@ def test_other_sizes_keep_current_grouping():
     actual = _other_size_yamas(group_details)
     assert actual == _EXPECTED_OTHER_SIZES, _explain(actual, _EXPECTED_OTHER_SIZES)
 
+
 # ==== 実装 A 回（R1〜R3）の単体テスト =======================================
 
 @pytest.mark.parametrize(
@@ -298,6 +308,8 @@ def test_local_stack_keeps_same_ukeire_together():
     _, details = _build_size1_mixed(pd.DataFrame(rows), DEFAULT_HEIGHT_CAP, mixing_key="UKEIRE")
     ukeire_by_yama = details.groupby("山通番")["UKEIRE"].apply(lambda s: sorted(set(s)))
     assert sorted(ukeire_by_yama.tolist()) == [["06"], ["07"]]
+
+
 # ==== 実装 B 回（R4〜R5）の単体テスト =======================================
 
 def _mix_row(vendor, store, height, move, arrival="", bin2="01"):
@@ -367,3 +379,42 @@ def test_at_most_three_bins_per_yama():
         _mix_row("店D", "C15-A-4", 500, 7.0),
     ]
     assert _mix_yamas(rows) == [["店A@C15-A-1", "店B@C15-A-2", "店C@C15-A-3"], ["店D@C15-A-4"]]
+
+
+# ==== 実装 C 回（R7 安全弁）の単体テスト ====================================
+
+def test_legacy_mode_reproduces_main_result():
+    """R7: 比べる相手の従来ロジック（_legacy=True）は、main と同じくサイズ1/21 が7山になる。"""
+    master = _master()
+    expanded = pd.DataFrame([_pallet_row(*p) for p in _PALLETS])
+    expanded = _add_truck_key_column(_add_arrival_time_column(expanded, master))
+    _, legacy_details = _build_size1_mixed(
+        expanded, DEFAULT_HEIGHT_CAP, "UKEIRE", master_df=master, _legacy=True
+    )
+    assert legacy_details["山通番"].nunique() == 7
+
+
+def test_safety_valve_uses_legacy_when_new_logic_makes_more_yamas(monkeypatch, caplog):
+    """R7: 新しいまとめ方で山が増えるときは、従来の結果を使い、ログに残す。"""
+    rows = [
+        _mix_row("店A", "C15-A-1", 1000, 10.0),
+        _mix_row("店B", "C15-B-1", 1000, 9.0),
+    ]
+    # 新しいまとめ方を「1つもまとめない」に差し替えて、わざと山を増やす（2山 > 従来の1山）
+    monkeypatch.setattr(sorter, "_match_units_staged", lambda units, height_cap: {})
+    with caplog.at_level(logging.INFO, logger=sorter.logger.name):
+        assert _mix_yamas(rows) == [["店A@C15-A-1", "店B@C15-B-1"]]
+    assert "[R7]" in caplog.text
+
+
+def test_safety_valve_keeps_new_logic_when_not_worse(caplog):
+    """R7: 山の数が従来と同じなら、新しいまとめ方の結果を使う（ログは出さない）。"""
+    rows = [
+        _mix_row("店A", "C15-A-1", 1200, 10.0),
+        _mix_row("店B", "C15-A-2", 600, 9.0),
+        _mix_row("店C", "C15-B-1", 1200, 8.0),
+    ]
+    # 従来は 店A+店C／店B、新しい方は 店A+店B／店C。どちらも2山なので新しい方を使う
+    with caplog.at_level(logging.INFO, logger=sorter.logger.name):
+        assert _mix_yamas(rows) == [["店A@C15-A-1", "店B@C15-A-2"], ["店C@C15-B-1"]]
+    assert "[R7]" not in caplog.text

@@ -13,6 +13,7 @@ from ..models.constants import (
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
     SIZE5_TYPE, SIZE5_MAX_PALLETS_PER_YAMA,
     SPLIT_UKEIRE_ROUTES, HINO_VENDOR_PREFIX, PICKUP_DEADLINE_BUFFER_SECS,
+    MAX_BINS_PER_YAMA,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -93,6 +94,8 @@ def _add_area_row_columns(df: pd.DataFrame) -> pd.DataFrame:
     df["_area"] = pairs.map(lambda p: p[0])
     df["_row"] = pairs.map(lambda p: p[1])
     return df
+
+
 def _target_takaoka_mask(df: pd.DataFrame) -> pd.Series:
     if df is None or df.empty:
         return pd.Series(dtype=bool)
@@ -621,8 +624,7 @@ def run_pipeline(
     return filtered, expanded, group_results, group_details, size1_mixed_summary, size1_mixed_details
 
 # ===== 山組みの6段階まとめ（docs/要件_山組みエリア列集約.md R4〜R6） =====
-# 1山に混ぜる便（納入先×NONYUHIBIN下2桁）の上限（R5。現場ルール、要件書 §3 #7）
-MAX_BINS_PER_YAMA = 3
+# 1山に混ぜる便の上限 MAX_BINS_PER_YAMA（R5）は src/models/constants.py で定義している
 
 # R4 の6段階: (段階名, 同じ列が必須, 同じエリアが必須, 同じトラックが必須)
 _STAGED_MATCH_SCOPES = (
@@ -792,8 +794,19 @@ def _match_units_staged(units: pd.DataFrame, height_cap: float) -> dict:
                 base.absorb(partner)
                 del yamas[partner.id]
     return {m["id"]: y.id for y in yamas.values() for m in y.members if m["id"] != y.id}
-def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
-    """種類1/21の混載処理（1/21以外は対象外）。"""
+
+
+def _sort_by_move_desc(df: pd.DataFrame) -> pd.DataFrame:
+    """従来（要件 R3 より前）の積む順番: 移動工数の大きい順だけ。R7 の比較用。"""
+    return df.sort_values(by=["移動工数"], ascending=[False]).copy()
+
+
+def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None, _legacy=False):
+    """種類1/21の混載処理（1/21以外は対象外）。
+
+    _legacy=True のときは、要件 R1〜R5 を入れる前（main）と同じ組み方をする（R7 の比較用）。
+    通常（False）は新しいまとめ方で組み、最後に R7 の安全弁で従来の山数と比べる。
+    """
     stype = expanded["サイズ種類"].astype(str).str.strip()
     size1_df = expanded.loc[stype.isin(["1", "21"])].copy()
     if size1_df.empty:
@@ -829,7 +842,10 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
     if "_truck_key" not in size1_df.columns:
         size1_df = _add_truck_key_column(size1_df)
     size1_df = _add_aisle_column(size1_df)  # Issue #146: アイル(ストア先頭1文字)列を付与
-    size1_df = _add_area_row_columns(size1_df)  # 要件 R1: エリア(_area)・列(_row)を付与
+    if not _legacy:
+        size1_df = _add_area_row_columns(size1_df)  # 要件 R1: エリア(_area)・列(_row)を付与
+    # 要件 R3: 受入ごとに積む（従来ロジックは移動工数の大きい順だけ）
+    stack_sort = _sort_by_move_desc if _legacy else _sort_for_local_stack
 
     # まずは便単位×納入先×層役割（1/21）×エリア×列で高さ積みしてローカル山を作る。
     # Issue #135 Step2: 「納入先」を追加（詳細は _size1_local_group_cols の docstring）
@@ -840,8 +856,8 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
     for _, sub in size1_df.groupby(local_group_cols, sort=False):
         # 特例品番(SPECIAL_HINBAN)行は通常行と分けて別capで積む（山に混在すればcap=2500になるのは後段の統合判定で処理）。
         # 要件 R3: 受入ごとにまとめ、その中は移動工数の大きい順に積む
-        sub_special = _sort_for_local_stack(sub[sub["_has_special_hinban"]])
-        sub_normal = _sort_for_local_stack(sub[~sub["_has_special_hinban"]])
+        sub_special = stack_sort(sub[sub["_has_special_hinban"]])
+        sub_normal = stack_sort(sub[~sub["_has_special_hinban"]])
         base_group = 0
         parts = []
         if not sub_special.empty:
@@ -898,8 +914,9 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
             "TRACE#135 混載判定の入力ユニット（高さ合計 降順＝処理順）\n%s",
             group_table[_uc].sort_values("高さ合計", ascending=False).to_string(index=False),
         )
-    # 要件 R4〜R6: 列 → エリア → 全体の6段階でまとめる
-    id_map = _match_units_staged(group_table, float(height_cap))
+    # 要件 R4〜R6: 列 → エリア → 全体の6段階でまとめる（従来ロジックは旧マッチング）
+    match_fn = _match_units_with_layer_rules if _legacy else _match_units_staged
+    id_map = match_fn(group_table, float(height_cap))
 
     def repr_id(x: int) -> int:
         while x in id_map:
@@ -1039,6 +1056,19 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
         .sort_values(by=["山通番", "_stack_order", "移動工数"], ascending=[True, True, False])
         .drop(columns=["_stack_order"])
     )
+    # 要件 R7（安全弁）: 従来ロジック（main と同じ組み方）でも組み、山が増えるなら従来の結果を使う
+    if not _legacy:
+        legacy_summary, legacy_details = _build_size1_mixed(
+            expanded, height_cap, mixing_key, master_df=master_df, _legacy=True
+        )
+        new_count = int(size1_mixed_details["山通番"].nunique())
+        legacy_count = int(legacy_details["山通番"].nunique())
+        if new_count > legacy_count:
+            logger.info(
+                "[R7] 山組みの安全弁: 新しいまとめ方の山数(%d)が従来(%d)より多いため、従来の結果を使います",
+                new_count, legacy_count,
+            )
+            return legacy_summary, legacy_details
     return size1_mixed_summary, size1_mixed_details
 
 
