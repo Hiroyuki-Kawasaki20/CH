@@ -16,9 +16,10 @@ import math
 from collections import Counter
 
 import pandas as pd
+import pytest
 
 from src.models.constants import DEFAULT_HEIGHT_CAP
-from src.services.sorter import run_pipeline
+from src.services.sorter import UNKNOWN_STORE_AREA, _area_row_of, _build_size1_mixed, run_pipeline
 
 
 class _StubDataManager:
@@ -165,8 +166,8 @@ def _fmt(sig):
     return " + ".join(f"{v}{u}-{b} {s}" for v, u, b, s in sig)
 
 
-def _explain(actual, expected):
-    lines = ["作業者の手組みと一致しません。"]
+def _explain(actual, expected, title="作業者の手組みと一致しません。"):
+    lines = [title]
     lines += [f"  出なかった山: {_fmt(s)}" for s in (expected - actual).elements()]
     lines += [f"  余計な山    : {_fmt(s)}" for s in (actual - expected).elements()]
     return "\n".join(lines)
@@ -229,3 +230,71 @@ def test_other_sizes_keep_current_grouping():
     group_details, _ = _run()
     actual = _other_size_yamas(group_details)
     assert actual == _EXPECTED_OTHER_SIZES, _explain(actual, _EXPECTED_OTHER_SIZES)
+
+# ==== 実装 A 回（R1〜R3）の単体テスト =======================================
+
+@pytest.mark.parametrize(
+    "store, expected",
+    [
+        ("Q10-A-24", ("Q10", "Q10-A")),
+        ("Q10-B-B", ("Q10", "Q10-B")),
+        ("C15-A-3", ("C15", "C15-A")),
+        ("Q9-A-1", ("Q9", "Q9-A")),  # Q9 と Q10 は別エリア（要件書 §3 #3）
+        (" L12-C-5 ", ("L12", "L12-C")),
+        ("Q10", (UNKNOWN_STORE_AREA, UNKNOWN_STORE_AREA)),
+        ("", (UNKNOWN_STORE_AREA, UNKNOWN_STORE_AREA)),
+        (None, (UNKNOWN_STORE_AREA, UNKNOWN_STORE_AREA)),
+        (float("nan"), (UNKNOWN_STORE_AREA, UNKNOWN_STORE_AREA)),
+    ],
+)
+def test_area_row_of(store, expected):
+    """R1: ストアからエリアと列を取り出す。「-」が無い・空・欠損は「不明」。"""
+    assert _area_row_of(store) == expected
+
+
+# 要件書 §9 の 15 個（H1〜H7, O1, K1〜K5, T1〜T2）
+_EXPECTED_LOCAL_YAMAS = Counter([
+    _yama(("日野", "07", "02", "Q10-A-24")),                                          # H1 特例品番
+    _yama(("日野", "06", "02", "Q10-A-11"), ("日野", "06", "02", "Q10-A-12"),
+          ("日野", "06", "02", "Q10-A-13")),                                          # H2
+    _yama(("日野", "06", "02", "Q10-A-10")),                                          # H3
+    _yama(("日野", "07", "02", "Q10-B-7")),                                           # H4
+    _yama(("日野", "07", "02", "Q10-D-25")),                                          # H5
+    _yama(("日野", "W5", "02", "Q10-A-20"), ("日野", "W5", "02", "Q10-A-20"),
+          ("日野", "W5", "02", "Q10-A-22")),                                          # H6
+    _yama(("日野", "07", "02", "Q10-B-3"), ("日野", "07", "02", "Q10-B-B")),            # H7
+    _yama(("織機", "28", "07", "C15-A-3"), ("織機", "28", "07", "C15-A-3")),            # O1
+    _yama(("KVC", "B3", "02", "C15-A-1")),                                            # K1
+    _yama(("KVC", "B7", "02", "L12-C-5")),                                            # K2
+    _yama(("KVC", "B7", "02", "L12-D-8")),                                            # K3
+    _yama(("KVC", "B7", "01", "C15-A-1")),                                            # K4
+    _yama(("KVC", "B7", "01", "L12-D-8")),                                            # K5
+    _yama(("高岡", "K5", "05", "C15-A-3")),                                           # T1
+    _yama(("高岡", "K5", "05", "L12-C-5")),                                           # T2
+])
+
+_LOCAL_KEYS = ["NONYUHIBIN", "納入先", "サイズ種類", "_row", "ローカルグループ番号"]
+
+
+def test_local_yamas_are_split_by_row():
+    """R2: ローカル山は列（例: Q10-A）・エリアをまたがない。"""
+    _, size1_details = _run()
+    actual = _yamas(size1_details, _LOCAL_KEYS)
+    assert actual == _EXPECTED_LOCAL_YAMAS, _explain(
+        actual, _EXPECTED_LOCAL_YAMAS, title="ローカル山が要件書 §9 と一致しません。"
+    )
+
+
+def test_local_stack_keeps_same_ukeire_together():
+    """R3: 同じローカル山の候補の中では、同じ受入を続けて積む。
+
+    移動工数の順だけだと 07(10) → 06(9) → 07(8) の順に積まれ、07 と 06 が混ざる。
+    """
+    rows = [
+        _pallet_row("店A", "07", "2026093002", "Q10-A-1", "1", "100000000001", "1", 1000, 10.0),
+        _pallet_row("店A", "06", "2026093002", "Q10-A-2", "2", "100000000002", "1", 1000, 9.0),
+        _pallet_row("店A", "07", "2026093002", "Q10-A-3", "3", "100000000003", "1", 1000, 8.0),
+    ]
+    _, details = _build_size1_mixed(pd.DataFrame(rows), DEFAULT_HEIGHT_CAP, mixing_key="UKEIRE")
+    ukeire_by_yama = details.groupby("山通番")["UKEIRE"].apply(lambda s: sorted(set(s)))
+    assert sorted(ukeire_by_yama.tolist()) == [["06"], ["07"]]

@@ -66,6 +66,33 @@ def _aisle_set(series: pd.Series) -> frozenset:
     """グループ内に出現するアイルの集合（空文字は除外）を返す。"""
     return frozenset(a for a in series.astype(str) if a)
 
+
+# ===== 山組みのエリア・列（docs/要件_山組みエリア列集約.md R1） =====
+# ストアを「-」で区切った1つ目がエリア（Q10）、1〜2つ目が列（Q10-A）。
+# 「-」が無い・空・欠損のストアは「不明」とし、場所でまとめる段階の対象外にする（R4 段階5・6 でだけ混ぜる）。
+UNKNOWN_STORE_AREA = "不明"
+
+
+def _area_row_of(store) -> tuple:
+    """ストア（例: Q10-A-24）からエリア（Q10）と列（Q10-A）を取り出す。"""
+    if store is None or (isinstance(store, float) and pd.isna(store)):
+        return UNKNOWN_STORE_AREA, UNKNOWN_STORE_AREA
+    parts = [p.strip() for p in str(store).strip().split("-")]
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        return UNKNOWN_STORE_AREA, UNKNOWN_STORE_AREA
+    return parts[0], f"{parts[0]}-{parts[1]}"
+
+
+def _add_area_row_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """ストア列からエリア（_area）と列（_row）を付与する。ストア列が無ければ全行「不明」。"""
+    if "ストア" not in df.columns:
+        df["_area"] = UNKNOWN_STORE_AREA
+        df["_row"] = UNKNOWN_STORE_AREA
+        return df
+    pairs = df["ストア"].map(_area_row_of)
+    df["_area"] = pairs.map(lambda p: p[0])
+    df["_row"] = pairs.map(lambda p: p[1])
+    return df
 def _target_takaoka_mask(df: pd.DataFrame) -> pd.Series:
     if df is None or df.empty:
         return pd.Series(dtype=bool)
@@ -184,7 +211,28 @@ def _size1_local_group_cols(size1_df: pd.DataFrame) -> list:
     if "納入先コード" in size1_df.columns:
         idx = cols.index("_role_class")
         cols.insert(idx, "納入先コード")
+    # 要件 R2: エリア・列もキーにして、場所をまたいでローカル山を積まない
+    # （例: 高岡05便の C15-A-3 と L12-C-5、日野02便の Q10-A と Q10-B は別のローカル山）。
+    for c in ("_area", "_row"):
+        if c in size1_df.columns:
+            cols.append(c)
     return cols
+
+
+def _sort_for_local_stack(df: pd.DataFrame) -> pd.DataFrame:
+    """ローカル山に積む順番を決める（要件 R3）。
+
+    受入（UKEIRE）ごとにまとめて積み、受入の中は移動工数の大きい順。
+    受入どうしは「その受入の最大移動工数」が大きい順に並べるので、受入が1種類なら従来と同じ順になる。
+    UKEIRE 列が無いときは従来どおり移動工数の大きい順だけ。
+    """
+    if df.empty or "UKEIRE" not in df.columns:
+        return df.sort_values(by=["移動工数"], ascending=[False]).copy()
+    work = df.copy()
+    work["_uk"] = work["UKEIRE"].astype(str).str.strip()
+    work["_uk_max"] = pd.to_numeric(work["移動工数"], errors="coerce").groupby(work["_uk"]).transform("max")
+    work = work.sort_values(by=["_uk_max", "_uk", "移動工数"], ascending=[False, True, False])
+    return work.drop(columns=["_uk", "_uk_max"])
 
 
 def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.DataFrame:
@@ -610,18 +658,19 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
     if "_truck_key" not in size1_df.columns:
         size1_df = _add_truck_key_column(size1_df)
     size1_df = _add_aisle_column(size1_df)  # Issue #146: アイル(ストア先頭1文字)列を付与
+    size1_df = _add_area_row_columns(size1_df)  # 要件 R1: エリア(_area)・列(_row)を付与
 
-    # まずは便単位×納入先×層役割（1/21）で高さ積みしてローカル山を作る。
-
-    # まずは便単位×納入先×層役割（1/21）で高さ積みしてローカル山を作る。
+    # まずは便単位×納入先×層役割（1/21）×エリア×列で高さ積みしてローカル山を作る。
     # Issue #135 Step2: 「納入先」を追加（詳細は _size1_local_group_cols の docstring）
+    # 要件 R2: 「エリア」「列」を追加
     local_group_cols = _size1_local_group_cols(size1_df)
 
     packed_list = []
     for _, sub in size1_df.groupby(local_group_cols, sort=False):
         # 特例品番(SPECIAL_HINBAN)行は通常行と分けて別capで積む（山に混在すればcap=2500になるのは後段の統合判定で処理）。
-        sub_special = sub[sub["_has_special_hinban"]].sort_values(by=["移動工数"], ascending=[False]).copy()
-        sub_normal = sub[~sub["_has_special_hinban"]].sort_values(by=["移動工数"], ascending=[False]).copy()
+        # 要件 R3: 受入ごとにまとめ、その中は移動工数の大きい順に積む
+        sub_special = _sort_for_local_stack(sub[sub["_has_special_hinban"]])
+        sub_normal = _sort_for_local_stack(sub[~sub["_has_special_hinban"]])
         base_group = 0
         parts = []
         if not sub_special.empty:
