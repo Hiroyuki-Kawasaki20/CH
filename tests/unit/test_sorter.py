@@ -1357,11 +1357,11 @@ class TestSecondPassMatching:
 class TestAislePreference:
     """Issue #146: 同アイル(ストア先頭1文字)優先による山組みの検証。"""
 
-    def test_prefers_same_aisle_partner_over_closer_height_fit(self):
-        """アイル一致が高さフィットより優先されること（山1ケース）。"""
+    def test_prefers_same_area_partner_over_closer_height_fit(self):
+        """要件 R4（旧 Issue #146 のアイル優先）: 高さがぴったりの相手より、同じエリアの相手を先に組む。"""
         expanded = pd.DataFrame([
             {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 1000, "移動工数": 10, "納入先": "店A", "ストア": "C10-A-1"},
-            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 990, "移動工数": 9, "納入先": "店B", "ストア": "C20-B-2"},
+            {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 990, "移動工数": 9, "納入先": "店B", "ストア": "C10-B-2"},
             {"サイズ種類": "1", "NONYUHIBIN": "01", "高さ": 995, "移動工数": 8, "納入先": "店C", "ストア": "D10-A-1"},
         ])
 
