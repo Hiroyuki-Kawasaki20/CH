@@ -620,7 +620,178 @@ def run_pipeline(
 
     return filtered, expanded, group_results, group_details, size1_mixed_summary, size1_mixed_details
 
+# ===== 山組みの6段階まとめ（docs/要件_山組みエリア列集約.md R4〜R6） =====
+# 1山に混ぜる便（納入先×NONYUHIBIN下2桁）の上限（R5。現場ルール、要件書 §3 #7）
+MAX_BINS_PER_YAMA = 3
 
+# R4 の6段階: (段階名, 同じ列が必須, 同じエリアが必須, 同じトラックが必須)
+_STAGED_MATCH_SCOPES = (
+    ("同じ列×同じトラック", True, False, True),
+    ("同じ列", True, False, False),
+    ("同じエリア×同じトラック", False, True, True),
+    ("同じエリア", False, True, False),
+    ("同じトラック", False, False, True),
+    ("制限なし", False, False, False),
+)
+
+
+def _to_float(value, default: float) -> float:
+    """数値にできない値・欠損は default にする。"""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    return default if pd.isna(f) else f
+
+
+def _to_key_str(value) -> str:
+    """キー用の文字列にする（欠損は空文字）。"""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    return str(value).strip()
+
+
+class _StagedYama:
+    """6段階まとめの途中の山（ローカル山の集まり）。"""
+
+    def __init__(self, unit: dict):
+        self.id = unit["id"]  # 代表のローカル山ID（同じ高さ・同じ工数のときの「元の順」）
+        self.members = [unit]
+        self.height = unit["height"]
+        self.move = unit["move"]
+        self.special = unit["special"]
+        self.has21 = unit["has21"]
+        self.rows = {unit["row"]}
+        self.areas = {unit["area"]}
+        self.trucks = {unit["truck"]}
+        self.bins = {unit["bin"]}
+        self.vendor_trucks = {unit["vendor"]: {unit["truck"]}}
+        self.floor = unit["floor"]
+        self.deadline = unit["deadline"]
+
+    def absorb(self, other: "_StagedYama") -> None:
+        self.members.extend(other.members)
+        self.height += other.height
+        self.move = max(self.move, other.move)
+        self.special = self.special or other.special
+        self.has21 = self.has21 or other.has21
+        self.rows |= other.rows
+        self.areas |= other.areas
+        self.trucks |= other.trucks
+        self.bins |= other.bins
+        for vendor, trucks in other.vendor_trucks.items():
+            self.vendor_trucks.setdefault(vendor, set()).update(trucks)
+        self.floor = max(self.floor, other.floor)
+        self.deadline = min(self.deadline, other.deadline)
+
+    def sort_key(self) -> tuple:
+        """高い順 → 移動工数の大きい順 → 元の順（R4）。"""
+        return (-self.height, -self.move, self.id)
+
+
+def _staged_unit_records(units: pd.DataFrame) -> list:
+    """ローカル山の表を、6段階まとめ用の dict のリストにする。"""
+    has_time = {"_床秒", "_締切秒"}.issubset(units.columns)
+    records = []
+    for _, u in units.iterrows():
+        vendor = _to_key_str(u.get("納入先"))
+        nony = _to_key_str(u.get("NONYUHIBIN"))
+        records.append({
+            "id": int(u["山ID"]),
+            "height": _to_float(u.get("高さ合計"), 0.0),
+            "move": _to_float(u.get("Max移動工数"), float("-inf")),
+            "has1": bool(u.get("_has_size1", False)),
+            "has21": bool(u.get("_has_size21", False)),
+            "special": bool(u.get("_has_special_hinban", False)),
+            "vendor": vendor,
+            "nony": nony,
+            "bin": (vendor, nony[-2:]),
+            "truck": _to_key_str(u.get("_truck_key")),
+            "area": _to_key_str(u.get("_area")) or UNKNOWN_STORE_AREA,
+            "row": _to_key_str(u.get("_row")) or UNKNOWN_STORE_AREA,
+            "floor": _to_float(u.get("_床秒"), 0.0) if has_time else 0.0,
+            "deadline": _to_float(u.get("_締切秒"), float("inf")) if has_time else float("inf"),
+        })
+    return records
+
+
+def _single_known(values: set) -> bool:
+    """列・エリアが1つだけで、「不明」でもない（R1: 不明は段階5・6でだけ混ぜる）。"""
+    return len(values) == 1 and UNKNOWN_STORE_AREA not in values
+
+
+def _hino_cross_ok(a: dict, b: dict) -> bool:
+    """日野どうしの 1×21 は、同じ納入先・同じ便だけ（_cross_role_allowed と同じ判定）。"""
+    cross = (a["has1"] and b["has21"]) or (a["has21"] and b["has1"])
+    if not cross:
+        return True
+    if not (a["vendor"].startswith(HINO_VENDOR_PREFIX) and b["vendor"].startswith(HINO_VENDOR_PREFIX)):
+        return True
+    return a["vendor"] == b["vendor"] and a["nony"] == b["nony"]
+
+
+def _can_merge_staged(base, cand, height_cap: float, need_row: bool, need_area: bool, need_truck: bool) -> bool:
+    """base に cand を足せるか（R4 の段階の範囲 + R5 + R6）。"""
+    # R4: この段階でまとめてよい範囲か
+    if need_row and not _single_known(base.rows | cand.rows):
+        return False
+    if need_area and not _single_known(base.areas | cand.areas):
+        return False
+    if need_truck and len(base.trucks | cand.trucks) != 1:
+        return False
+    # R5: 便は3つまで
+    if len(base.bins | cand.bins) > MAX_BINS_PER_YAMA:
+        return False
+    # R6: 高さ（特例品番を含めば2500、それ以外は height_cap）
+    special = base.special or cand.special
+    cap = float(SPECIAL_HINBAN_HEIGHT_CAP) if special else float(height_cap)
+    if base.height + cand.height > cap:
+        return False
+    # R6: 特例品番と21は混ぜない
+    if special and (base.has21 or cand.has21):
+        return False
+    # R6: 同じ納入先で入車時間（トラック）が違う便は混ぜない
+    for vendor, trucks in cand.vendor_trucks.items():
+        if vendor in base.vendor_trucks and len(base.vendor_trucks[vendor] | trucks) > 1:
+            return False
+    # R6: 開始下限（床）≦ 締切
+    if max(base.floor, cand.floor) > min(base.deadline, cand.deadline):
+        return False
+    # R6: 日野どうしの1×21は同じ納入先・同じ便だけ
+    return all(_hino_cross_ok(a, b) for a in base.members for b in cand.members)
+
+
+def _match_units_staged(units: pd.DataFrame, height_cap: float) -> dict:
+    """ローカル山を6段階でまとめる（要件 R4〜R6）。
+
+    段階ごとに、高い山から順に「条件を満たして入る相手のうち一番高い山」を足し、
+    足せなくなるまで繰り返す（同じ高さなら移動工数の大きい方 → 元の順）。
+    前の段階で組んだ山は崩さない。
+    戻り値は _match_units_with_layer_rules と同じ {ローカル山ID: 代表のローカル山ID}。
+    旧 _match_units_with_layer_rules は、R7（安全弁）の比較用と既存テストのために残す。
+    """
+    if units is None or units.empty:
+        return {}
+    yamas = {r["id"]: _StagedYama(r) for r in _staged_unit_records(units)}
+    for _label, need_row, need_area, need_truck in _STAGED_MATCH_SCOPES:
+        for base_id in [y.id for y in sorted(yamas.values(), key=_StagedYama.sort_key)]:
+            base = yamas.get(base_id)
+            if base is None:  # この段階で、すでに他の山に入った
+                continue
+            while True:
+                partner = next(
+                    (
+                        c for c in sorted(yamas.values(), key=_StagedYama.sort_key)
+                        if c.id != base.id
+                        and _can_merge_staged(base, c, height_cap, need_row, need_area, need_truck)
+                    ),
+                    None,
+                )
+                if partner is None:
+                    break
+                base.absorb(partner)
+                del yamas[partner.id]
+    return {m["id"]: y.id for y in yamas.values() for m in y.members if m["id"] != y.id}
 def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
     """種類1/21の混載処理（1/21以外は対象外）。"""
     stype = expanded["サイズ種類"].astype(str).str.strip()
@@ -727,7 +898,8 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None):
             "TRACE#135 混載判定の入力ユニット（高さ合計 降順＝処理順）\n%s",
             group_table[_uc].sort_values("高さ合計", ascending=False).to_string(index=False),
         )
-    id_map = _match_units_with_layer_rules(group_table, float(height_cap))
+    # 要件 R4〜R6: 列 → エリア → 全体の6段階でまとめる
+    id_map = _match_units_staged(group_table, float(height_cap))
 
     def repr_id(x: int) -> int:
         while x in id_map:

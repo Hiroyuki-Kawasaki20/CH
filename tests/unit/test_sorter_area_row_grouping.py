@@ -298,3 +298,72 @@ def test_local_stack_keeps_same_ukeire_together():
     _, details = _build_size1_mixed(pd.DataFrame(rows), DEFAULT_HEIGHT_CAP, mixing_key="UKEIRE")
     ukeire_by_yama = details.groupby("山通番")["UKEIRE"].apply(lambda s: sorted(set(s)))
     assert sorted(ukeire_by_yama.tolist()) == [["06"], ["07"]]
+# ==== 実装 B 回（R4〜R5）の単体テスト =======================================
+
+def _mix_row(vendor, store, height, move, arrival="", bin2="01"):
+    """サイズ1のパレット1枚（B 回の単体テスト用。マスタなしで、入車時間は直接指定）。"""
+    return {
+        "サイズ種類": "1", "NONYUHIBIN": f"20261001{bin2}", "高さ": height, "移動工数": move,
+        "UKEIRE": "01", "納入先": vendor, "入車時間": arrival, "ストア": store,
+    }
+
+
+def _mix_yamas(rows):
+    """_build_size1_mixed の結果を「納入先@ストア」の組で返す（山の並び順は無視）。"""
+    _, details = _build_size1_mixed(pd.DataFrame(rows), DEFAULT_HEIGHT_CAP, mixing_key="UKEIRE")
+    return sorted(
+        sorted(f"{v}@{s}" for v, s in zip(g["納入先"].astype(str), g["ストア"].astype(str)))
+        for _, g in details.groupby("山通番")
+    )
+
+
+def test_same_row_is_preferred_over_height_fit():
+    """R4 段階1: 高さがぴったりの相手（別の列）より、同じ列の相手を先に組む。"""
+    rows = [
+        _mix_row("店A", "C15-A-1", 1200, 10.0),
+        _mix_row("店B", "C15-A-2", 600, 9.0),
+        _mix_row("店C", "C15-B-1", 1200, 8.0),
+    ]
+    assert _mix_yamas(rows) == [["店A@C15-A-1", "店B@C15-A-2"], ["店C@C15-B-1"]]
+
+
+def test_same_truck_is_preferred_within_row():
+    """R4 段階1→2: 同じ列の中でも、同じトラックの相手を先に組む（§9 の O1 と K1 の関係）。"""
+    rows = [
+        _mix_row("店A", "C15-A-1", 1500, 10.0, arrival="18:15"),
+        _mix_row("店B", "C15-A-2", 830, 9.0, arrival="18:46"),
+        _mix_row("店C", "C15-A-3", 750, 8.0, arrival="18:46"),
+    ]
+    assert _mix_yamas(rows) == [["店A@C15-A-1"], ["店B@C15-A-2", "店C@C15-A-3"]]
+
+
+def test_unknown_store_waits_until_stage5():
+    """R1/R4: ストアが不明のパレットは段階5・6まで待つ（同じエリアの相手を先に組む）。"""
+    rows = [
+        _mix_row("店A", "C15-A-1", 1000, 10.0),
+        _mix_row("店B", "", 1400, 9.0),
+        _mix_row("店C", "C15-B-1", 1300, 8.0),
+    ]
+    assert _mix_yamas(rows) == [["店A@C15-A-1", "店C@C15-B-1"], ["店B@"]]
+
+
+def test_same_bin_can_exceed_three_local_yamas():
+    """R5: 上限は「便3つ」。同じ便なら、ローカル山が4つでも1山にまとめられる。"""
+    rows = [
+        _mix_row("店A", "C15-A-1", 500, 10.0),
+        _mix_row("店A", "C15-B-1", 500, 9.0),
+        _mix_row("店A", "C15-C-1", 500, 8.0),
+        _mix_row("店A", "C15-D-1", 500, 7.0),
+    ]
+    assert _mix_yamas(rows) == [["店A@C15-A-1", "店A@C15-B-1", "店A@C15-C-1", "店A@C15-D-1"]]
+
+
+def test_at_most_three_bins_per_yama():
+    """R5: 1山に混ぜる便（納入先×便）は最大3つ。"""
+    rows = [
+        _mix_row("店A", "C15-A-1", 500, 10.0),
+        _mix_row("店B", "C15-A-2", 500, 9.0),
+        _mix_row("店C", "C15-A-3", 500, 8.0),
+        _mix_row("店D", "C15-A-4", 500, 7.0),
+    ]
+    assert _mix_yamas(rows) == [["店A@C15-A-1", "店B@C15-A-2", "店C@C15-A-3"], ["店D@C15-A-4"]]
