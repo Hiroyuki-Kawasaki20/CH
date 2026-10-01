@@ -209,3 +209,64 @@ class TestGroupeddataEdgeCases:
         result = json.loads(build_groupeddata_json_for_mountain(df))
         assert len(result) == 1
         assert result[0]["番号"] == 1
+
+# ---------------------------------------------------------------------------
+# テスト: 移動工数が同値のとき、同じ納入先を連続させる
+# ---------------------------------------------------------------------------
+
+def _vendors_in_order(df) -> list:
+    result = json.loads(build_groupeddata_json_for_mountain(df))
+    ordered = sorted(result, key=lambda r: r["番号"])
+    return [r["OData__x7d0d__x5165__x5148_"] for r in ordered]
+
+
+def _vendor_changes(vendors: list) -> int:
+    return sum(1 for a, b in zip(vendors, vendors[1:]) if a != b)
+
+
+class TestGroupeddataVendorTie:
+    """同値内では、その山で先に終わる納入先を前にし、他の納入先に挟まれないこと。"""
+
+    def test_山7再現_高岡が1番目でKVCに挟まれない(self):
+        df = pd.DataFrame([
+            _make_row("L12-C-5", 80.0, sebango="719", noireyuki="KVC"),
+            _make_row("L12-C-5", 80.0, sebango="719", noireyuki="高岡"),
+            _make_row("L12-D-8", 90.0, sebango="720", noireyuki="KVC"),
+            _make_row("L12-D-8", 90.0, sebango="720", noireyuki="KVC"),
+        ])
+        assert _vendors_in_order(df) == ["高岡", "KVC", "KVC", "KVC"]
+
+    def test_SEBANGOが違っても同値内で挟まれない(self):
+        df = pd.DataFrame([
+            _make_row("L12-C-5", 80.0, sebango="719", noireyuki="KVC"),
+            _make_row("L12-C-5", 80.0, sebango="720", noireyuki="高岡"),
+            _make_row("L12-C-5", 80.0, sebango="721", noireyuki="KVC"),
+            _make_row("L12-D-8", 90.0, sebango="722", noireyuki="KVC"),
+        ])
+        assert _vendors_in_order(df) == ["高岡", "KVC", "KVC", "KVC"]
+
+    def test_最大移動工数が同じ納入先どうしでも連続する(self):
+        df = pd.DataFrame([
+            _make_row("L12-C-5", 80.0, sebango="1", noireyuki="KVC"),
+            _make_row("L12-C-5", 80.0, sebango="2", noireyuki="高岡"),
+            _make_row("L12-C-5", 80.0, sebango="3", noireyuki="KVC"),
+        ])
+        assert _vendor_changes(_vendors_in_order(df)) == 1
+
+    def test_移動工数が違えば移動工数優先で挟まれても変えない(self):
+        df = pd.DataFrame([
+            _make_row("S-1", 70.0, sebango="1", noireyuki="KVC"),
+            _make_row("S-2", 75.0, sebango="2", noireyuki="高岡"),
+            _make_row("S-3", 80.0, sebango="3", noireyuki="KVC"),
+        ])
+        assert _vendors_in_order(df) == ["KVC", "高岡", "KVC"]
+    def test_移動工数グループが複数で両社が混在すると交互になる(self):
+        """現状仕様の固定: 移動工数の順を優先するため、複数グループに両社がいると交互になる。
+        （避けられない挟まり。文書 §3.1 に明記）"""
+        df = pd.DataFrame([
+            _make_row("S-A", 80.0, sebango="1", noireyuki="高岡"),
+            _make_row("S-A", 80.0, sebango="2", noireyuki="KVC"),
+            _make_row("S-B", 70.0, sebango="3", noireyuki="高岡"),
+            _make_row("S-B", 70.0, sebango="4", noireyuki="KVC"),
+        ])
+        assert _vendors_in_order(df) == ["KVC", "高岡", "KVC", "高岡"]
