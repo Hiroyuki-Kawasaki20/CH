@@ -235,15 +235,17 @@ def build_groupeddata_json_for_mountain(sub_rows: pd.DataFrame) -> str:
         df["_not21"] = 1
     # 同値内で同じ納入先を連続させる補助キー（他の納入先に挟まれるのを防ぐ）
     #   _vendor_last: その山での納入先ごとの最大移動工数（小さい＝先に終わる納入先を前にする）
+    #   _vendor_first: その山での納入先ごとの最小移動工数（最大が同じなら、手前にも行がある納入先を前にする）
     #   _vendor_key : 最大値まで同じ納入先どうしを分けるための納入先名
     #   移動工数が NaN の行は補助キーを中立にし、従来どおり SEBANGO 以降で並べる
     _vendor = df["OData__x7d0d__x5165__x5148_"].fillna("").astype(str).str.strip()
     _cost = pd.to_numeric(df["移動工数"], errors="coerce")
     df["_vendor_last"] = _cost.groupby(_vendor.values).transform("max")
+    df["_vendor_first"] = _cost.groupby(_vendor.values).transform("min")
     df["_vendor_key"] = _vendor.where(_cost.notna(), "")
 
-    sort_by = ["_not21", "移動工数", "_vendor_last", "_vendor_key"]
-    sort_asc = [True, True, True, True]
+    sort_by = ["_not21", "移動工数", "_vendor_last", "_vendor_first", "_vendor_key"]
+    sort_asc = [True, True, True, True, True]
     if "SEBANGO" in df.columns:
         sort_by.append("SEBANGO")
         sort_asc.append(True)
@@ -252,7 +254,7 @@ def build_groupeddata_json_for_mountain(sub_rows: pd.DataFrame) -> str:
         sort_asc.append(True)
 
     df = df.sort_values(by=sort_by, ascending=sort_asc, na_position="last")
-    df = df.drop(columns=["_not21", "_vendor_last", "_vendor_key"])
+    df = df.drop(columns=["_not21", "_vendor_last", "_vendor_first", "_vendor_key"])
     df = df.reset_index(drop=True)
     df["番号"] = np.arange(1, len(df) + 1)
     cols = ["OData__x30b9__x30c8__x30a2_", "NONYUHIBIN", "UKEIRE",

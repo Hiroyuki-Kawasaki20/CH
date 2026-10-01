@@ -271,3 +271,21 @@ class TestGroupeddataVendorTie:
             _make_row("S-B", 70.0, sebango="4", noireyuki="KVC"),
         ])
         assert _vendors_in_order(df) == ["KVC", "高岡", "KVC", "高岡"]
+        
+    def test_山8再現_手前に行がある納入先を同値内で先にする(self):
+        """同値内で最大が同じなら、手前にも行がある（最小移動工数が小さい）納入先を先にする。"""
+        df = pd.DataFrame([
+            _make_row("S-A", 60.0, sebango="1", noireyuki="高岡"),
+            _make_row("S-B", 80.0, sebango="2", noireyuki="KVC"),
+            _make_row("S-B", 80.0, sebango="3", noireyuki="高岡"),
+        ])
+        assert _vendors_in_order(df) == ["高岡", "高岡", "KVC"]
+    def test_後ろに続く納入先は同値内でも後ろ(self):
+        """回帰ガード: _vendor_last が優先。高岡は 80 で終わり、KVC は 90 まで続く。"""
+        df = pd.DataFrame([
+            _make_row("S-A", 60.0, sebango="1", noireyuki="高岡"),
+            _make_row("S-B", 80.0, sebango="2", noireyuki="KVC"),
+            _make_row("S-B", 80.0, sebango="3", noireyuki="高岡"),
+            _make_row("S-C", 90.0, sebango="4", noireyuki="KVC"),
+        ])
+        assert _vendors_in_order(df) == ["高岡", "高岡", "KVC", "KVC"]

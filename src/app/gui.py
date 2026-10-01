@@ -75,7 +75,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-01 採番と画面並びを修正"
+APP_VERSION = "2026-10-01 採番と画面並びを修正ver2"
 
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
@@ -2028,9 +2028,10 @@ class App(ctk.CTk):
                 _v = sub2["納入先"].fillna("").astype(str).str.strip()
                 _c = pd.to_numeric(sub2["移動工数"], errors="coerce")
                 sub2["_vendor_last"] = _c.groupby(_v.values).transform("max")
+                sub2["_vendor_first"] = _c.groupby(_v.values).transform("min")
                 sub2["_vendor_key"] = _v.where(_c.notna(), "")
-                _detail_sort_by += ["_vendor_last", "_vendor_key"]
-                _detail_asc += [True, True]
+                _detail_sort_by += ["_vendor_last", "_vendor_first", "_vendor_key"]
+                _detail_asc += [True, True, True]
             if "SEBANGO" in sub2.columns:
                 _detail_sort_by.append("SEBANGO")
                 _detail_asc.append(True)
