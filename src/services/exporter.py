@@ -238,7 +238,6 @@ def build_groupeddata_json_for_mountain(sub_rows: pd.DataFrame) -> str:
     #   _vendor_first: その山での納入先ごとの最小移動工数（最大が同じなら、手前にも行がある納入先を前にする）
     #   _vendor_key : 最大値まで同じ納入先どうしを分けるための納入先名
     #   移動工数が NaN の行は補助キーを中立にし、従来どおり SEBANGO 以降で並べる
-    # 最大が同じなら、最小が小さい（手前にも行がある）納入先を前にする
     _vendor = df["OData__x7d0d__x5165__x5148_"].fillna("").astype(str).str.strip()
     _cost = pd.to_numeric(df["移動工数"], errors="coerce")
     df["_vendor_last"] = _cost.groupby(_vendor.values).transform("max")

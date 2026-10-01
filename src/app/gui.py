@@ -2027,11 +2027,11 @@ class App(ctk.CTk):
             if "納入先" in sub2.columns:
                 _v = sub2["納入先"].fillna("").astype(str).str.strip()
                 _c = pd.to_numeric(sub2["移動工数"], errors="coerce")
-            sub2["_vendor_last"] = _c.groupby(_v.values).transform("max")
-            sub2["_vendor_first"] = _c.groupby(_v.values).transform("min")
-            sub2["_vendor_key"] = _v.where(_c.notna(), "")
-            _detail_sort_by += ["_vendor_last", "_vendor_first", "_vendor_key"]
-            _detail_asc += [True, True, True]
+                sub2["_vendor_last"] = _c.groupby(_v.values).transform("max")
+                sub2["_vendor_first"] = _c.groupby(_v.values).transform("min")
+                sub2["_vendor_key"] = _v.where(_c.notna(), "")
+                _detail_sort_by += ["_vendor_last", "_vendor_first", "_vendor_key"]
+                _detail_asc += [True, True, True]
             if "SEBANGO" in sub2.columns:
                 _detail_sort_by.append("SEBANGO")
                 _detail_asc.append(True)

@@ -280,7 +280,6 @@ class TestGroupeddataVendorTie:
             _make_row("S-B", 80.0, sebango="3", noireyuki="高岡"),
         ])
         assert _vendors_in_order(df) == ["高岡", "高岡", "KVC"]
-
     def test_後ろに続く納入先は同値内でも後ろ(self):
         """回帰ガード: _vendor_last が優先。高岡は 80 で終わり、KVC は 90 まで続く。"""
         df = pd.DataFrame([
@@ -290,4 +289,3 @@ class TestGroupeddataVendorTie:
             _make_row("S-C", 90.0, sebango="4", noireyuki="KVC"),
         ])
         assert _vendors_in_order(df) == ["高岡", "高岡", "KVC", "KVC"]
-
