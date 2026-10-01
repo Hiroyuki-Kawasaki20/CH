@@ -260,6 +260,7 @@ class TestGroupeddataVendorTie:
             _make_row("S-3", 80.0, sebango="3", noireyuki="KVC"),
         ])
         assert _vendors_in_order(df) == ["KVC", "高岡", "KVC"]
+
     def test_移動工数グループが複数で両社が混在すると交互になる(self):
         """現状仕様の固定: 移動工数の順を優先するため、複数グループに両社がいると交互になる。
         （避けられない挟まり。文書 §3.1 に明記）"""
