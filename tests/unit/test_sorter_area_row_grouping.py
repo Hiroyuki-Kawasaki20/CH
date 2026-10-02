@@ -394,17 +394,44 @@ def test_legacy_mode_reproduces_main_result():
     assert legacy_details["山通番"].nunique() == 7
 
 
-def test_safety_valve_uses_legacy_when_new_logic_makes_more_yamas(monkeypatch, caplog):
-    """R7: 新しいまとめ方で山が増えるときは、従来の結果を使い、ログに残す。"""
-    rows = [
-        _mix_row("店A", "C15-A-1", 1000, 10.0),
-        _mix_row("店B", "C15-B-1", 1000, 9.0),
+def _r7_rows(count):
+    """R7 用: 1000mm のパレットを、別々の納入先・別々の列に count 枚（従来は2枚ずつまとめる）。"""
+    return [
+        _mix_row(f"店{chr(65 + i)}", f"C15-{chr(65 + i)}-1", 1000, 10.0 - i)
+        for i in range(count)
     ]
-    # 新しいまとめ方を「1つもまとめない」に差し替えて、わざと山を増やす（2山 > 従来の1山）
+
+
+def _force_more_yamas(monkeypatch, tolerance):
+    """新しいまとめ方を「1つもまとめない」に差し替えて、わざと山を増やし、R7 の許容山数を指定する。"""
     monkeypatch.setattr(sorter, "_match_units_staged", lambda units, height_cap: {})
+    monkeypatch.setattr(sorter, "R7_YAMA_TOLERANCE", tolerance)
+
+
+def test_safety_valve_tolerance_zero_falls_back_on_one_extra_yama(monkeypatch, caplog):
+    """R7: 許容 0 なら、1山増えただけで従来の結果を使い、ログに残す（N=1 導入前の挙動）。"""
+    _force_more_yamas(monkeypatch, 0)
     with caplog.at_level(logging.INFO, logger=sorter.logger.name):
-        assert _mix_yamas(rows) == [["店A@C15-A-1", "店B@C15-B-1"]]
+        assert _mix_yamas(_r7_rows(2)) == [["店A@C15-A-1", "店B@C15-B-1"]]  # 新2山 > 従来1山
+    assert "従来の結果を使います" in caplog.text
+
+
+def test_safety_valve_tolerates_one_extra_yama(monkeypatch, caplog):
+    """R7: 許容 1 なら、1山増えても新しいまとめ方を使い、「許容した」ことをログに残す。"""
+    _force_more_yamas(monkeypatch, 1)
+    with caplog.at_level(logging.INFO, logger=sorter.logger.name):
+        assert _mix_yamas(_r7_rows(2)) == [["店A@C15-A-1"], ["店B@C15-B-1"]]
     assert "[R7]" in caplog.text
+    assert "新しいまとめ方を使います" in caplog.text
+    assert "従来の結果を使います" not in caplog.text
+
+
+def test_safety_valve_falls_back_when_two_or_more_extra_yamas(monkeypatch, caplog):
+    """R7: 許容 1 でも、2山以上増えるなら従来の結果を使う（新4山 > 従来2山）。"""
+    _force_more_yamas(monkeypatch, 1)
+    with caplog.at_level(logging.INFO, logger=sorter.logger.name):
+        assert len(_mix_yamas(_r7_rows(4))) == 2  # 従来は1000mmを2枚ずつまとめる
+    assert "従来の結果を使います" in caplog.text
 
 
 def test_safety_valve_keeps_new_logic_when_not_worse(caplog):
