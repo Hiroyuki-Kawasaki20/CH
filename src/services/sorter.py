@@ -14,6 +14,7 @@ from ..models.constants import (
     SIZE5_TYPE, SIZE5_MAX_PALLETS_PER_YAMA,
     SPLIT_UKEIRE_ROUTES, HINO_VENDOR_PREFIX, PICKUP_DEADLINE_BUFFER_SECS,
     MAX_BINS_PER_YAMA,
+    R7_YAMA_TOLERANCE,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -805,7 +806,7 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None, _legacy
     """種類1/21の混載処理（1/21以外は対象外）。
 
     _legacy=True のときは、要件 R1〜R5 を入れる前（main）と同じ組み方をする（R7 の比較用）。
-    通常（False）は新しいまとめ方で組み、最後に R7 の安全弁で従来の山数と比べる。
+    通常（False）は新しいまとめ方で組み、最後に R7 の安全弁で従来より R7_YAMA_TOLERANCE 山を超えて増えるときだけ従来へ戻す
     """
     stype = expanded["サイズ種類"].astype(str).str.strip()
     size1_df = expanded.loc[stype.isin(["1", "21"])].copy()
@@ -1063,12 +1064,20 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None, _legacy
         )
         new_count = int(size1_mixed_details["山通番"].nunique())
         legacy_count = int(legacy_details["山通番"].nunique())
-        if new_count > legacy_count:
+        extra = new_count - legacy_count  # 新しいまとめ方が何山多いか
+        if extra > R7_YAMA_TOLERANCE:
             logger.info(
-                "[R7] 山組みの安全弁: 新しいまとめ方の山数(%d)が従来(%d)より多いため、従来の結果を使います",
-                new_count, legacy_count,
+                "[R7] 山組みの安全弁: 新しいまとめ方の山数(%d)が従来(%d)より%d山多い"
+                "（許容%d山）ため、従来の結果を使います",
+                new_count, legacy_count, extra, R7_YAMA_TOLERANCE,
             )
             return legacy_summary, legacy_details
+        if extra > 0:
+            logger.info(
+                "[R7] 山組みの安全弁: 新しいまとめ方の山数(%d)が従来(%d)より%d山多いが、"
+                "許容%d山以内のため、新しいまとめ方を使います",
+                new_count, legacy_count, extra, R7_YAMA_TOLERANCE,
+            )
     return size1_mixed_summary, size1_mixed_details
 
 
