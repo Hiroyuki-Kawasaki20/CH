@@ -228,10 +228,6 @@ class App(ctk.CTk):
     def _on_close(self):
         """終了時に予約済みタイマーを解放して安全に閉じる。"""
         try:
-            self._save_master_silent()
-        except Exception:
-            pass
-        try:
             if self._auto_reload_after_id is not None:
                 self.after_cancel(self._auto_reload_after_id)
                 self._auto_reload_after_id = None
@@ -289,11 +285,18 @@ class App(ctk.CTk):
         try:
             now_str = datetime.now().strftime("%H:%M")
             mountain_num = len(self.mountain_proc) if self.mountain_proc is not None and not self.mountain_proc.empty else 0
+
+            # パレット総数（セットボードの表示件数。バッテリー交換の仮想山は除く）
+            pallet_num = 0
+            df = self.proc_details_display
+            if df is not None and not df.empty and "山通番" in df.columns:
+                pallet_num = int((~df["山通番"].map(is_virtual_yama)).sum())
+
             p_main = sum(1 for v in self.mountain_proc_map.values() if str(v) == PROC_MAIN)
             p_relief = sum(1 for v in self.mountain_proc_map.values() if str(v) == PROC_RELIEF)
             auto_reload_part = f" | 自動再読込: {self._last_auto_reload_success_at}" if self._last_auto_reload_success_at else ""
             self.status_bar.configure(
-                text=f"前回実行: {now_str} | 山数: {mountain_num} | メイン: {p_main}山  リリーフ: {p_relief}山{auto_reload_part} | {self._version_label}"
+                text=f"前回実行: {now_str} | 山数: {mountain_num} | パレット: {pallet_num}枚 | メイン: {p_main}山  リリーフ: {p_relief}山{auto_reload_part} | {self._version_label}"
             )
         except Exception:
             pass
@@ -346,7 +349,7 @@ class App(ctk.CTk):
 
         # ステータスバー
         self.status_bar = ctk.CTkLabel(
-            self, text=f"前回実行: なし | 山数: - | メイン: - リリーフ: - | {self._version_label}",
+            self, text=f"前回実行: なし | 山数: - | パレット: - | メイン: - リリーフ: - | {self._version_label}",
             fg_color=C_STATUS, text_color="#EDF2F4", font=self._label_font, anchor="w",
         )
         self.status_bar.pack(side="bottom", fill="x", ipady=5)
@@ -368,7 +371,7 @@ class App(ctk.CTk):
         route_frame.pack(fill="x", pady=(0, 6))
         route_sb = tk.Scrollbar(route_frame, orient="vertical")
         self.route_list = tk.Listbox(route_frame, selectmode="extended", exportselection=False,
-                                     font=("Meiryo UI", 12), height=8,
+                                     font=("Meiryo UI", 12), height=13,
                                      bg="white", fg="#2B2D42",
                                      selectbackground=C_ACCENT, selectforeground="white",
                                      relief="flat", highlightthickness=1, highlightcolor="#D6DCE5",
@@ -379,14 +382,9 @@ class App(ctk.CTk):
         self.route_list.bind("<<ListboxSelect>>", lambda e: self.refresh_candidates())
 
         self.summary_mode = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(left_top, text="便番号だけで選択する（受入を省略）",
-                        variable=self.summary_mode, command=self._on_summary_mode_changed,
-                        font=self._label_font, fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER,
-                        ).pack(anchor="w", pady=(2, 6))
 
         # 受入リスト（折りたたみ可能）
         receipt_header = ctk.CTkFrame(left_top, fg_color="transparent")
-        receipt_header.pack(fill="x", pady=(0, 2))
         self.receipt_toggle_btn = ctk.CTkButton(
             receipt_header,
             text="受入（まとめOFF時に選択） ▼",
@@ -425,9 +423,9 @@ class App(ctk.CTk):
                      anchor="w", corner_radius=6, height=30).pack(fill="x", pady=(0, 4))
         self._order_count_label = ctk.CTkLabel(left_top, text="0 件", 
                                                font=self._label_font, text_color=C_NEUTRAL)
-
+        
         order_frame = ctk.CTkFrame(left_top, fg_color="transparent")
-        order_frame.pack(fill="x", pady=(0, 6))
+        order_frame.pack(fill="both", expand=True, pady=(0, 6))
         order_sb = tk.Scrollbar(order_frame, orient="vertical")
         self.order_list = tk.Listbox(order_frame, selectmode="extended", exportselection=False,
                                      font=("Meiryo UI", 18, "bold"), height=8,
@@ -442,23 +440,31 @@ class App(ctk.CTk):
         self.order_list.bind("<Double-Button-1>", lambda e: self.add_selection())
         self._on_summary_mode_changed()
 
-        # ③ バッテリー交換オプション
-        battery_frame = ctk.CTkFrame(left_top, fg_color="transparent")
-        battery_frame.pack(fill="x", padx=8, pady=8)
-        ctk.CTkCheckBox(
-            battery_frame,
-            text="🔋 バッテリー交換を実施（メイン工程に差し込む）",
-            variable=self.enable_battery_change,
-            command=self._on_battery_change_toggled,
-            font=ctk.CTkFont(family="Meiryo UI", size=15, weight="bold"),
-            fg_color=C_ACCENT,
-            hover_color=C_ACCENT_HOVER,
-        ).pack(anchor="w", pady=(0, 6))
 
         # 下部エリア（実行/操作ボタン）
-        left_bottom = ctk.CTkFrame(left, fg_color="transparent", height=180)
+        left_bottom = ctk.CTkFrame(left, fg_color="transparent", height=210)
         left_bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 10), before=left_top)
         left_bottom.pack_propagate(False)
+        # バッテリー交換を下部の操作エリアへ配置
+        battery_frame = ctk.CTkFrame(left_bottom, fg_color="transparent")
+        battery_frame.pack(side="top", fill="x", padx=8, pady=(4, 6))
+
+        ctk.CTkCheckBox(
+            battery_frame,
+            text="バッテリー交換を実施（メイン工程に差し込む）",
+            variable=self.enable_battery_change,
+            command=self._on_battery_change_toggled,
+            font=ctk.CTkFont(
+                family="Meiryo UI",
+                size=12,
+                weight="normal",
+            ),
+            checkbox_width=22,
+            checkbox_height=22,
+            height=26,
+            fg_color=C_ACCENT,
+            hover_color=C_ACCENT_HOVER,
+        ).pack(anchor="w")
 
         self.progress_bar = ctk.CTkProgressBar(left_bottom, mode="indeterminate", progress_color=C_SUCCESS)
         ctk.CTkButton(left_bottom, text="▶  仕分け＆セット実行", command=self.run,
@@ -598,13 +604,13 @@ class App(ctk.CTk):
     def _build_setboard_tab(self, tab):
         """セットボード: メイン/リリーフ/あふれの3レーン表示"""
         header_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        header_frame.pack(fill="x", padx=10, pady=(10, 5))
+        header_frame.pack(fill="x", padx=10, pady=(0, 0))
         ctk.CTkLabel(header_frame, text="📋 セットボード（メイン / リリーフ / あふれ）",
                      font=ctk.CTkFont(family="Meiryo UI", size=14, weight="bold"),
                      anchor="w").pack(side="left")
 
         lanes_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        lanes_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        lanes_frame.pack(fill="both", expand=True, padx=10, pady=(0, 5))
         lanes_frame.columnconfigure(0, weight=1)
         lanes_frame.columnconfigure(1, weight=1)
         lanes_frame.columnconfigure(2, weight=1)
@@ -723,29 +729,72 @@ class App(ctk.CTk):
         ctk.CTkButton(master_btn_frame, text="選択行削除", command=self.delete_master_row, width=100,
                       fg_color=C_DANGER, hover_color=C_DANGER_HOVER,
                       font=self._btn_font, corner_radius=8).pack(side="left", padx=2)
-        ctk.CTkButton(master_btn_frame, text="全クリア", command=self.clear_master, width=80,
-                      fg_color=C_NEUTRAL, hover_color=C_NEUTRAL_HOVER,
-                      font=self._btn_font, corner_radius=8).pack(side="left", padx=2)
-        ctk.CTkButton(master_btn_frame, text="全受入CHからインポート", command=self.import_from_ukeire_sheet,
-                  fg_color="#2A9D8F", hover_color="#238478", text_color="white", width=190,
-                  font=self._btn_font, corner_radius=8).pack(side="left", padx=2)
-        ctk.CTkButton(master_btn_frame, text="入車時間マスタ.xlsx から直接取込", command=self.import_from_master_xlsx,
-              fg_color="#1D6F42", hover_color="#165C37", text_color="white", width=250,
-              font=self._btn_font, corner_radius=8).pack(side="left", padx=2)
+        # 入車時間設定専用の配色
+        style = ttk.Style()
 
+        style.configure(
+            "Master.Treeview",
+            font=("Meiryo UI", 12),
+            rowheight=36,
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            foreground="#1E293B",
+            borderwidth=0,
+        )
+
+        style.configure(
+            "Master.Treeview.Heading",
+            font=("Meiryo UI", 12, "bold"),
+            background="#E2E8F0",
+            foreground="#334155",
+            relief="flat",
+        )
+
+        # 選択中は、フォーカスが外れても青＋白文字を維持
+        style.map(
+            "Master.Treeview",
+            background=[("selected", "#2563EB")],
+            foreground=[("selected", "#FFFFFF")],
+        )
+
+        style.map(
+            "Master.Treeview.Heading",
+            background=[("active", "#CBD5E1")],
+        )
+        
         self.master_tree = ttk.Treeview(
-            tab, columns=("OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"), show="headings", height=20)
+            tab,
+            columns=(
+                "OData_納入先",
+                "NONYUHIBIN",
+                "入車時間",
+                "セットありフラグ",
+            ),
+            show="headings",
+            height=20,
+            style="Master.Treeview",
+        )
         for c in self.master_tree["columns"]:
             self.master_tree.heading(c, text=c)
+
             if c == "OData_納入先":
-                w = 220
+                self.master_tree.column(
+                    c, width=220, anchor="w"
+                )
             elif c == "セットありフラグ":
-                w = 120
+                self.master_tree.column(
+                    c, width=160, anchor="center"
+                )
             else:
-                w = 120
-            self.master_tree.column(c, width=w, anchor="w")
-        self.master_tree.pack(fill="both", expand=True, padx=6, pady=(0, 6))
-        self.master_tree.bind("<Button-1>", self.on_master_tree_click)
+                self.master_tree.column(
+                    c, width=120, anchor="center"
+                )
+        self.master_tree.pack(
+            fill="both",
+            expand=True,
+            padx=6,
+            pady=(0, 6),
+        )
         self.master_tree.bind("<Double-1>", self.edit_master_row)
 
     def _build_selection_tab(self, tab):
@@ -833,6 +882,33 @@ class App(ctk.CTk):
             else:
                 display_routes.append(r)
                 self._route_display_to_internal[r] = {"route": r, "ukeire": None}  # 辞書化
+
+        # 「便名を選ぶ」欄の表示順
+        便名表示順 = [
+            "日野",
+            "織機-21",
+            "織機-28",
+            "織機-61",
+            "高岡",
+            "KVC-B3",
+            "KVC-B7",
+            "元町-1W",
+            "元町-PK",
+            "三栄",
+            "フタバ岡崎",
+            "額田広久手支給",
+            "日野補給引取",
+        ]
+
+        表示順位 = {
+            便名: 順位
+            for 順位, 便名 in enumerate(便名表示順)
+        }
+
+        # 指定外の便名は消さず、末尾に元の順番で表示
+        display_routes.sort(
+            key=lambda 便名: 表示順位.get(便名, len(便名表示順))
+        )
 
         for r in display_routes:
             self.route_list.insert("end", r)
@@ -1849,8 +1925,6 @@ class App(ctk.CTk):
                 pass
             try:
                 messagebox.showinfo("SPO出力", f"SPO用Excelを出力しました。\n{spo_path}")
-                if os.name == "nt":
-                    os.startfile(self.export_dir)
             except Exception:
                 pass
             if spo_path and getattr(self, "archive_enabled", True):
@@ -2165,28 +2239,80 @@ class App(ctk.CTk):
     def refresh_master_tree(self):
         for iid in self.master_tree.get_children():
             self.master_tree.delete(iid)
+
         if self.master_data is None or self.master_data.empty:
             return
+
+        self.master_tree.tag_configure(
+            "便名色0",
+            background="#ECFDF5",
+        )
+        self.master_tree.tag_configure(
+            "便名色1",
+            background="#D1FAE5",
+        )
+
+        便名タグ = {}
         for i, row in self.master_data.iterrows():
-            self.master_tree.insert("", "end", iid=f"m:{i}",
-                                    values=(str(row.get("OData_納入先", "")),
-                                            str(row.get("NONYUHIBIN", "")),
-                                            str(row.get("入車時間", "")),
-                                            set_flag_value_to_checkbox_mark(row.get("セットありフラグ", ""))))
+            便名 = str(row.get("OData_納入先", "")).strip()
+
+            # 同じ便名には同じ色を割り当てる
+            if 便名 not in 便名タグ:
+                便名タグ[便名] = f"便名色{len(便名タグ) % 2}"
+
+            self.master_tree.insert(
+                "",
+                "end",
+                iid=f"m:{i}",
+                values=(
+                    str(row.get("OData_納入先", "")),
+                    str(row.get("NONYUHIBIN", "")),
+                    str(row.get("入車時間", "")),
+                    self._display_set_flag(
+                        row.get("セットありフラグ", "")
+                    ),
+                ),
+                tags=(便名タグ[便名],),
+            )
+
+    @staticmethod
+    def _display_set_flag(value):
+        """ありだけ表示し、なしは空欄にする。"""
+        mark = set_flag_value_to_checkbox_mark(value)
+        return "あり" if mark == "☑" else ""
+
+    @staticmethod
+    def _parse_set_flag(text):
+        """画面表示を、既存の保存値に変換する。"""
+        text = str(text).strip()
+
+        if text == "あり":
+            text = "☑"
+        elif text in ("なし", ""):
+            text = "☐"
+
+        return checkbox_mark_to_set_flag_value(text)
+
 
     def on_master_tree_click(self, event):
-        """セットありフラグ列（4列目）のクリック時のみ☑/☐をトグルする。"""
+        """4列目のクリックで、あり／なしを切り替える。"""
         row_id = self.master_tree.identify_row(event.y)
         col_id = self.master_tree.identify_column(event.x)
+
         if not row_id or col_id != "#4":
             return None
 
         values = list(self.master_tree.item(row_id, "values"))
+
         if len(values) < 4:
             return "break"
-        current_mark = str(values[3]).strip()
-        values[3] = "☑" if current_mark != "☑" else "☐"
+
+        current = str(values[3]).strip()
+        values[3] = "なし" if current in ("あり", "☑") else "あり"
+
         self.master_tree.item(row_id, values=tuple(values))
+        self.master_tree.selection_set(row_id)
+
         return "break"
 
     def _collect_master_from_tree(self) -> pd.DataFrame:
@@ -2201,7 +2327,7 @@ class App(ctk.CTk):
                     "OData_納入先": str(values[0]).strip(),
                     "NONYUHIBIN": str(values[1]).strip(),
                     "入車時間": str(values[2]).strip(),
-                    "セットありフラグ": checkbox_mark_to_set_flag_value(values[3]) if len(values) >= 4 else "",
+                    "セットありフラグ": self._parse_set_flag(values[3]) if len(values) >= 4 else "",
                 })
         except Exception:
             return pd.DataFrame(columns=["OData_納入先", "NONYUHIBIN", "入車時間", "セットありフラグ"])
@@ -2224,9 +2350,24 @@ class App(ctk.CTk):
         ctk.CTkLabel(dialog, text="入車時間 (HH:MM):").grid(row=2, column=0, padx=14, pady=10, sticky="w")
         time_var = tk.StringVar()
         ctk.CTkEntry(dialog, textvariable=time_var, width=240).grid(row=2, column=1, padx=10, pady=10)
-        ctk.CTkLabel(dialog, text="セットありフラグ(1/0):").grid(row=3, column=0, padx=14, pady=10, sticky="w")
+        ctk.CTkLabel(
+            dialog, text="セット:"
+        ).grid(row=3, column=0, padx=14, pady=10, sticky="w")
+
         set_var = tk.StringVar(value="0")
-        ctk.CTkEntry(dialog, textvariable=set_var, width=240).grid(row=3, column=1, padx=10, pady=10)
+
+        ctk.CTkCheckBox(
+            dialog,
+            text="セットあり",
+            variable=set_var,
+            onvalue="1",
+            offvalue="0",
+            font=ctk.CTkFont(family="Meiryo UI", size=13),
+            checkbox_width=24,
+            checkbox_height=24,
+            fg_color="#2563EB",
+            hover_color="#1D4ED8",
+        ).grid(row=3, column=1, padx=10, pady=10, sticky="w")
 
         def do_add():
             d, b, t = dest_var.get().strip(), bin_var.get().strip(), time_var.get().strip()
@@ -2241,7 +2382,7 @@ class App(ctk.CTk):
             new_id = f"m:new_{len(self.master_tree.get_children())}"
             self.master_tree.insert(
                 "", "end", iid=new_id,
-                values=(d, b, t, set_flag_value_to_checkbox_mark(f))
+                values=(d, b, t, self._display_set_flag(f))
             )
             dialog.destroy()
 
@@ -2286,9 +2427,29 @@ class App(ctk.CTk):
         ctk.CTkLabel(dialog, text="入車時間 (HH:MM):").grid(row=2, column=0, padx=14, pady=10, sticky="w")
         time_var = tk.StringVar(value=values[2])
         ctk.CTkEntry(dialog, textvariable=time_var, width=240).grid(row=2, column=1, padx=10, pady=10)
-        ctk.CTkLabel(dialog, text="セットありフラグ(1/0):").grid(row=3, column=0, padx=14, pady=10, sticky="w")
-        set_var = tk.StringVar(value=checkbox_mark_to_set_flag_value(values[3]) if len(values) >= 4 else "")
-        ctk.CTkEntry(dialog, textvariable=set_var, width=240).grid(row=3, column=1, padx=10, pady=10)
+        ctk.CTkLabel(
+            dialog, text="セット:"
+        ).grid(row=3, column=0, padx=14, pady=10, sticky="w")
+
+        # 一覧が「あり」ならチェック付きで開く
+        set_var = tk.StringVar(
+            value="1"
+            if len(values) >= 4 and str(values[3]).strip() == "あり"
+            else "0"
+        )
+
+        ctk.CTkCheckBox(
+            dialog,
+            text="セットあり",
+            variable=set_var,
+            onvalue="1",
+            offvalue="0",
+            font=ctk.CTkFont(family="Meiryo UI", size=13),
+            checkbox_width=24,
+            checkbox_height=24,
+            fg_color="#2563EB",
+            hover_color="#1D4ED8",
+        ).grid(row=3, column=1, padx=10, pady=10, sticky="w")
 
         def do_update():
             d, b, t = dest_var.get().strip(), bin_var.get().strip(), time_var.get().strip()
@@ -2300,7 +2461,9 @@ class App(ctk.CTk):
                 b = f"{int(b):02d}"
             except Exception:
                 pass
-            self.master_tree.item(iid, values=(d, b, t, set_flag_value_to_checkbox_mark(f)))
+            self.master_tree.item(
+                iid, values=(d, b, t, self._display_set_flag(f))
+            )
             dialog.destroy()
 
         ctk.CTkButton(dialog, text="更新", command=do_update, fg_color="#0d6efd").grid(row=4, column=0, columnspan=2, pady=16)
