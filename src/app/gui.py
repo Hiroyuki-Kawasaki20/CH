@@ -63,7 +63,7 @@ from src.services.scheduler import (
 from src.services.exporter import (
     _to_display_hhmm_24h,
     build_spo_export_df, export_spo_xlsx_staged,
-    attach_pickup_start_time, export_kanban_xlsx,
+    attach_pickup_start_time, attach_entry_time_to_groupeddata, export_kanban_xlsx,
     append_to_spo_history,
 )
 from src.services.lane_end_times_history import (
@@ -75,7 +75,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-02 R7の許容を1山に変更"
+APP_VERSION = "2026-10-07 GroupedDataに入車時間を追加"
 
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
@@ -1814,6 +1814,19 @@ class App(ctk.CTk):
             spo_df = attach_pickup_start_time(spo_df, master_df, unmatched_csv_path=unmatched_path)
         except Exception:
             pass
+        # Power Apps 表示用: GroupedData の各パレットに入車時間を書き込む。
+        # 工程割当と同じマスタを使うため、画面で編集中（未保存）の値を優先し、
+        # 空ならファイルから読んだマスタを使う。失敗しても出力は止めない。
+        try:
+            _entry_master = self._collect_master_from_tree()
+            if _entry_master is None or _entry_master.empty:
+                _entry_master = master_df
+            spo_df = attach_entry_time_to_groupeddata(spo_df, _entry_master)
+        except Exception:
+            logger.warning(
+                "GroupedData への入車時間の付与に失敗しました（入車時間なしで出力を続けます）",
+                exc_info=True,
+            )
         if spo_df is not None and not spo_df.empty:
             def _archive_result(report, output_path=None, result="出力"):
                 if not getattr(self, "archive_enabled", True):
