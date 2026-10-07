@@ -652,6 +652,82 @@ def attach_pickup_start_time(
     return out
 
 
+def _build_entry_time_lookup(master_df) -> tuple:
+    """入車時間マスタから {(納入先, NONYUHIBIN): 入車時間} と 納入先キーの集合を作る。
+
+    正規化は attach_pickup_start_time と同じ（前後空白の除去、NONYUHIBIN の全角→半角）。
+    """
+    if master_df is None or master_df.empty:
+        return {}, set()
+    for col in ("OData_納入先", "NONYUHIBIN", "入車時間"):
+        if col not in master_df.columns:
+            return {}, set()
+    master = master_df.copy()
+    master["OData_納入先"] = master["OData_納入先"].astype(str).str.strip()
+    master["NONYUHIBIN"] = master["NONYUHIBIN"].astype(str).str.strip().str.translate(_ZEN2HAN_DIGIT_COLON)
+    master["入車時間"] = master["入車時間"].astype(str).str.strip()
+    master = master[(master["OData_納入先"] != "") & (master["NONYUHIBIN"] != "")]
+    master_map = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in master.iterrows()}
+    return master_map, {k[0] for k in master_map}
+
+
+def _lookup_entry_time(item: dict, master_map: dict, master_vendor_keys: set) -> str:
+    """パレット1件の入車時間を返す。見つからなければ空文字。
+
+    検索キーは attach_pickup_start_time と同じ:
+      - 納入先が SPLIT_UKEIRE_ROUTES（KVC・元町・織機）なら「納入先-受入」の行を優先
+      - NONYUHIBIN は末尾2桁で比べる
+    """
+    vendor = str(item.get("OData_納入先") or item.get("OData__x7d0d__x5165__x5148_", "")).strip()
+    ukeire = str(item.get("UKEIRE", "")).strip()
+    nony = str(item.get("NONYUHIBIN", "")).strip().translate(_ZEN2HAN_DIGIT_COLON)
+    order2 = nony[-2:] if len(nony) >= 2 else ""
+    if not vendor or not order2:
+        return ""
+    lookup_vendor = vendor
+    if vendor in SPLIT_UKEIRE_ROUTES and ukeire:
+        combined = f"{vendor}-{ukeire}"
+        if combined in master_vendor_keys:
+            lookup_vendor = combined
+    return _to_display_hhmm_24h(master_map.get((lookup_vendor, order2), ""))
+
+
+def attach_entry_time_to_groupeddata(
+    spo_df: pd.DataFrame,
+    master_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """GroupedData の各パレットに、入車時間マスタの「入車時間」を '入車時間' キーで書き込む。
+
+    - Power Apps で「そのパレットの便が何時に入車するか」を表示するための値
+    - 表記は24時間超え表記（00:09 -> 24:09）。引取開始時間と揃える
+    - マスタに無い便は空文字。パレットも行も消さない
+    - 解析できない GroupedData は元の文字列のまま残す
+    - groupdata と GroupedData は同じ内容で更新する
+    - 引取開始時間には触らない。入力の DataFrame は書き換えない
+    """
+    if spo_df is None or spo_df.empty or "GroupedData" not in spo_df.columns:
+        return spo_df
+    master_map, master_vendor_keys = _build_entry_time_lookup(master_df)
+
+    out = spo_df.copy()
+    gd_vals = out["GroupedData"].tolist()
+    gp_vals = out["groupdata"].tolist() if "groupdata" in out.columns else None
+    for i, raw in enumerate(gd_vals):
+        items = parse_groupeddata_json(raw)
+        if not items:
+            continue
+        for it in items:
+            it["入車時間"] = _lookup_entry_time(it, master_map, master_vendor_keys)
+        new_json = json.dumps(items, ensure_ascii=False)
+        gd_vals[i] = new_json
+        if gp_vals is not None:
+            gp_vals[i] = new_json
+    out["GroupedData"] = gd_vals
+    if gp_vals is not None:
+        out["groupdata"] = gp_vals
+    return out
+
+
 # ============================================================
 # Issue #44-1: 表示専用 24時間超え表記ヘルパー
 # 内部ロジック(process_assigner)は変更せず、出力直前のみ表記統一する。
