@@ -1510,6 +1510,7 @@ def _legacy_assign_processes_by_arrival_time(
     mtn_deadline_map = {m["山通番"]: m["締め切り_秒"] for m in mountain_info}
     mtn_work_map    = {m["山通番"]: m["引取工数_秒"]  for m in mountain_info}
     mtn_start_floor_map = {m["山通番"]: m.get("開始時間_秒") for m in mountain_info}
+    mtn_floor_at_assign = dict(mtn_start_floor_map)  # 前詰めで書き換わる前の元の床
     mtn_hino_bins_map   = {m["山通番"]: m.get("日野便番号セット", set()) for m in mountain_info}  # Issue #57
 
     shift_candidates = [
@@ -2179,6 +2180,27 @@ def _legacy_assign_processes_by_arrival_time(
 
         return True, first_start
 
+    def _apply_split_rescue_start(row: dict, yama_no: int, split_first_start: Optional[int]) -> None:
+        """分割救済で得た開始時刻を、実山の床より早くせずに書き込む。
+
+        _can_relief_if_split は「分割して引けば間に合うか」の可否判定であり、
+        実山は分割されず1回で引く。そのため実際の開始は、山全体の床
+        （全ユニットの「前便入車+10分」の最大）以降でなければならない。
+        """
+        if split_first_start is None:
+            return
+        floor = int(mtn_floor_at_assign.get(int(yama_no)) or 0)
+        work_dur = int(mtn_work_map.get(int(yama_no), 0))
+        safe_start = int(_adjust_start_for_breaks(max(int(split_first_start), floor), work_dur))
+        if safe_start != int(split_first_start):
+            _logger.warning(
+                "山%s: 分割救済の開始 %s は山の床 %s より早いため %s に補正しました"
+                "（分割せず1回で引くため。山組みで分割されていない混載です）",
+                int(yama_no), _seconds_to_hhmm(int(split_first_start)),
+                _seconds_to_hhmm(floor), _seconds_to_hhmm(safe_start),
+            )
+        row["実開始時間"] = _seconds_to_hhmm(safe_start)
+
     def _can_relief_at_floor(yama_no: int, target_rows: List[dict]) -> bool:
         """床以降の締切順リリーフ再配置で全リリーフ山が成立するか確認する。"""
         trial_rows = copy.deepcopy(target_rows)
@@ -2225,8 +2247,7 @@ def _legacy_assign_processes_by_arrival_time(
             split_ok, split_first_start = _can_relief_if_split(yama_no, results)
             if split_ok:
                 # 分割前提ならリリーフで完了可能なため、あふれ化せず救済する。
-                if split_first_start is not None:
-                    r["実開始時間"] = _seconds_to_hhmm(int(split_first_start))
+                _apply_split_rescue_start(r, yama_no, split_first_start)
                 continue
             overflow_yama_set.add(yama_no)
 
@@ -2281,8 +2302,7 @@ def _legacy_assign_processes_by_arrival_time(
             if ddl_for_eval is not None and en > int(ddl_for_eval):
                 split_ok, split_first_start = _can_relief_if_split(yy, target_rows)
                 if split_ok:
-                    if split_first_start is not None:
-                        rr["実開始時間"] = _seconds_to_hhmm(int(split_first_start))
+                    _apply_split_rescue_start(rr, yy, split_first_start)
                     continue
                 overflow_set.add(yy)
 
