@@ -48,7 +48,7 @@ def _master(rows):
 
 
 def _floor_deadline_from_master(master_df, vendor, order2):
-    """(床, 締切) をマスタから計算（前便=便番号-1 / 床=前便入車+10分 / 締切=入車-20分）。"""
+    """(床, 締切) をマスタから計算（前便=便番号-1 / 床=前便入車+10分 / 締切=入車-10分）。"""
     m = {(r["OData_納入先"], r["NONYUHIBIN"]): r["入車時間"] for _, r in master_df.iterrows()}
     arrival = m.get((vendor, order2))
     deadline = _hhmm_to_secs(arrival) - PICKUP_DEADLINE_BUFFER_SECS if arrival else None

@@ -360,7 +360,7 @@ def test_unknown_store_waits_until_stage5():
 
 
 def test_same_bin_can_exceed_three_local_yamas():
-    """R5: 上限は「便3つ」。同じ便なら、ローカル山が4つでも1山にまとめられる。"""
+    """R5: 同じ便なら、ローカル山が4つでも1山にまとめられる（便の数には上限がない）。"""
     rows = [
         _mix_row("店A", "C15-A-1", 500, 10.0),
         _mix_row("店A", "C15-B-1", 500, 9.0),
@@ -370,8 +370,32 @@ def test_same_bin_can_exceed_three_local_yamas():
     assert _mix_yamas(rows) == [["店A@C15-A-1", "店A@C15-B-1", "店A@C15-C-1", "店A@C15-D-1"]]
 
 
-def test_at_most_three_bins_per_yama():
-    """R5: 1山に混ぜる便（納入先×便）は最大3つ。"""
+def test_bins_are_not_limited_when_pickup_rules_hold():
+    """R5(改): 便の数に上限はない。高さ・トラック・床≦締切を守れていれば、4便でも1山にまとめる。"""
+    rows = [
+        _mix_row("店A", "C15-A-1", 500, 10.0),
+        _mix_row("店B", "C15-A-2", 500, 9.0),
+        _mix_row("店C", "C15-A-3", 500, 8.0),
+        _mix_row("店D", "C15-A-4", 500, 7.0),
+    ]
+    assert _mix_yamas(rows) == [["店A@C15-A-1", "店B@C15-A-2", "店C@C15-A-3", "店D@C15-A-4"]]
+
+
+def test_height_cap_still_applies_without_bin_limit():
+    """便の上限をなくしても、高さ上限（2,450）は守る。600mm×5枚は4枚+1枚に分かれる。"""
+    rows = [
+        _mix_row(f"店{chr(65 + i)}", f"C15-A-{i + 1}", 600, 10.0 - i)
+        for i in range(5)
+    ]
+    assert _mix_yamas(rows) == [
+        ["店A@C15-A-1", "店B@C15-A-2", "店C@C15-A-3", "店D@C15-A-4"],
+        ["店E@C15-A-5"],
+    ]
+
+
+def test_bin_limit_can_be_restored_by_constant(monkeypatch):
+    """MAX_BINS_PER_YAMA を 3 に戻せば、従来の「便は3つまで」になる（切り替えスイッチ）。"""
+    monkeypatch.setattr(sorter, "MAX_BINS_PER_YAMA", 3)
     rows = [
         _mix_row("店A", "C15-A-1", 500, 10.0),
         _mix_row("店B", "C15-A-2", 500, 9.0),

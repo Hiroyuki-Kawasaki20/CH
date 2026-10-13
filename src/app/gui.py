@@ -75,7 +75,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-13 分割救済の開始時刻を山全体の床より早くしない"
+APP_VERSION = "2026-10-13 山組みR5の便数上限をなくす"
 
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
