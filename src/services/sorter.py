@@ -625,7 +625,7 @@ def run_pipeline(
     return filtered, expanded, group_results, group_details, size1_mixed_summary, size1_mixed_details
 
 # ===== 山組みの6段階まとめ（docs/要件_山組みエリア列集約.md R4〜R6） =====
-# 1山に混ぜる便の上限 MAX_BINS_PER_YAMA（R5）は src/models/constants.py で定義している
+# 1山に混ぜる便の上限 MAX_BINS_PER_YAMA（R5。None = 上限なし）は src/models/constants.py で定義している
 
 # R4 の6段階: (段階名, 同じ列が必須, 同じエリアが必須, 同じトラックが必須)
 _STAGED_MATCH_SCOPES = (
@@ -742,8 +742,8 @@ def _can_merge_staged(base, cand, height_cap: float, need_row: bool, need_area: 
         return False
     if need_truck and len(base.trucks | cand.trucks) != 1:
         return False
-    # R5: 便は3つまで
-    if len(base.bins | cand.bins) > MAX_BINS_PER_YAMA:
+    # R5: 便の数の上限（None = 上限なし）
+    if MAX_BINS_PER_YAMA is not None and len(base.bins | cand.bins) > MAX_BINS_PER_YAMA:
         return False
     # R6: 高さ（特例品番を含めば2500、それ以外は height_cap）
     special = base.special or cand.special
