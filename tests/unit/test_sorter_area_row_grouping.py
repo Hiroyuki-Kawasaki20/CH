@@ -535,3 +535,47 @@ def test_refill_does_not_mix_trucks_of_single_truck_yamas():
     _, details = _build_size1_mixed(pd.DataFrame(rows), DEFAULT_HEIGHT_CAP, mixing_key="UKEIRE")
     for _, g in details.groupby("山通番"):
         assert g["入車時間"].nunique() == 1
+
+def _hino13_rows():
+    """2026-10-14 日野13便（入車13:21・12枚）の再現。6段階で5山、R10 で4山になる。"""
+    def p(store, ukeire, sebango, hinban, size, height, move):
+        return _pallet_row("日野", ukeire, "2026101413", store, sebango, hinban, size, height, move)
+
+    return [
+        p("Q10-A-10", "06", "193", "486216006000", "1", 750, 72.910),
+        p("Q10-A-12", "06", "195", "486236006000", "1", 750, 72.912),
+        p("Q10-A-13", "06", "196", "486246006000", "1", 750, 72.913),
+        p("Q10-A-24", "07", "443", "631426010000", "1", 1000, 72.916),  # 特例品番
+        p("Q10-A-24", "07", "443", "631426010000", "1", 1000, 72.916),  # 特例品番
+        p("Q10-A-20", "W5", "478", "671466020000", "21", 500, 72.914),
+        p("Q10-A-22", "W5", "477", "671456020000", "21", 500, 72.915),
+        p("Q10-B-B", "07", "441", "617756003000", "21", 500, 72.901),
+        p("Q10-B-7", "07", "431", "616236014000", "1", 500, 72.908),
+        p("Q10-B-5", "07", "432", "100000000005", "1", 500, 72.905),
+        p("Q10-D-23", "07", "438", "100000000023", "1", 750, 73.1901),
+        p("Q10-D-25", "07", "437", "617416014000", "1", 750, 73.1901),
+    ]
+
+
+def _hino13_store_sets():
+    _, details = _build_size1_mixed(pd.DataFrame(_hino13_rows()), DEFAULT_HEIGHT_CAP, mixing_key="UKEIRE")
+    return sorted(sorted(g["ストア"].astype(str)) for _, g in details.groupby("山通番"))
+
+
+def test_refill_keeps_same_row_together_hino13_pattern():
+    """R10: 山の数が同じなら、列のまとまりが良い組み方を選ぶ（2026-10-14 日野13便の再現）。
+    今は Q10-A-13 だけが Q10-D 列の山に入り、A-10・A-12 と別の山になる。"""
+    yamas = _hino13_store_sets()
+    assert len(yamas) == 4, yamas
+    assert ["Q10-A-10", "Q10-A-12", "Q10-A-13"] in yamas, yamas
+
+
+def test_refill_prefers_keeping_stage_yamas_hino13_pattern():
+    """R10: 山の数が同じなら、6段階の山を崩す数が少ない組み方を選び、その中で列の数を少なくする。
+    日野13便では、A-10・A-12・A-13 と特例品番 A-24 の2枚が、それぞれ同じ山に残る。列の数の合計は 6。
+    （列の数だけなら 5 にできるが、A-10 と A-20・A-22 のように6段階の山を余分に崩すので選ばない）"""
+    yamas = _hino13_store_sets()
+    assert len(yamas) == 4, yamas
+    assert any(y.count("Q10-A-24") == 2 for y in yamas), yamas
+    total = sum(len({s.rsplit("-", 1)[0] for s in y}) for y in yamas)
+    assert total == 6, yamas

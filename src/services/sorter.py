@@ -871,7 +871,6 @@ def _refill_search(pallets: list, target: int, height_cap: float, max_nodes: int
     )
     groups: list = []  # [(山, [パレットの添字, ...]), ...]
     nodes = 0
-
     def place(k: int) -> bool:
         nonlocal nodes
         if k == len(order):
@@ -917,8 +916,102 @@ def _refill_search(pallets: list, target: int, height_cap: float, max_nodes: int
     return None
 
 
-def _refill_truck(pallets: list, current_count: int, lower_bound: int, height_cap: float, max_nodes: int):
-    """山を1つずつ減らせる間、減らして探す。減らせたら山ごとの添字のリスト、減らせなければ None。"""
+def _refill_cost(groups: list, orig_of: list) -> tuple:
+    """組み方の点数（小さいほど良い）。
+    1) 各山に入っている「6段階の山」の数の合計（6段階のまとまり＝列ごとのローカル山を崩すほど増える）
+    2) 各山の列の数の合計（列をまたぐほど増える）
+    """
+    rows = sum(len(g.rows) for g, _m in groups)
+    origs = sum(len({orig_of[i] for i in m}) for _g, m in groups)
+    return (origs, rows)
+
+
+def _build_refill_groups(pallets: list, layout: list) -> list:
+    """山ごとの添字のリストから、(山, 添字のリスト) の組を作る。"""
+    groups = []
+    for members in layout:
+        g = pallets[members[0]].clone()
+        for i in members[1:]:
+            g.absorb(pallets[i])
+        groups.append((g, list(members)))
+    return groups
+
+
+def _refill_best_layout(pallets: list, target: int, height_cap: float, max_nodes: int,
+                        orig_of: list, initial: list) -> list:
+    """target 山の組み方のうち、列のまとまりが最も良い（_refill_cost が最小の）ものを返す。
+
+    initial は _refill_search で見つけた組み方。これより良いものだけを採る。
+    探索が max_nodes 回に達したら、そこまでで最も良かった組み方を返す。
+    """
+    order = sorted(
+        range(len(pallets)),
+        key=lambda i: (-pallets[i].height, -pallets[i].move, pallets[i].id),
+    )
+    best = {
+        "cost": _refill_cost(_build_refill_groups(pallets, initial), orig_of),
+        "layout": [list(m) for m in initial],
+    }
+    groups: list = []
+    nodes = 0
+
+    def place(k: int) -> None:
+        nonlocal nodes
+        if _refill_cost(groups, orig_of) >= best["cost"]:
+            return  # ここから先は、今の最良より良くならない（点数は足すほど増える）
+        if k == len(order):
+            best["cost"] = _refill_cost(groups, orig_of)
+            best["layout"] = [list(m) for _g, m in groups]
+            return
+        nodes += 1
+        if nodes > max_nodes:
+            raise _RefillBudgetExceeded()
+        i = order[k]
+        p = pallets[i]
+        same_row, others = [], []
+        for gi, (g, _m) in enumerate(groups):
+            if _can_merge_staged(g, p, height_cap, False, False, True):
+                (same_row if _shares_known(p.rows, g.rows) else others).append(gi)
+        same_row.sort(key=lambda gi: (-groups[gi][0].height, gi))
+        others.sort(key=lambda gi: (
+            0 if _shares_known(p.areas, groups[gi][0].areas) else 1,
+            -groups[gi][0].height, gi,
+        ))
+        tried = set()
+
+        def join(gi: int) -> None:
+            g, members = groups[gi]
+            sig = (_refill_signature(g), frozenset(orig_of[j] for j in members))
+            if sig in tried:
+                return
+            tried.add(sig)
+            merged = g.clone()
+            merged.absorb(p)
+            groups[gi] = (merged, members + [i])
+            place(k + 1)
+            groups[gi] = (g, members)
+
+        # 同じ列の山 → 新しい山 → 別の列の山 の順に試す（良い組み方を早く見つけるため）
+        for gi in same_row:
+            join(gi)
+        if len(groups) < target:
+            groups.append((p.clone(), [i]))
+            place(k + 1)
+            groups.pop()
+        for gi in others:
+            join(gi)
+
+    try:
+        place(0)
+    except _RefillBudgetExceeded:
+        logger.info("[R10] 列のまとまりの探索が上限(%d回)に達したため、ここまでで最も良い組み方を使います", max_nodes)
+    return best["layout"]
+
+
+def _refill_truck(pallets: list, current_count: int, lower_bound: int, height_cap: float,
+                  max_nodes: int, orig_of: list):
+    """山を1つずつ減らせる間、減らして探す。減らせたら、その山の数で列のまとまりが最も良い組み方を返す。
+    減らせなければ None。"""
     best = None
     target = current_count - 1
     while target >= max(lower_bound, 1):
@@ -930,8 +1023,11 @@ def _refill_truck(pallets: list, current_count: int, lower_bound: int, height_ca
         if found is None:
             break
         best = found
-        target = len(found) - 1  # 目標より少ない山で組めたら、さらにその1つ下を探す
-    return best
+        target = len(found) - 1
+    if best is None:
+        return None
+    # 山の数が同じ組み方の中から、列のまとまりが最も良いものを選ぶ
+    return _refill_best_layout(pallets, len(best), height_cap, max_nodes, orig_of, best)
 
 
 def _refill_yamas_per_truck(df: pd.DataFrame, height_cap: float) -> pd.DataFrame:
@@ -972,7 +1068,8 @@ def _refill_yamas_per_truck(df: pd.DataFrame, height_cap: float) -> pd.DataFrame
         if len(ys) <= lower_bound:
             continue  # すでに最少
         found = _refill_truck(
-            pallets, len(ys), lower_bound, float(height_cap), int(REFILL_MAX_SEARCH_NODES)
+            pallets, len(ys), lower_bound, float(height_cap), int(REFILL_MAX_SEARCH_NODES),
+            [int(yama[pos]) for pos in positions],  # 各パレットの6段階の山番号
         )
         if found is None or len(found) >= len(ys):
             continue
