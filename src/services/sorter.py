@@ -2,6 +2,7 @@
 """CHかんばんセット — 仕分けロジック（グループ化・混載・山統合）"""
 
 import os
+import math
 import logging
 from typing import Optional, Dict
 import pandas as pd
@@ -15,6 +16,7 @@ from ..models.constants import (
     SPLIT_UKEIRE_ROUTES, HINO_VENDOR_PREFIX, PICKUP_DEADLINE_BUFFER_SECS,
     MAX_BINS_PER_YAMA,
     R7_YAMA_TOLERANCE,
+    REFILL_YAMAS_ENABLED, REFILL_MAX_SEARCH_NODES,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
@@ -687,6 +689,24 @@ class _StagedYama:
         self.floor = max(self.floor, other.floor)
         self.deadline = min(self.deadline, other.deadline)
 
+    def clone(self) -> "_StagedYama":
+        """探索の巻き戻し用のコピー（members の中身は共有し、集合・辞書はコピーする）。"""
+        c = _StagedYama.__new__(_StagedYama)
+        c.id = self.id
+        c.members = list(self.members)
+        c.height = self.height
+        c.move = self.move
+        c.special = self.special
+        c.has21 = self.has21
+        c.rows = set(self.rows)
+        c.areas = set(self.areas)
+        c.trucks = set(self.trucks)
+        c.bins = set(self.bins)
+        c.vendor_trucks = {v: set(t) for v, t in self.vendor_trucks.items()}
+        c.floor = self.floor
+        c.deadline = self.deadline
+        return c
+
     def sort_key(self) -> tuple:
         """高い順 → 移動工数の大きい順 → 元の順（R4）。"""
         return (-self.height, -self.move, self.id)
@@ -796,6 +816,278 @@ def _match_units_staged(units: pd.DataFrame, height_cap: float) -> dict:
                 del yamas[partner.id]
     return {m["id"]: y.id for y in yamas.values() for m in y.members if m["id"] != y.id}
 
+# ===== 要件 R10: トラックごとに、パレット1枚単位で山を組み直して山の数を減らす =====
+class _RefillBudgetExceeded(Exception):
+    """組み直しの探索が、上限回数に達した。"""
+
+
+def _staged_pallet_record(pos: int, r) -> dict:
+    """パレット1枚を、6段階まとめ用の dict にする（_staged_unit_records と同じキー）。"""
+    vendor = _to_key_str(r.get("納入先"))
+    nony = _to_key_str(r.get("NONYUHIBIN"))
+    return {
+        "id": pos,
+        "height": _to_float(r.get("高さ"), 0.0),
+        "move": _to_float(r.get("移動工数"), float("-inf")),
+        "has1": bool(r.get("_is_size1", False)),
+        "has21": bool(r.get("_is_size21", False)),
+        "special": bool(r.get("_has_special_hinban", False)),
+        "vendor": vendor,
+        "nony": nony,
+        "bin": (vendor, nony[-2:]),
+        "truck": _to_key_str(r.get("_truck_key")),
+        "area": _to_key_str(r.get("_area")) or UNKNOWN_STORE_AREA,
+        "row": _to_key_str(r.get("_row")) or UNKNOWN_STORE_AREA,
+        "floor": _to_float(r.get("_床秒"), 0.0),
+        "deadline": _to_float(r.get("_締切秒"), float("inf")),
+    }
+
+
+def _refill_signature(g) -> tuple:
+    """探索で「同じ状態の山」を見分ける印。同じ印の山は、どちらに足しても結果が同じなので片方だけ試す。"""
+    return (
+        round(g.height, 6), g.special, g.has21,
+        frozenset(g.bins), frozenset(g.rows), frozenset(g.areas),
+        g.floor, g.deadline,
+        frozenset((m["vendor"], m["nony"], m["has1"], m["has21"]) for m in g.members),
+    )
+
+
+def _shares_known(a: set, b: set) -> bool:
+    """列・エリアが共通か（「不明」どうしは共通とみなさない）。"""
+    return bool((a & b) - {UNKNOWN_STORE_AREA})
+
+
+def _refill_search(pallets: list, target: int, height_cap: float, max_nodes: int):
+    """パレット（1枚ずつの _StagedYama）を target 山以内に分けられれば、山ごとの添字のリストを返す。無ければ None。
+
+    高いパレットから順に「既存の山に足す」か「新しい山を作る」を深さ優先で試す。
+    足せるかは _can_merge_staged（R4〜R6 と同じ判定）で決める。
+    試す回数が max_nodes を超えたら _RefillBudgetExceeded を投げる。
+    """
+    order = sorted(
+        range(len(pallets)),
+        key=lambda i: (-pallets[i].height, -pallets[i].move, pallets[i].id),
+    )
+    groups: list = []  # [(山, [パレットの添字, ...]), ...]
+    nodes = 0
+    def place(k: int) -> bool:
+        nonlocal nodes
+        if k == len(order):
+            return True
+        nodes += 1
+        if nodes > max_nodes:
+            raise _RefillBudgetExceeded()
+        i = order[k]
+        p = pallets[i]
+        options = [
+            gi for gi, (g, _members) in enumerate(groups)
+            if _can_merge_staged(g, p, height_cap, False, False, True)
+        ]
+        # 同じ列 → 同じエリア → 高い山（隙間が小さい山）の順に試す
+        options.sort(key=lambda gi: (
+            0 if _shares_known(p.rows, groups[gi][0].rows) else 1,
+            0 if _shares_known(p.areas, groups[gi][0].areas) else 1,
+            -groups[gi][0].height,
+            gi,
+        ))
+        tried = set()
+        for gi in options:
+            g, members = groups[gi]
+            sig = _refill_signature(g)
+            if sig in tried:
+                continue
+            tried.add(sig)
+            merged = g.clone()
+            merged.absorb(p)
+            groups[gi] = (merged, members + [i])
+            if place(k + 1):
+                return True
+            groups[gi] = (g, members)
+        if len(groups) < target:
+            groups.append((p.clone(), [i]))
+            if place(k + 1):
+                return True
+            groups.pop()
+        return False
+
+    if place(0):
+        return [members for _g, members in groups]
+    return None
+
+
+def _refill_cost(groups: list, orig_of: list) -> tuple:
+    """組み方の点数（小さいほど良い）。
+    1) 各山に入っている「6段階の山」の数の合計（6段階のまとまり＝列ごとのローカル山を崩すほど増える）
+    2) 各山の列の数の合計（列をまたぐほど増える）
+    """
+    rows = sum(len(g.rows) for g, _m in groups)
+    origs = sum(len({orig_of[i] for i in m}) for _g, m in groups)
+    return (origs, rows)
+
+
+def _build_refill_groups(pallets: list, layout: list) -> list:
+    """山ごとの添字のリストから、(山, 添字のリスト) の組を作る。"""
+    groups = []
+    for members in layout:
+        g = pallets[members[0]].clone()
+        for i in members[1:]:
+            g.absorb(pallets[i])
+        groups.append((g, list(members)))
+    return groups
+
+
+def _refill_best_layout(pallets: list, target: int, height_cap: float, max_nodes: int,
+                        orig_of: list, initial: list) -> list:
+    """target 山の組み方のうち、列のまとまりが最も良い（_refill_cost が最小の）ものを返す。
+
+    initial は _refill_search で見つけた組み方。これより良いものだけを採る。
+    探索が max_nodes 回に達したら、そこまでで最も良かった組み方を返す。
+    """
+    order = sorted(
+        range(len(pallets)),
+        key=lambda i: (-pallets[i].height, -pallets[i].move, pallets[i].id),
+    )
+    best = {
+        "cost": _refill_cost(_build_refill_groups(pallets, initial), orig_of),
+        "layout": [list(m) for m in initial],
+    }
+    groups: list = []
+    nodes = 0
+
+    def place(k: int) -> None:
+        nonlocal nodes
+        if _refill_cost(groups, orig_of) >= best["cost"]:
+            return  # ここから先は、今の最良より良くならない（点数は足すほど増える）
+        if k == len(order):
+            best["cost"] = _refill_cost(groups, orig_of)
+            best["layout"] = [list(m) for _g, m in groups]
+            return
+        nodes += 1
+        if nodes > max_nodes:
+            raise _RefillBudgetExceeded()
+        i = order[k]
+        p = pallets[i]
+        same_row, others = [], []
+        for gi, (g, _m) in enumerate(groups):
+            if _can_merge_staged(g, p, height_cap, False, False, True):
+                (same_row if _shares_known(p.rows, g.rows) else others).append(gi)
+        same_row.sort(key=lambda gi: (-groups[gi][0].height, gi))
+        others.sort(key=lambda gi: (
+            0 if _shares_known(p.areas, groups[gi][0].areas) else 1,
+            -groups[gi][0].height, gi,
+        ))
+        tried = set()
+
+        def join(gi: int) -> None:
+            g, members = groups[gi]
+            sig = (_refill_signature(g), frozenset(orig_of[j] for j in members))
+            if sig in tried:
+                return
+            tried.add(sig)
+            merged = g.clone()
+            merged.absorb(p)
+            groups[gi] = (merged, members + [i])
+            place(k + 1)
+            groups[gi] = (g, members)
+
+        # 同じ列の山 → 新しい山 → 別の列の山 の順に試す（良い組み方を早く見つけるため）
+        for gi in same_row:
+            join(gi)
+        if len(groups) < target:
+            groups.append((p.clone(), [i]))
+            place(k + 1)
+            groups.pop()
+        for gi in others:
+            join(gi)
+
+    try:
+        place(0)
+    except _RefillBudgetExceeded:
+        logger.info("[R10] 列のまとまりの探索が上限(%d回)に達したため、ここまでで最も良い組み方を使います", max_nodes)
+    return best["layout"]
+
+
+def _refill_truck(pallets: list, current_count: int, lower_bound: int, height_cap: float,
+                  max_nodes: int, orig_of: list):
+    """山を1つずつ減らせる間、減らして探す。減らせたら、その山の数で列のまとまりが最も良い組み方を返す。
+    減らせなければ None。"""
+    best = None
+    target = current_count - 1
+    while target >= max(lower_bound, 1):
+        try:
+            found = _refill_search(pallets, target, height_cap, max_nodes)
+        except _RefillBudgetExceeded:
+            logger.info("[R10] 探索が上限(%d回)に達したため、ここまでの結果を使います", max_nodes)
+            break
+        if found is None:
+            break
+        best = found
+        target = len(found) - 1
+    if best is None:
+        return None
+    # 山の数が同じ組み方の中から、列のまとまりが最も良いものを選ぶ
+    return _refill_best_layout(pallets, len(best), height_cap, max_nodes, orig_of, best)
+
+
+def _refill_yamas_per_truck(df: pd.DataFrame, height_cap: float) -> pd.DataFrame:
+    """要件 R10: トラック（入車時間）ごとに、パレット1枚単位で山を組み直して、山の数を減らす。
+
+    R4 の6段階は「ローカル山」を丸ごと足すだけなので、列ごとの端数（例: 1,500・1,500・1,250）が
+    丸ごとでは組めず、パレット1枚ずつなら組める、という山が残ることがある。
+    1つのトラックだけで作られた山を対象に、山の数が減るときだけ組み直す。
+    守る条件は _can_merge_staged（R5・R6）と同じ。2つ以上のトラックが混ざった山は触らない。
+    """
+    if df is None or df.empty or "山通番" not in df.columns:
+        return df
+    yama = pd.to_numeric(df["山通番"], errors="coerce").fillna(0).astype(int).to_numpy()
+    records = [_staged_pallet_record(pos, row) for pos, (_, row) in enumerate(df.iterrows())]
+
+    trucks_of_yama: dict = {}
+    for rec, y in zip(records, yama):
+        trucks_of_yama.setdefault(int(y), set()).add(rec["truck"])
+    yamas_of_truck: dict = {}
+    for y, trucks in trucks_of_yama.items():
+        if len(trucks) == 1:  # 1つのトラックだけの山（空の入車時間も1つのトラックとして扱う）
+            yamas_of_truck.setdefault(next(iter(trucks)), []).append(y)
+
+    new_yama = yama.copy()
+    for truck, ys in sorted(yamas_of_truck.items()):
+        if len(ys) < 2:
+            continue
+        ys = sorted(ys)
+        ys_set = set(ys)
+        positions = [pos for pos, y in enumerate(yama) if int(y) in ys_set]
+        pallets = [_StagedYama(records[pos]) for pos in positions]
+        total = sum(p.height for p in pallets)
+        cap_max = (
+            max(float(height_cap), float(SPECIAL_HINBAN_HEIGHT_CAP))
+            if any(p.special for p in pallets) else float(height_cap)
+        )
+        lower_bound = max(1, math.ceil(total / cap_max - 1e-9)) if cap_max > 0 else 1
+        if len(ys) <= lower_bound:
+            continue  # すでに最少
+        found = _refill_truck(
+            pallets, len(ys), lower_bound, float(height_cap), int(REFILL_MAX_SEARCH_NODES),
+            [int(yama[pos]) for pos in positions],  # 各パレットの6段階の山番号
+        )
+        if found is None or len(found) >= len(ys):
+            continue
+        # 山番号は、元の山番号を小さい順に再利用する
+        for yama_id, members in zip(ys, sorted(found, key=min)):
+            for local_idx in members:
+                new_yama[positions[local_idx]] = yama_id
+        logger.info(
+            "[R10] 山の組み直し: 入車%s: %d山 → %d山（パレット%d枚）",
+            truck or "(未設定)", len(ys), len(found), len(positions),
+        )
+
+    if np.array_equal(new_yama, yama):
+        return df
+    out = df.copy()
+    renum = {old: i + 1 for i, old in enumerate(sorted({int(v) for v in new_yama}))}
+    out["山通番"] = [renum[int(v)] for v in new_yama]
+    return out
 
 def _sort_by_move_desc(df: pd.DataFrame) -> pd.DataFrame:
     """従来（要件 R3 より前）の積む順番: 移動工数の大きい順だけ。R7 の比較用。"""
@@ -928,10 +1220,14 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None, _legacy
     rep_map = {old: i + 1 for i, old in enumerate(sorted(group_table["代表山ID"].unique()))}
     group_table["山通番"] = group_table["代表山ID"].map(rep_map).astype(int)
 
+    _time_cols = [c for c in ("_床秒", "_締切秒") if c in group_table.columns]
     size1_with_mountain = size1_packed.merge(
-        group_table[group_cols + ["山通番"]],
+        group_table[group_cols + ["山通番"] + _time_cols],
         on=group_cols, how="left"
     )
+    # 要件 R10: 1つのトラックだけの山を、パレット1枚単位で組み直して山を減らす（従来ロジックは対象外）
+    if not _legacy and REFILL_YAMAS_ENABLED:
+        size1_with_mountain = _refill_yamas_per_truck(size1_with_mountain, float(height_cap))
 
 
     def _rescue_split_conflict_vendor(df_with_mountain: pd.DataFrame) -> pd.DataFrame:
