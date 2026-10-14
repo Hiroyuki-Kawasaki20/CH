@@ -430,6 +430,7 @@ def _force_more_yamas(monkeypatch, tolerance):
     """新しいまとめ方を「1つもまとめない」に差し替えて、わざと山を増やし、R7 の許容山数を指定する。"""
     monkeypatch.setattr(sorter, "_match_units_staged", lambda units, height_cap: {})
     monkeypatch.setattr(sorter, "R7_YAMA_TOLERANCE", tolerance)
+    monkeypatch.setattr(sorter, "REFILL_YAMAS_ENABLED", False, raising=False)
 
 
 def test_safety_valve_tolerance_zero_falls_back_on_one_extra_yama(monkeypatch, caplog):
@@ -469,3 +470,68 @@ def test_safety_valve_keeps_new_logic_when_not_worse(caplog):
     with caplog.at_level(logging.INFO, logger=sorter.logger.name):
         assert _mix_yamas(rows) == [["店A@C15-A-1", "店B@C15-A-2"], ["店C@C15-B-1"]]
     assert "[R7]" not in caplog.text
+
+# ==== R10 詰め直し（トラックごとにパレット1枚単位で組み直して、山を減らす） ====
+
+def test_refill_merges_row_fragments_hino10_pattern():
+    """R10: 列ごとの端数（1,500・1,500・1,250）は丸ごとでは組めないが、
+    1枚単位で組み直すと2山になる（2026-10-14 日野10便の再現）。"""
+    rows = [
+        _mix_row("店A", "C15-B-1", 500, 10.0),
+        _mix_row("店A", "C15-B-2", 500, 9.9),
+        _mix_row("店A", "C15-B-3", 500, 9.8),
+        _mix_row("店A", "C15-D-1", 750, 9.7),
+        _mix_row("店A", "C15-D-2", 750, 9.6),
+        _mix_row("店A", "C15-A-1", 750, 9.5),
+        _mix_row("店A", "C15-A-2", 500, 9.4),
+    ]
+    yamas = _mix_yamas(rows)
+    assert len(yamas) == 2, yamas
+
+
+def test_refill_splits_special_pair_hino09_pattern():
+    """R10: 特例品番2枚を別々の山に分けると、4山が3山になる（2026-10-14 日野09便の再現）。"""
+    def p(store, ukeire, hinban, size, height, move):
+        return _pallet_row("日野", ukeire, "2026101409", store, "0", hinban, size, height, move)
+
+    rows = [
+        p("Q10-A-10", "06", "486216006000", "1", 750, 72.910),
+        p("Q10-A-11", "06", "486226006000", "1", 750, 72.911),
+        p("Q10-A-12", "06", "486236006000", "1", 750, 72.912),
+        p("Q10-A-24", "07", "631426010000", "1", 1000, 72.916),  # 特例品番
+        p("Q10-A-24", "07", "631426010000", "1", 1000, 72.916),  # 特例品番
+        p("Q10-A-20", "W5", "671466020000", "21", 500, 72.914),
+        p("Q10-A-22", "W5", "671456020000", "21", 500, 72.915),
+        p("Q10-B-5", "07", "100000000005", "1", 500, 72.905),
+        p("Q10-D-23", "07", "100000000023", "1", 750, 73.1901),
+        p("Q10-D-25", "07", "617416014000", "1", 750, 73.1901),
+    ]
+    _, details = _build_size1_mixed(pd.DataFrame(rows), DEFAULT_HEIGHT_CAP, mixing_key="UKEIRE")
+    assert details["山通番"].nunique() == 3
+
+def test_refill_can_be_disabled_by_constant(monkeypatch):
+    """REFILL_YAMAS_ENABLED を False にすれば、組み直しをしない（切り替えスイッチ）。日野10便の再現と同じ入力。"""
+    monkeypatch.setattr(sorter, "REFILL_YAMAS_ENABLED", False)
+    rows = [
+        _mix_row("店A", "C15-B-1", 500, 10.0),
+        _mix_row("店A", "C15-B-2", 500, 9.9),
+        _mix_row("店A", "C15-B-3", 500, 9.8),
+        _mix_row("店A", "C15-D-1", 750, 9.7),
+        _mix_row("店A", "C15-D-2", 750, 9.6),
+        _mix_row("店A", "C15-A-1", 750, 9.5),
+        _mix_row("店A", "C15-A-2", 500, 9.4),
+    ]
+    assert len(_mix_yamas(rows)) == 3
+
+
+def test_refill_does_not_mix_trucks_of_single_truck_yamas():
+    """R10: 別のトラック（入車時間）の山どうしは混ぜない（回帰防止。R10 が動かない並びなので、入れる前から通る）。"""
+    rows = [
+        _mix_row("店A", "C15-A-1", 1500, 10.0, arrival="08:00"),
+        _mix_row("店B", "C15-B-1", 1500, 9.0, arrival="08:00"),
+        _mix_row("店C", "C15-C-1", 700, 8.0, arrival="09:00"),
+        _mix_row("店D", "C15-D-1", 700, 7.0, arrival="09:00"),
+    ]
+    _, details = _build_size1_mixed(pd.DataFrame(rows), DEFAULT_HEIGHT_CAP, mixing_key="UKEIRE")
+    for _, g in details.groupby("山通番"):
+        assert g["入車時間"].nunique() == 1
