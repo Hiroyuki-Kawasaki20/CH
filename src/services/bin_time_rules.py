@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from ..models.constants import PICKUP_DEADLINE_BUFFER_SECS
+from ..models.constants import PICKUP_DEADLINE_BUFFER_SECS, SPLIT_UKEIRE_ROUTES
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_hhmm, _ZEN2HAN_DIGIT_COLON,
 )
@@ -80,8 +80,13 @@ def _vendor_bin_numbers(bin_time_map: BinTimeMap, vendor: str) -> List[int]:
     return sorted(bins)
 
 
+def _clean_text(value) -> str:
+    """マスタキー照合用に文字列化し、前後の空白を除く。"""
+    return str(value).strip()
+
+
 def unit_floor_deadline(
-    vendor, nonyuhibin, arrival_hhmm, bin_time_map: BinTimeMap
+    vendor, nonyuhibin, arrival_hhmm, bin_time_map: BinTimeMap, ukeire=""
 ) -> Tuple[int, Optional[int]]:
     """1ユニット（納入先×便）の (床秒, 締切秒 or None) を返す。
 
@@ -89,14 +94,22 @@ def unit_floor_deadline(
           無ければマスタ辞書から引く。
     床  : 前便（01便は最終便へ巻き戻り = process_assigner._get_prev_bin_for_vendor）の
           入車 + 10分。前便が前日側に見える場合は -24h 補正（_cycle_aware_prev_floor_secs）。
+    KVC・元町・織機は、受入がマスタにあれば「納入先-受入」の行を使う。
     """
     vendor = _normalize_dest_name(str(vendor).strip())
+    ukeire = _clean_text(ukeire)
     nony = str(nonyuhibin).strip().translate(_ZEN2HAN_DIGIT_COLON)
     order2 = nony[-2:] if len(nony) >= 2 else nony
 
+    key_vendor = vendor
+    if vendor in SPLIT_UKEIRE_ROUTES and ukeire:
+        split_key = f"{vendor}-{ukeire}"
+        if _vendor_bin_numbers(bin_time_map, split_key):
+            key_vendor = split_key
+
     arrival = timeline_secs(arrival_hhmm)
     if arrival is None:
-        arrival = bin_time_map.get((vendor, order2))
+        arrival = bin_time_map.get((key_vendor, order2))
     deadline = max(0, int(arrival) - PICKUP_DEADLINE_BUFFER_SECS) if arrival is not None else None
 
     floor = 0
@@ -105,12 +118,12 @@ def unit_floor_deadline(
     except (TypeError, ValueError):
         b = None
     if b is not None:
-        vendor_bins = _vendor_bin_numbers(bin_time_map, vendor)
+        vendor_bins = _vendor_bin_numbers(bin_time_map, key_vendor)
         prev_bin = _get_prev_bin_for_vendor(
-            vendor, b, {vendor: vendor_bins}, allow_wrap=True, offset=1,
+            key_vendor, b, {key_vendor: vendor_bins}, allow_wrap=True, offset=1,
         )
         if prev_bin is not None:
-            prev_secs = bin_time_map.get((vendor, prev_bin))
+            prev_secs = bin_time_map.get((key_vendor, prev_bin))
             if prev_secs is not None:
                 if arrival is not None:
                     floor = _cycle_aware_prev_floor_secs(int(prev_secs), int(arrival))
@@ -128,6 +141,7 @@ def attach_unit_time_bounds(units: pd.DataFrame, bin_time_map: BinTimeMap) -> pd
         floor, deadline = unit_floor_deadline(
             u.get("納入先", ""), u.get("NONYUHIBIN", ""),
             u.get("入車時間", ""), bin_time_map,
+            ukeire=u.get("UKEIRE", ""),
         )
         floors.append(float(floor))
         deadlines.append(float(deadline) if deadline is not None else float("inf"))
