@@ -75,7 +75,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-15 セットあり便の前便で同じトラックの便を飛ばす"
+APP_VERSION = "2026-10-15 山組みの床をKVC・元町・織機は納入先-受入のマスタ行で引く"
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
