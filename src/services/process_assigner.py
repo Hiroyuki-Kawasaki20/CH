@@ -209,6 +209,36 @@ def _cycle_aware_prev_floor_secs(prev_arrival_secs: int, current_arrival_secs: i
         floor -= DAY_SECS
     return max(0, floor)
 
+def _prev_bin_skipping_same_truck(
+    vendor: str,
+    current_bin: int,
+    vendor_bin_numbers: Dict[str, List[int]],
+    master_map: dict,
+    current_arrival_secs: int,
+) -> Optional[str]:
+    """セットあり便の前便を返す。自分と同じ入車時刻の便（同じトラック）は前便にしない。
+
+    例: KVC-B7 01便(06:45)の巡回上の前便は10便(06:45)。10便と01便は同じ06:45の
+    トラックに載る（2026-10-15 現場確認）ため、さらに前の09便(22:41)を前便とする。
+    これで01便の床は22:51、締切は2直上限(25:35)になり、10便と同じ時間帯になる。
+    一巡しても違う時刻の便が無いとき（便が1つだけ等）は、従来どおり最初の前便を返す。
+    """
+    first = _get_prev_bin_for_vendor(
+        vendor, int(current_bin), vendor_bin_numbers, allow_wrap=True, offset=1,
+    )
+    prev_bin = first
+    for _ in range(len(vendor_bin_numbers.get(vendor, []))):
+        if prev_bin is None or int(prev_bin) == int(current_bin):
+            return first
+        prev_pickup = master_map.get((vendor, prev_bin), "")
+        prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
+        if prev_secs is None or int(prev_secs) != int(current_arrival_secs):
+            return prev_bin
+        prev_bin = _get_prev_bin_for_vendor(
+            vendor, int(prev_bin), vendor_bin_numbers, allow_wrap=True, offset=1,
+        )
+    return first
+
 
 def _schedule_work(current_end: int, mountain_count: int, work_duration: int) -> Tuple[int, int, int]:
     """工程内の次山を開始/終了する時刻を返す（2山ごと照合+180秒を含む）。"""
@@ -1113,12 +1143,8 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(
-                            lookup_vendor,
-                            current_bin,
-                            vendor_bin_numbers,
-                            allow_wrap=True,
-                            offset=1,
+                        prev_bin = _prev_bin_skipping_same_truck(
+                            lookup_vendor, current_bin, vendor_bin_numbers, master_map, pickup_secs,
                         )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
@@ -1341,12 +1367,8 @@ def _legacy_assign_processes_by_arrival_time(
                 else:
                     try:
                         current_bin = int(order2)
-                        prev_bin = _get_prev_bin_for_vendor(
-                            lookup_vendor,
-                            current_bin,
-                            vendor_bin_numbers,
-                            allow_wrap=True,
-                            offset=1,
+                        prev_bin = _prev_bin_skipping_same_truck(
+                            lookup_vendor, current_bin, vendor_bin_numbers, master_map, pickup_secs,
                         )
                         if prev_bin is not None:
                             prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
