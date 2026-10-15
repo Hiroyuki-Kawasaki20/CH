@@ -1150,7 +1150,16 @@ def _legacy_assign_processes_by_arrival_time(
                     if prev_bin is not None:
                         prev_pickup = master_map.get((lookup_vendor, prev_bin), "")
                         prev_secs = _to_operational_timeline_secs(_time_to_seconds(prev_pickup)) if prev_pickup else None
-                        st_prev = (prev_secs + ARRIVAL_BUFFER_SECS) if prev_secs is not None else 0
+                        if prev_secs is None:
+                            st_prev = 0
+                        elif int(prev_secs) >= int(pickup_secs):
+                            # 前便が現在の便以降に見える = 前サイクル(前夜〜未明)の便で、今日の床にならない。
+                            # 例: 豊鉄広久手02(11:40)の前便01は00:40入車=業務日24:40扱い → そのままだと床24:50。
+                            # 制約なし(0)にすると、あふれ/再昇格では山の開始下限(各直開始+25分)が使われる。
+                            st_prev = 0
+                        else:
+                            st_prev = prev_secs + ARRIVAL_BUFFER_SECS
+
                     else:
                         st_prev = 0
                 except (ValueError, TypeError):
