@@ -261,6 +261,8 @@ def _build_size1_stack_units(size1_packed: pd.DataFrame, mixing_key: str) -> pd.
     # 「納入先」は group_cols（groupbyキー）に含まれるため、aggsには入れない
     if "入車時間" in size1_packed.columns:
         aggs["入車時間"] = ("入車時間", "first")
+    if "UKEIRE" in size1_packed.columns:
+        aggs["UKEIRE"] = ("UKEIRE", "first")
 
     units = size1_packed.groupby(group_cols).agg(**aggs).reset_index()
     if units.empty:
@@ -1251,6 +1253,7 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None, _legacy
             floor_secs, deadline_secs = unit_floor_deadline(
                 rr.get("納入先", ""), rr.get("NONYUHIBIN", ""),
                 rr.get("入車時間", ""), bin_time_map,
+                ukeire=rr.get("UKEIRE", ""),
             )
             floors.append(int(floor_secs))
             deadlines.append(deadline_secs)
