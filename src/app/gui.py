@@ -64,7 +64,7 @@ from src.services.exporter import (
     _to_display_hhmm_24h,
     build_spo_export_df, export_spo_xlsx_staged,
     attach_pickup_start_time, attach_entry_time_to_groupeddata, export_kanban_xlsx,
-    append_to_spo_history,
+    append_to_spo_history,sort_pallets_for_numbering,
 )
 from src.services.lane_end_times_history import (
     push_lane_end_times, select_lane_end_times,
@@ -75,7 +75,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-15 山組みの床をKVC・元町・織機は納入先-受入のマスタ行で引く"
+APP_VERSION = "2026-10-16 セットボードの山詳細をGroupedDataの番号順（サイズ21先頭）に揃える"
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
@@ -2106,29 +2106,9 @@ class App(ctk.CTk):
             sub2["高さ"] = pd.to_numeric(sub2.get("高さ", np.nan), errors="coerce")
             sub2["_store_key"] = sub2.get("ストア", sub2.get("SYUKKASAKI", "")).astype(str).str.strip()
             sub2["_order_key"] = sub2.get("NONYUHIBIN", "").astype(str).str.strip()
-            # build_groupeddata_json_for_mountain() の採番ルールと同一キーで並べる:
-            # 第1キー: 移動工数 昇順（na は末尾）、第2キー: SEBANGO 昇順（なければ工程内No 昇順）
-            _detail_sort_by = ["移動工数"]
-            _detail_asc = [True]
-            if "納入先" in sub2.columns:
-                _v = sub2["納入先"].fillna("").astype(str).str.strip()
-                _c = pd.to_numeric(sub2["移動工数"], errors="coerce")
-                sub2["_vendor_last"] = _c.groupby(_v.values).transform("max")
-                sub2["_vendor_first"] = _c.groupby(_v.values).transform("min")
-                sub2["_vendor_key"] = _v.where(_c.notna(), "")
-                _detail_sort_by += ["_vendor_last", "_vendor_first", "_vendor_key"]
-                _detail_asc += [True, True, True]
-            if "SEBANGO" in sub2.columns:
-                _detail_sort_by.append("SEBANGO")
-                _detail_asc.append(True)
-            else:
-                _detail_sort_by.append("工程内No")
-                _detail_asc.append(True)
-            sub2 = sub2.sort_values(
-                by=_detail_sort_by,
-                ascending=_detail_asc,
-                na_position="last",
-            )
+            # GroupedData の「番号」と同じ並べ方(サイズ21先頭 → 移動工数昇順 → …)。
+            # ルールは exporter.sort_pallets_for_numbering の1か所だけで持つ(Issue #81)。
+            sub2 = sort_pallets_for_numbering(sub2, "納入先")
             display_rows = list(sub2.iterrows())
             prev_key = None
             prev_row_dest = None
