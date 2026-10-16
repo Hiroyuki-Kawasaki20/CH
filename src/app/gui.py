@@ -33,6 +33,7 @@ from src.models.constants import (
     PROC_MAIN, PROC_RELIEF, PROC_OVERFLOW, PROC_MAIN_LABEL, PROC_RELIEF_LABEL, PROC_OVERFLOW_LABEL,
     COLOR_MAIN, COLOR_RELIEF, COLOR_OVERFLOW, COLOR_VIOLATION,
     VIRTUAL_YAMA_NO, is_virtual_yama, SPLIT_UKEIRE_ROUTES, LOCAL_OUTPUT_DIR,
+    SPECIAL_HINBAN,
 )
 from src.services.data_loader import (
     load_data, DataManager,
@@ -76,7 +77,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-16 セットボードの山詳細をGroupedDataの番号順（サイズ21先頭）に揃える"
+APP_VERSION = "2026-10-16 セットボードの山詳細で特例品番(A-24)を└1に表示する(表示のみ)"
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
@@ -129,6 +130,23 @@ def _start_sort_key_for_test(start_times: dict, yama_no) -> tuple:
     except Exception:
         return (1, 10 ** 9, int(yama_no))
 
+
+
+def _special_hinban_first(df: pd.DataFrame) -> pd.DataFrame:
+    """セットボードの山詳細だけ、特例品番の行を先頭（└1、2枚なら └1・└2）に出す。
+
+    作業者が特例品番を山の最上段に置く運用に、GUI の表示を合わせる。表示専用で、
+    GroupedData の「番号」は変えない。特例どうし、それ以外どうしの並びは、
+    渡された df の並び（exporter.sort_pallets_for_numbering の結果）を保つ。
+    HINBAN 列が無い、または特例品番が無いときは、そのまま返す。
+    """
+    if df is None or df.empty or "HINBAN" not in df.columns:
+        return df
+    hinban = df["HINBAN"].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+    is_special = hinban.eq(SPECIAL_HINBAN)
+    if not is_special.any():
+        return df
+    return pd.concat([df[is_special], df[~is_special]])
 
 
 class App(ctk.CTk):
@@ -2110,6 +2128,9 @@ class App(ctk.CTk):
             # GroupedData の「番号」と同じ並べ方(サイズ21先頭 → 移動工数昇順 → …)。
             # ルールは exporter.sort_pallets_for_numbering の1か所だけで持つ(Issue #81)。
             sub2 = sort_pallets_for_numbering(sub2, "納入先")
+            # 表示専用: 特例品番は作業者が山の最上段に置くため、└1（2枚なら└1・└2）に出す。
+            # GroupedData の番号は変えない。
+            sub2 = _special_hinban_first(sub2)
             display_rows = list(sub2.iterrows())
             prev_key = None
             prev_row_dest = None
