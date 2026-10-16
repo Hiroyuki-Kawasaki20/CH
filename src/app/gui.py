@@ -64,7 +64,8 @@ from src.services.exporter import (
     _to_display_hhmm_24h,
     build_spo_export_df, export_spo_xlsx_staged,
     attach_pickup_start_time, attach_entry_time_to_groupeddata, export_kanban_xlsx,
-    append_to_spo_history,sort_pallets_for_numbering,
+    append_to_spo_history,
+    sort_pallets_for_numbering,
 )
 from src.services.lane_end_times_history import (
     push_lane_end_times, select_lane_end_times,
