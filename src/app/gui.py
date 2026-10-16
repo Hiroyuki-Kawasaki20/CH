@@ -77,7 +77,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-16 セットボードの山詳細をGroupedDataの番号順（サイズ21先頭）に揃える"
+APP_VERSION = "2026-10-16 セットボードの山詳細で特例品番(A-24)を└1に表示する(表示のみ)"
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
