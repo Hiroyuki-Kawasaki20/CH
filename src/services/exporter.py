@@ -223,38 +223,9 @@ def build_groupeddata_json_for_mountain(sub_rows: pd.DataFrame) -> str:
     else:
         df["移動工数"] = float("nan")
 
-    # 番号採番ルール:
-    #   0) サイズ21は常に先頭（番号1側）に置く。
-    #      apps側は実物かんばんの積み順の関係で「番号の遅い順」に表示するため、
-    #      21を番号1にすると画面上は「サイズ1 →（最後に）21」の順で表示される。
-    #   1) それ以外は従来どおり移動工数の昇順を最優先キーとする。
-    #   2) 同値の場合は SEBANGO 昇順（存在すれば）、なければ 工程内No 昇順 で安定化。
-    if "サイズ種類" in df.columns:
-        df["_not21"] = (~df["サイズ種類"].astype(str).str.strip().eq("21")).astype(int)
-    else:
-        df["_not21"] = 1
-    # 同値内で同じ納入先を連続させる補助キー（他の納入先に挟まれるのを防ぐ）
-    #   _vendor_last: その山での納入先ごとの最大移動工数（小さい＝先に終わる納入先を前にする）
-    #   _vendor_first: その山での納入先ごとの最小移動工数（最大が同じなら、手前にも行がある納入先を前にする）
-    #   _vendor_key : 最大値まで同じ納入先どうしを分けるための納入先名
-    #   移動工数が NaN の行は補助キーを中立にし、従来どおり SEBANGO 以降で並べる
-    _vendor = df["OData__x7d0d__x5165__x5148_"].fillna("").astype(str).str.strip()
-    _cost = pd.to_numeric(df["移動工数"], errors="coerce")
-    df["_vendor_last"] = _cost.groupby(_vendor.values).transform("max")
-    df["_vendor_first"] = _cost.groupby(_vendor.values).transform("min")
-    df["_vendor_key"] = _vendor.where(_cost.notna(), "")
-
-    sort_by = ["_not21", "移動工数", "_vendor_last", "_vendor_first", "_vendor_key"]
-    sort_asc = [True, True, True, True, True]
-    if "SEBANGO" in df.columns:
-        sort_by.append("SEBANGO")
-        sort_asc.append(True)
-    elif "工程内No" in df.columns:
-        sort_by.append("工程内No")
-        sort_asc.append(True)
-
-    df = df.sort_values(by=sort_by, ascending=sort_asc, na_position="last")
-    df = df.drop(columns=["_not21", "_vendor_last", "_vendor_first", "_vendor_key"])
+    # 番号採番ルール(サイズ21先頭 → 移動工数昇順 → …)は sort_pallets_for_numbering に集約。
+    # GUI のセットボード(└N)も同じ関数で並べる(Issue #81)。
+    df = sort_pallets_for_numbering(df, "OData__x7d0d__x5165__x5148_")
     df = df.reset_index(drop=True)
     df["番号"] = np.arange(1, len(df) + 1)
     cols = ["OData__x30b9__x30c8__x30a2_", "NONYUHIBIN", "UKEIRE",
@@ -264,6 +235,56 @@ def build_groupeddata_json_for_mountain(sub_rows: pd.DataFrame) -> str:
             df[c] = ""
     recs = df[cols].astype(object).where(pd.notna(df[cols]), "").to_dict(orient="records")
     return json.dumps(recs, ensure_ascii=False)
+
+
+def sort_pallets_for_numbering(df: pd.DataFrame, vendor_col: str = "納入先") -> pd.DataFrame:
+    """山内のパレットを、番号1が先頭になる採番順に並べて返す（元の df は変更しない）。
+
+    GroupedData の「番号」と、GUI セットボードの「└N」が同じ順序になるよう、
+    並べ方のルールをこの関数1か所に持つ（Issue #81）。
+
+    並べ方（上のキーほど優先）:
+      0) サイズ21を先頭（番号1側）に置く。
+         apps側は実物かんばんの積み順の関係で「番号の遅い順」に表示するため、
+         21を番号1にすると画面上は「サイズ1 →（最後に）21」の順で表示される。
+      1) 移動工数の昇順（NaN は末尾）。
+      2) 同値の場合に、同じ納入先を連続させる補助キー（他の納入先に挟まれるのを防ぐ）。
+           _vendor_last : その山での納入先ごとの最大移動工数（小さい＝先に終わる納入先を前にする）
+           _vendor_first: その山での納入先ごとの最小移動工数（最大が同じなら、手前にも行がある納入先を前にする）
+           _vendor_key  : 最大値まで同じ納入先どうしを分けるための納入先名
+         移動工数が NaN の行は補助キーを中立にし、従来どおり SEBANGO 以降で並べる。
+      3) SEBANGO の昇順（なければ 工程内No の昇順）で安定化。
+
+    vendor_col: 納入先の列名。列が無いときは納入先の補助キーを中立にする。
+    """
+    out = df.copy()
+    if "移動工数" in out.columns:
+        out["移動工数"] = pd.to_numeric(out["移動工数"], errors="coerce")
+    else:
+        out["移動工数"] = float("nan")
+
+    if "サイズ種類" in out.columns:
+        out["_not21"] = (~out["サイズ種類"].astype(str).str.strip().eq("21")).astype(int)
+    else:
+        out["_not21"] = 1
+
+    if vendor_col in out.columns:
+        _vendor = out[vendor_col].fillna("").astype(str).str.strip()
+    else:
+        _vendor = pd.Series("", index=out.index)
+    _cost = out["移動工数"]
+    out["_vendor_last"] = _cost.groupby(_vendor.values).transform("max")
+    out["_vendor_first"] = _cost.groupby(_vendor.values).transform("min")
+    out["_vendor_key"] = _vendor.where(_cost.notna(), "")
+
+    sort_by = ["_not21", "移動工数", "_vendor_last", "_vendor_first", "_vendor_key"]
+    if "SEBANGO" in out.columns:
+        sort_by.append("SEBANGO")
+    elif "工程内No" in out.columns:
+        sort_by.append("工程内No")
+
+    out = out.sort_values(by=sort_by, ascending=True, na_position="last")
+    return out.drop(columns=["_not21", "_vendor_last", "_vendor_first", "_vendor_key"])
 
 
 def build_spo_export_df(
