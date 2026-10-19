@@ -102,12 +102,13 @@ def test_mixed_mountain_does_not_pair_incompatible_floor_and_deadline():
 
 
 def test_mixed_mountain_with_compatible_times_stays_merged():
-    """時間整合の取れた別納入先の混載は分割されないこと（過剰分割ガード）。"""
+    """休憩と作業時間を含めても間に合う混載は分割しない（過剰分割ガード）。"""
     master_df = _master([
         ("拠点A", "06", "13:00"),
-        ("拠点A", "07", "13:30"),  # 床13:10・締切13:20
-        ("拠点C", "01", "14:00"),  # 床0・締切13:50 → max床13:10 ≤ min締切13:20 で両立
+        ("拠点A", "07", "13:40"),  # 床13:10・締切13:30
+        ("拠点C", "01", "14:00"),  # 床0・締切13:50
     ])
+    # 休憩補正後13:16開始、245秒の作業で13:20:05に終わるため混載できる。
     shipments = pd.DataFrame([
         _pallet_row("拠点A", "07", 1000, 10),
         _pallet_row("拠点C", "01", 1200, 9),
