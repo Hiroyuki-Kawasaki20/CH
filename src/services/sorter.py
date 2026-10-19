@@ -23,6 +23,7 @@ from ..utils.normalizer import (
 )
 from ..utils.master_map import build_master_map_with_duplicate_warning
 from .bin_time_rules import build_bin_time_map, attach_unit_time_bounds, unit_floor_deadline
+from .process_assigner import _adjust_start_for_breaks, _calc_work_end_with_breaks
 
 
 logger = logging.getLogger(__name__)
@@ -1096,6 +1097,26 @@ def _sort_by_move_desc(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(by=["移動工数"], ascending=[False]).copy()
 
 
+def _needs_mixed_deadline_rescue(
+    mountain: pd.DataFrame, max_floor: int, min_deadline: Optional[int],
+) -> bool:
+    """他山との競合を除いても、休憩と山全体の工数で締切に間に合わないか。"""
+    if min_deadline is None:
+        return False
+    if max_floor > min_deadline:
+        return True
+    moves = pd.to_numeric(mountain["移動工数"], errors="coerce")
+    max_move = float(moves.max()) if moves.notna().any() else 0.0
+    pallet_count = len(mountain)
+    work_secs = int(np.round(
+        max_move + BASE_ONE_TIME + (pallet_count - 1) * MIDDLE_WORK
+        + pallet_count * BASE_PER_PAL, 0,
+    ))
+    earliest_start = _adjust_start_for_breaks(max_floor, work_secs)
+    earliest_finish = _calc_work_end_with_breaks(earliest_start, work_secs)
+    return earliest_finish > min_deadline
+
+
 def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None, _legacy=False):
     """種類1/21の混載処理（1/21以外は対象外）。
 
@@ -1271,9 +1292,7 @@ def _build_size1_mixed(expanded, height_cap, mixing_key, master_df=None, _legacy
             min_deadline = int(deadlines_in_yama.min()) if not deadlines_in_yama.empty else None
             max_floor = int(sub["_rescue_床秒"].max())
 
-            if min_deadline is None:
-                continue
-            if min_deadline >= max_floor:
+            if not _needs_mixed_deadline_rescue(sub, max_floor, min_deadline):
                 continue
 
             # 山内で最も締切が厳しい納入先を単独山へ分離して救済する。
