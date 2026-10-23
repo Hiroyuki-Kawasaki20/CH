@@ -77,7 +77,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-19 休憩と作業時間で間に合わない混載山を救済分割"
+APP_VERSION = "2026-10-23 入車時間マスタ保存時に便番号・時刻の文字列書式を設定・テーブル化"
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
