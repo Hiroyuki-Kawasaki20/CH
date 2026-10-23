@@ -67,6 +67,11 @@ SPO_EXPORT_REQUIRED_COLUMNS = (
     "タイトル", "工程", "groupdata", "GroupedData", "パレット数", "グループ番号",
 )
 
+# ===== 入車時間マスタ出力 =====
+MASTER_TEXT_INPUT_ROWS = 100  # 実データの次に文字列書式を設定する入力用空行数
+# Power Appsの接続先として使う固定名。互換性確認なしに変更しない。
+MASTER_TABLE_NAME = "PickupTimeMaster"
+
 # ===== 休憩時間（秒単位） =====
 # ===== 短休憩（2026-09-24 現場合意：仕分け猶予 20分→10分） =====
 SHORT_BREAK_PURE_SECS = 10 * 60      # 純休憩（リリーフはこの10分だけを休憩として扱う）

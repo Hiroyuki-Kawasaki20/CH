@@ -13,10 +13,13 @@ from typing import Optional, Dict, List, Tuple
 import pandas as pd
 import numpy as np
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from ..models.constants import (
     CONFIG_FILENAME, DEFAULT_MIXING_KEY, HAISHA_VENDOR_MAP,
     BASE_ONE_TIME, MIDDLE_WORK, BASE_PER_PAL,
+    MASTER_TEXT_INPUT_ROWS, MASTER_TABLE_NAME,
 )
 from ..utils.normalizer import (
     _normalize_dest_name, _normalize_route_name, _normalize_hhmm,
@@ -611,8 +614,28 @@ def _master_rescue_dir() -> Path:
 
 
 def _write_master_excel(df_save: pd.DataFrame, master_path: Path) -> None:
-    """実際にExcelへ書き出す最小単位（テストで差し替え可）。"""
-    df_save.to_excel(master_path, index=False, engine="openpyxl", sheet_name="入車時間マスタ")
+    """ブックを再生成し、文字列書式と実データ範囲の固定名テーブルを設定する。"""
+    df_out = df_save.copy()
+    text_columns = ("NONYUHIBIN", "入車時間")
+    for column in text_columns:
+        # 時刻解釈や便のゼロ埋めは追加せず、欠損だけ空文字にする。
+        df_out[column] = df_out[column].map(lambda value: "" if pd.isna(value) else str(value))
+
+    sheet_name = "入車時間マスタ"
+    last_data_row = len(df_out) + 1  # 見出し行を含む。0件なら見出しだけ。
+    with pd.ExcelWriter(master_path, engine="openpyxl") as writer:
+        df_out.to_excel(writer, index=False, sheet_name=sheet_name)
+        sheet = writer.sheets[sheet_name]
+        for column in text_columns:
+            column_index = df_out.columns.get_loc(column) + 1
+            for row_index in range(2, last_data_row + MASTER_TEXT_INPUT_ROWS + 1):
+                sheet.cell(row=row_index, column=column_index).number_format = "@"
+
+        # 書式だけの入力用空行はテーブルに含めない。
+        last_column = get_column_letter(len(df_out.columns))
+        table = Table(displayName=MASTER_TABLE_NAME, ref=f"A1:{last_column}{last_data_row}")
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+        sheet.add_table(table)
 
 
 def _rescue_master_dataframe(df_save: Optional[pd.DataFrame]) -> Optional[Path]:
