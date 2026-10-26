@@ -40,3 +40,16 @@ def test_spec_keeps_onedir_and_no_personal_data_literal():
     for value in literals:
         assert not any(name in value for name in ("ch_kanban_settings.json", "入車時間マスタ", "_export_archive", ".csv", ".log", "tests", "scripts"))
     compile(source, str(SPEC_PATH), "exec")
+
+
+def test_spec_excludes_only_unused_torch():
+    tree = ast.parse(SPEC_PATH.read_text(encoding="utf-8"))
+    analysis = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Analysis"
+    )
+    excludes = next(keyword.value for keyword in analysis.keywords if keyword.arg == "excludes")
+    # 元の除外リストは空。無関係な除外や重複を増やさない。
+    assert ast.literal_eval(excludes) == ["torch"]
