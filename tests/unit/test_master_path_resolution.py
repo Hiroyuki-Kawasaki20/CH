@@ -43,7 +43,7 @@ def test_candidates_accept_master_path_file(tmp_path: Path):
     configured = tmp_path / "custom.xlsx"
     legacy = tmp_path / "legacy" / MASTER_FILENAME
 
-    assert _resolve_master_path_candidates({"master_path": str(configured)}, legacy) == [configured, legacy]
+    assert _resolve_master_path_candidates({"master_path": str(configured)}, legacy) == [configured]
 
 
 def test_candidates_accept_master_path_folder(tmp_path: Path):
@@ -51,14 +51,14 @@ def test_candidates_accept_master_path_folder(tmp_path: Path):
     legacy = tmp_path / "legacy" / MASTER_FILENAME
 
 
-    assert _resolve_master_path_candidates({"master_path": str(folder)}, legacy) == [folder / MASTER_FILENAME, legacy]
+    assert _resolve_master_path_candidates({"master_path": str(folder)}, legacy) == [folder / MASTER_FILENAME]
 
 
 def test_candidates_use_base_dir_second(tmp_path: Path):
     base_dir = tmp_path / "base"
     legacy = tmp_path / "legacy" / MASTER_FILENAME
 
-    assert _resolve_master_path_candidates({"base_dir": str(base_dir)}, legacy) == [base_dir / MASTER_FILENAME, legacy]
+    assert _resolve_master_path_candidates({"base_dir": str(base_dir)}, legacy) == [base_dir / MASTER_FILENAME]
 
 
 def test_candidates_are_deduplicated(tmp_path: Path):
@@ -68,7 +68,7 @@ def test_candidates_are_deduplicated(tmp_path: Path):
 
     assert _resolve_master_path_candidates(
         {"master_path": str(base_dir / MASTER_FILENAME), "base_dir": str(base_dir)}, legacy
-    ) == [base_dir / MASTER_FILENAME, legacy]
+    ) == [base_dir / MASTER_FILENAME]
 
 
 def test_resolve_existing_master_path_wins_over_base_and_legacy(tmp_path: Path):
@@ -105,15 +105,22 @@ def test_resolve_base_dir_wins_when_master_path_missing(tmp_path: Path):
     assert result == base_dir / MASTER_FILENAME
 
 
-def test_resolve_legacy_when_only_legacy_exists(tmp_path: Path):
-    base_dir = tmp_path / "base"
+def test_resolve_keeps_base_when_configured_parent_is_missing(tmp_path: Path):
+    missing_base = tmp_path / "missing"
     legacy_dir = tmp_path / "legacy"
-    base_dir.mkdir()
     legacy_dir.mkdir()
     legacy = legacy_dir / MASTER_FILENAME
-    legacy.write_text("dummy", encoding="utf-8")
+    assert _resolve_master_path({"base_dir": str(missing_base)}, legacy) == missing_base / MASTER_FILENAME
 
-    assert _resolve_master_path({"base_dir": str(base_dir)}, legacy) == legacy
+
+def test_resolve_keeps_first_configured_when_no_parent_is_accessible(tmp_path: Path):
+    missing_master = tmp_path / "missing-master" / MASTER_FILENAME
+    missing_base = tmp_path / "missing-base"
+    legacy = tmp_path / "missing-legacy" / MASTER_FILENAME
+    result = _resolve_master_path(
+        {"master_path": str(missing_master), "base_dir": str(missing_base)}, legacy,
+    )
+    assert result == missing_master
 
 
 def test_resolve_returns_first_accessible_parent_as_new_file(tmp_path: Path):
@@ -132,26 +139,14 @@ def test_resolve_returns_first_accessible_parent_as_new_file(tmp_path: Path):
     assert not result.exists()
 
 
-def test_resolve_falls_back_to_legacy_when_configured_parent_is_missing(tmp_path: Path):
-    missing_base = tmp_path / "missing"
+def test_resolve_keeps_base_when_only_legacy_exists(tmp_path: Path):
+    base_dir = tmp_path / "base"
     legacy_dir = tmp_path / "legacy"
+    base_dir.mkdir()
     legacy_dir.mkdir()
     legacy = legacy_dir / MASTER_FILENAME
-
-    assert _resolve_master_path({"base_dir": str(missing_base)}, legacy) == legacy
-
-
-def test_resolve_falls_back_to_legacy_when_no_parent_is_accessible(tmp_path: Path):
-    missing_master = tmp_path / "missing-master" / MASTER_FILENAME
-    missing_base = tmp_path / "missing-base"
-    legacy = tmp_path / "missing-legacy" / MASTER_FILENAME
-
-    result = _resolve_master_path(
-        {"master_path": str(missing_master), "base_dir": str(missing_base)},
-        legacy,
-    )
-
-    assert result == legacy
+    legacy.write_text("dummy", encoding="utf-8")
+    assert _resolve_master_path({"base_dir": str(base_dir)}, legacy) == base_dir / MASTER_FILENAME
 
 
 def test_resolve_skips_exists_oserror_and_uses_next_existing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

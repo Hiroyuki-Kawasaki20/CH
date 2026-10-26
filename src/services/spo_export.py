@@ -21,6 +21,7 @@ from typing import Optional, Tuple
 
 import pandas as pd
 
+from ..utils.app_paths import get_output_dir
 from ..utils.excel_utils import _add_table_exact
 
 
@@ -28,7 +29,7 @@ from ..utils.excel_utils import _add_table_exact
 _export_lock = threading.Lock()
 
 # Staging + Move方式の定数
-DEFAULT_STAGING_DIR = r"C:\Temp\spo_staging"
+DEFAULT_STAGING_DIR = str(get_output_dir() / "_staging")
 SPO_TABLE_NAME = "SPOExport"
 
 # ロギング

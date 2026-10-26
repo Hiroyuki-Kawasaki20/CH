@@ -177,20 +177,18 @@ def normalize_choice_label(label: str) -> str:
 
 import json as _json
 import os as _os
-import sys as _sys
 import tempfile as _tempfile
 from datetime import datetime as _datetime
 from pathlib import Path as _Path
+from ..utils.app_paths import get_user_data_dir
 
 HISTORY_FILENAME = "lane_end_times_history.json"
 HISTORY_FORMAT_VERSION = 1
 
 
 def get_history_path() -> _Path:
-    """履歴ファイルの保存先を返す（既存 get_config_path と同じ流儀）。"""
-    if getattr(_sys, 'frozen', False):
-        return _Path(_sys.executable).parent / HISTORY_FILENAME
-    return _Path(__file__).resolve().parents[2] / "config" / HISTORY_FILENAME
+    """Windows利用者別。旧共有履歴は自動移行しない。"""
+    return get_user_data_dir() / HISTORY_FILENAME
 
 
 def save_lane_end_times_history(history: list, path=None) -> bool:
