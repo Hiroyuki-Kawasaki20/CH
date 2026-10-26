@@ -15,7 +15,7 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=[str(project_root / "build_hooks")],
     hooksconfig={},
     runtime_hooks=[],
     excludes=["torch"],
@@ -45,6 +45,6 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=["mkl_*.dll", "libimalloc.dll", "libiomp5md.dll"],
     name="CH_kanban_set",
 )
