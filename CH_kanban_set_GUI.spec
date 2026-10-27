@@ -1,14 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files
 
 project_root = Path.cwd()
 
-hiddenimports = collect_submodules("customtkinter")
-datas = [
-    (str(project_root / "config" / "ch_kanban_settings.json"), "."),
-]
+# テーマ・フォント・アイコンのみ。個人設定、マスタ、CSV、ログ等は同梱しない。
+hiddenimports = []
+datas = collect_data_files("customtkinter", includes=["assets/**/*"])
 
 a = Analysis(
     [str(project_root / "src" / "app" / "gui.py")],
@@ -16,10 +15,10 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=[str(project_root / "build_hooks")],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["torch"],
     noarchive=False,
     optimize=0,
 )
@@ -46,6 +45,6 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=["mkl_*.dll", "libimalloc.dll", "libiomp5md.dll"],
     name="CH_kanban_set",
 )

@@ -1,6 +1,6 @@
 # SPO Staged Export — OneDrive同期競合回避ガイド
 
-**更新日**: 2026-07-14
+**更新日**: 2026-10-26
 
 ## 概要
 
@@ -20,7 +20,7 @@
 └──────────────┬──────────────────┘
               ▼
 ┌─────────────────────────────────┐
-│ staging領域                     │ ← C:\Temp\spo_staging（同期対象外）
+│ staging領域                     │ ← 利用者別output配下の_staging（同期対象外）
 │ (一意タイムスタンプ+UUID付き)  │
 │ 1. Excel書込                    │
 │ 2. テーブル化（SPOExport）     │
@@ -61,7 +61,7 @@ from src.services.spo_export import export_to_spo_staged
 result = export_to_spo_staged(
     df=spo_df,                      # 出力対象DataFrame
     watch_dir=r"C:\OneDrive\監視フォルダ",  # Power Automate監視フォルダ
-    staging_dir=r"C:\Temp\spo_staging",   # staging領域（同期対象外）
+    # staging_dir省略時は利用者別の既定領域を使用
     table_name="SPOExport",         # Excelテーブル名
     base_name="SPOアップロード用"    # ファイル名の基本部分
 )
@@ -73,7 +73,7 @@ result = export_to_spo_staged(
 |-----|---|------|-----------|------|
 | `df` | `pd.DataFrame` | ✅ | - | 出力対象のDataFrame |
 | `watch_dir` | `str` | ✅ | - | Power Automate監視フォルダのパス |
-| `staging_dir` | `str` |  | `C:\Temp\spo_staging` | staging領域のパス（OneDrive/SharePoint同期対象外） |
+| `staging_dir` | `str` |  | `DEFAULT_STAGING_DIR` | 利用者別のローカル一時領域（[保存先の正本](起動・exe化ガイド.md#4-windows利用者ごとの初回設定保存先)） |
 | `table_name` | `str` |  | `"SPOExport"` | Excelテーブル名 |
 | `base_name` | `str` |  | `"SPOアップロード用"` | ファイル名の基本部分 |
 
@@ -105,80 +105,17 @@ logging.basicConfig(level=logging.INFO)
 
 ## 使用例
 
-### 基本的な使い方（exporter.py を修正）
+GUIは`src/services/exporter.py`の`export_spo_xlsx_staged()`を経由します。`staging_dir`省略時は起動時の現在ユーザーから解決した`DEFAULT_STAGING_DIR`を使い、試験などでは明示パスを渡せます。引数・実装の正本は同関数と`src/services/spo_export.py`です。
 
-```python
-# 従来の export_spo_xlsx（変更なし）
-def export_spo_xlsx(spo_df: pd.DataFrame, out_dir: str, base_name: str = "SPOアップロード用") -> str:
-    """既存関数：互換性維持のため変更しない"""
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
-    path = os.path.join(out_dir, f"{base_name}.xlsx")
-    export_to_spo(spo_df, output_path=path)
-    return path
-
-# 新しい export_spo_xlsx_staged（新規追加）
-def export_spo_xlsx_staged(
-    spo_df: pd.DataFrame,
-    watch_dir: str,
-    staging_dir: str = r"C:\Temp\spo_staging",
-    base_name: str = "SPOアップロード用"
-) -> Optional[str]:
-    """
-    Staging方式でSPO Excel出力（OneDrive同期競合回避）
-    
-    Args:
-        spo_df: 出力対象DataFrame
-        watch_dir: Power Automate監視フォルダのパス
-        staging_dir: staging領域（デフォルト: C:\Temp\spo_staging）
-        base_name: ファイル名の基本部分
-    
-    Returns:
-        最終ファイルパス（成功時）、None（空DataFrame時）
-    """
-    from src.services.spo_export import export_to_spo_staged
-    return export_to_spo_staged(
-        df=spo_df,
-        watch_dir=watch_dir,
-        staging_dir=staging_dir,
-        table_name="SPOExport",
-        base_name=base_name
-    )
-```
-
-### ファイル構成（環境に応じた例）
-
-```
-C:\OneDrive\工程管理
-    └── SPO監視フォルダ/             ← Power Automate監視先
-        ├── SPOアップロード用_20260714_070802_123456_a1b2c3d4.xlsx
-        ├── SPOアップロード用_20260714_080115_234567_b2c3d4e5.xlsx
-        └── (ancient files...)      ← 自動削除対象（不要な古いファイル）
-
-C:\Temp\spo_staging\                ← staging領域（OneDrive同期対象外）
-    └── (一時ファイルなし)          ← 移動完了後はクリーンアップ
-```
-
-### 環境構築
-
-```powershell
-# staging フォルダを作成
-New-Item -ItemType Directory -Force -Path "C:\Temp\spo_staging"
-Get-Acl "C:\Temp\spo_staging" | Format-List
-```
+stagingは保存時に自動作成されます。旧`C:\Temp\spo_staging`の作成・権限付与は不要です。保存先の詳細は[起動・exe化ガイド 第4章](起動・exe化ガイド.md#4-windows利用者ごとの初回設定保存先)を参照してください。
 
 ---
 
 ## トラブルシューティング
 
-### Q1: `C:\Temp\spo_staging` が見つからない
+### Q1: stagingフォルダが見つからない
 
-**A**: staging フォルダは自動作成されます。ただし、アクセス権限が必要です。
-
-```powershell
-# 権限確認
-icacls "C:\Temp"
-# BUILTIN\Users が「(OI)(CI)F」（フルコントロール）で表示されることを確認
-```
+**A**: 実出力時に利用者別領域へ自動作成されます。作成できない場合は、現在ユーザーのローカル保存領域の権限を確認してください。共有アプリ配置先へは退避しません。
 
 ### Q2: "cross-device link" エラーが出た
 
@@ -196,7 +133,7 @@ export_to_spo_staged: shutil.move で移動成功 (...)
 問題が続く場合は：
 - Power Automate トリガーのフォルダ設定を確認
 - OneDrive アプリの同期状態を確認
-- `watch_dir` に手動でテスト用 Excel を作成して、Power Automate が検出するか確認
+- 本番監視先へ確認用ファイルを勝手に作らない。動作試験は承認された別の試験用フォルダ・フローで実施する
 
 ---
 

@@ -2,6 +2,7 @@
 """CHかんばんセット — データ読み込み・前処理サービス"""
 
 import sys
+import os
 import json
 import logging
 import re
@@ -26,6 +27,7 @@ from ..utils.normalizer import (
     _normalize_ukeire, _ZEN2HAN_DIGIT_COLON,
 )
 from ..utils.csv_utils import read_csv_ja
+from ..utils.app_paths import get_user_data_dir
 logger = logging.getLogger(__name__)
 
 
@@ -49,28 +51,43 @@ def checkbox_mark_to_set_flag_value(value) -> str:
 
 # ===== 設定ファイル管理 =====
 def get_config_path() -> Path:
-    if getattr(sys, 'frozen', False):
-        return Path(sys.executable).parent / CONFIG_FILENAME
-    else:
-        return Path(__file__).resolve().parents[2] / "config" / CONFIG_FILENAME
+    """旧repo/exe隣設定は読み込まず、現在のWindows利用者の設定だけを使う。"""
+    return get_user_data_dir() / CONFIG_FILENAME
 
 
 def load_config() -> dict:
     config_path = get_config_path()
-    if config_path.exists():
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
+    try:
+        with config_path.open('r', encoding='utf-8') as f:
+            config = json.load(f)
+        if isinstance(config, dict):
+            return config
+        logger.warning("設定JSONが辞書ではありません（初期状態で起動）: %s", config_path)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as error:
+        logger.warning("設定を読み込めません（初期状態で起動）: %s: %s", config_path, error)
     return {}
 
 
 def save_config(config: dict):
+    """同一フォルダの一時ファイルを置換する。失敗は呼出元へ通知し元設定を保つ。"""
+    if not isinstance(config, dict):
+        raise TypeError("設定は辞書で指定してください")
     config_path = get_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(config_path, 'w', encoding='utf-8') as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+    fd, temporary = tempfile.mkstemp(prefix=".settings_", suffix=".tmp", dir=config_path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, config_path)
+    finally:
+        try:
+            Path(temporary).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("設定一時ファイルを削除できません: %s", temporary, exc_info=True)
 
 
 def select_data_folder() -> Optional[Path]:
@@ -489,7 +506,7 @@ class MasterFileReadError(MasterFileError, ValueError):
 
 
 def get_legacy_master_path() -> Path:
-    """従来の入車時間マスタ配置（移行期・異常時のフォールバック先）。"""
+    """旧配置の照会用。通常のマスタ解決では自動採用しない。"""
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).parent / MASTER_FILENAME
     else:
@@ -509,42 +526,32 @@ def _to_master_file_path(raw_value) -> Optional[Path]:
 
 def _resolve_master_path_candidates(config: Optional[dict] = None,
                                     legacy_path: Optional[Path] = None) -> List[Path]:
-    """入車時間マスタの候補パスを優先順に返す（_resolve_shipments_path と同じ流儀）。
+    """設定された master_path → base_dir の順。アプリ隣は暗黙採用しない。
 
-    1) config["master_path"]（明示指定。フォルダ指定も可。通常は未設定）
-    2) config["base_dir"] 直下（SharePoint(OneDrive)同期フォルダ＝通常運用の本命）
-    3) 従来位置（frozen: exe同階層 / 開発時: リポジトリ直下）
+    明示的な legacy_path 引数は、設定候補が無いテスト等の呼出しだけで使う。
     """
     if config is None:
         config = load_config()
-    if legacy_path is None:
-        legacy_path = get_legacy_master_path()
-
     candidates: List[Path] = []
     for raw_value in (config.get("master_path"), config.get("base_dir")):
         p = _to_master_file_path(raw_value)
         if p is not None and p not in candidates:
             candidates.append(p)
-    if legacy_path not in candidates:
-        candidates.append(legacy_path)
+    if not candidates and legacy_path is not None:
+        candidates.append(Path(legacy_path))
     return candidates
 
 
 def _resolve_master_path(config: Optional[dict] = None,
                          legacy_path: Optional[Path] = None) -> Path:
-    """候補リストから入車時間マスタのパス（読み書き共通）を決定する。
+    """読み書き共通のマスタパス。既存優先は設定候補の中だけで行う。
 
-    - 既に存在する候補があれば、優先順位の高いものを採用する。
-    - 1件も存在しない場合は例外にせず、親フォルダにアクセスできる先頭候補を
-      「新規作成先」として返す（マスタ未配置でもアプリを起動不能にしない）。
-    - どの候補にもアクセスできない場合（NW未接続・OneDrive未同期）は従来位置を返す。
+    未配置なら親が存在する最優先候補、全親が無ければ先頭候補を返す。
+    未設定では入力フォルダの選択を案内し、共有アプリ配置先へは書き込まない。
     """
-    if config is None:
-        config = load_config()
-    if legacy_path is None:
-        legacy_path = get_legacy_master_path()
-
     candidates = _resolve_master_path_candidates(config, legacy_path)
+    if not candidates:
+        raise MasterFileError("入力フォルダを選択し、その直下へ入車時間マスタ.xlsxを置いてください。")
     for p in candidates:
         try:
             if p.exists():
@@ -557,7 +564,7 @@ def _resolve_master_path(config: Optional[dict] = None,
                 return p
         except OSError:
             continue
-    return legacy_path
+    return candidates[0]
 
 
 def get_master_path() -> Path:
@@ -601,7 +608,7 @@ def build_master_not_found_message(master_path: Path) -> str:
         "  ・ネットワーク（社内NW/VPN）に接続されているか",
         "  ・OneDriveが起動し、同期が完了しているか（クラウドのみの状態になっていないか）",
         f"  ・ファイル名が『{MASTER_FILENAME}』のままか",
-        f"  ・config/{CONFIG_FILENAME} の base_dir が正しいか",
+        f"  ・利用者別設定 {get_config_path()} の base_dir / master_path が正しいか",
     ]
     lines += _conflict_lines(master_path)
     lines += ["", "マスタが無い場合は空の状態で動作します（保存すると上記の場所へ新規作成されます）。"]
@@ -684,7 +691,7 @@ def _build_master_folder_missing_message(master_path: Path,
         "SharePoint(OneDrive) の同期フォルダにアクセスできない可能性があります。",
         "  ・ネットワーク（社内NW/VPN）に接続されているか",
         "  ・OneDriveが起動し、同期が有効になっているか",
-        f"  ・config/{CONFIG_FILENAME} の base_dir が正しいか",
+        f"  ・利用者別設定 {get_config_path()} の base_dir / master_path が正しいか",
         "を確認してから、もう一度保存してください。",
         "",
         "画面上の編集内容は残っています（このまま再保存できます）。",

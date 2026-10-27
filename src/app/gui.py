@@ -39,6 +39,7 @@ from src.services.data_loader import (
     load_data, DataManager,
     get_master_path, load_pickup_time_master_xlsx, save_pickup_time_master_xlsx,
     MasterFileLockedError, MasterFileReadError,
+    build_master_not_found_message,
     _resolve_shipments_path,
     parse_ukeire_ch_excel, load_config, save_config, get_export_dir,
     set_flag_value_to_checkbox_mark, checkbox_mark_to_set_flag_value,
@@ -76,34 +77,21 @@ from src.services.lane_end_times_history import (
 from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
+from src.utils.app_paths import get_output_dir
 
-APP_VERSION = "2026-10-23 入車時間マスタ保存時に便番号・時刻の文字列書式を設定・テーブル化"
+APP_VERSION = "2026-10-26 設定・ログ・出力・前回終了時刻をWindows利用者別に保存"
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 def resolve_spo_output_dirs(spo_watch_dir: str) -> dict:
-    """3ファイルの出力先を返す（テスト可能な純粋関数）。
-    
-    Power Automateの多重トリガー防止のため、SPO監視フォルダに落ちるファイルを
-    SPOアップロード用.xlsx のみとし、履歴とCSVはローカル固定フォルダに分離する。
-    
-    Args:
-        spo_watch_dir: SPO監視フォルダ（OneDrive共有フォルダ）のパス
-    
-    Returns:
-        dict: 3つの出力先を含む辞書
-            - spo_xlsx_dir: SPOアップロード用.xlsx の出力先（SPO監視フォルダ）
-            - history_dir: SPOアップロード用_履歴.xlsx の出力先（ローカル固定フォルダ）
-            - unmatched_dir: SPOアップロード用_未ヒット一覧.csv の出力先（ローカル固定フォルダ）
-    """
+    """SPO本体は選択先、履歴Excel・未ヒットCSVは利用者別outputへ分離する。"""
+    local_output_dir = str(get_output_dir())
     return {
         "spo_xlsx_dir": spo_watch_dir,
-        "history_dir": LOCAL_OUTPUT_DIR,
-        "unmatched_dir": LOCAL_OUTPUT_DIR,
+        "history_dir": local_output_dir,
+        "unmatched_dir": local_output_dir,
     }
-
-
 
 # ============================================================
 # Issue #45: セットボードの並び順キー（深夜跨ぎ対応 / テスト可能な純関数）
@@ -217,6 +205,7 @@ class App(ctk.CTk):
 
     def _load_auto_reload_settings(self):
         """自動再読込の分設定を設定ファイルから読み込む。"""
+        config = {}
         try:
             config = load_config()
             minute = int(config.get("auto_reload_minute", 15))
@@ -240,8 +229,9 @@ class App(ctk.CTk):
             config["auto_reload_minute"] = int(self.auto_reload_minute.get())
             # バッテリー交換チェックは一時操作のため永続化しない。
             save_config(config)
-        except Exception:
-            pass
+        except Exception as error:
+            logger.error("利用者別設定の保存に失敗しました", exc_info=True)
+            messagebox.showwarning("設定保存", f"設定を保存できませんでした。\n{error}")
 
     def _on_close(self):
         """終了時に予約済みタイマーを解放して安全に閉じる。"""
@@ -1860,7 +1850,7 @@ class App(ctk.CTk):
                             pass
                     input_paths.append(get_master_path())
                     archive_root = resolve_archive_dir(
-                        self.export_dir, self.archive_dir, LOCAL_OUTPUT_DIR
+                        self.export_dir, self.archive_dir, dirs["history_dir"]
                     )
                     archive_export(
                         output_path=output_path,
@@ -1948,7 +1938,14 @@ class App(ctk.CTk):
                 print("出力ファイル監査警告:\n" + "\n".join(warning_audit_lines))
                 warning_lines.append("出力ファイル監査警告:\n" + "\n".join(warning_audit_lines[:20]))
             # SPOアップロード用.xlsx はSPO監視フォルダへ（staging+timestamp+move方式）
-            spo_path = export_spo_xlsx_staged(spo_df, watch_dir=dirs["spo_xlsx_dir"])
+            try:
+                spo_path = export_spo_xlsx_staged(spo_df, watch_dir=dirs["spo_xlsx_dir"])
+            except PermissionError as error:
+                raise PermissionError(
+                    f"SPO出力先へ書き込めません: {dirs['spo_xlsx_dir']}\n"
+                    "現在のWindows利用者の書込権限と、Excelで開いていないかを確認してください。\n"
+                    f"詳細: {error}"
+                ) from error
             try:
                 # 履歴はローカル固定フォルダへ
                 append_to_spo_history(spo_df, out_dir=dirs["history_dir"])
@@ -2225,6 +2222,10 @@ class App(ctk.CTk):
             self.master_data = load_pickup_time_master_xlsx(master_path)
             self.refresh_master_tree()
             self.refresh_routes()
+            if not master_path.exists():
+                messagebox.showwarning(
+                    "入車時間マスタ未配置", build_master_not_found_message(master_path)
+                )
         except (MasterFileLockedError, MasterFileReadError) as e:      # ← この行を追加
             messagebox.showwarning("入車時間マスタ読込", str(e))        # ← この行を追加
         except Exception as e:
@@ -2554,7 +2555,7 @@ def _setup_logging() -> None:
     level_name = os.getenv("CH_LOG_LEVEL", "DEBUG" if trace_on else "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
-    log_dir = Path(LOCAL_OUTPUT_DIR) / "logs"
+    log_dir = get_output_dir() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / ("trace_135.log" if trace_on else "ch_kanban.log")
 
@@ -2575,8 +2576,8 @@ def _setup_logging() -> None:
 
 
 def main():
-    _setup_logging()          # ★ App() より前に呼ぶ（ここが唯一の必須順序）
     try:
+        _setup_logging()  # GUI初期化前。保存先作成失敗も起動エラーとして案内する。
         app = App()
     except Exception as e:
         messagebox.showerror("起動エラー", str(e))

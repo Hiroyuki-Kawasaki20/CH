@@ -300,3 +300,24 @@ def test_same_hinban_rows_are_not_clustered_and_have_no_findings():
     clustered = pd.DataFrame(cluster_by_store(rows))
     assert len(clustered) == 2
     assert audit_clustered_rows(clustered) == []
+
+
+def test_user_watch_dir_permission_failure_is_actionable(monkeypatch, tmp_path):
+    app, _ = _app(tmp_path)
+    _patch_spo_pipeline(monkeypatch, app, tmp_path)
+    calls = []
+    notices = []
+
+    def denied(frame, watch_dir):
+        calls.append(watch_dir)
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr(gui_module, "export_spo_xlsx_staged", denied)
+    monkeypatch.setattr(gui_module, "append_to_spo_history", lambda *a, **k: notices.append("history"))
+    monkeypatch.setattr(gui_module.messagebox, "showinfo", lambda *a, **k: notices.append("success"))
+    with pytest.raises(PermissionError, match="書込権限") as error:
+        App._auto_export_spo(app)
+    assert app.export_dir in str(error.value)
+    assert calls == [app.export_dir]
+    assert notices == []
+    assert not Path(app.export_dir).exists()
