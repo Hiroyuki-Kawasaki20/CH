@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """CHかんばんセット — 定数・工数計算式"""
 
-import os
-from pathlib import Path
+from ..utils.user_paths import get_user_data_dir
 
 # ===== 仕分け定数 =====
 DEFAULT_MIXING_KEY = "UKEIRE"           # 混載キーのデフォルト列名
@@ -65,8 +64,7 @@ VIRTUAL_YAMA_NO = -1
 CONFIG_FILENAME = "ch_kanban_settings.json"
 REASSIGN_LOG_FILENAME = "reassign_log.csv"
 # ローカル出力は実行ユーザーごとに分離する。フォルダ作成は保存処理側で行う。
-_LOCAL_APP_DATA = Path(os.getenv("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-LOCAL_OUTPUT_DIR = str(_LOCAL_APP_DATA / "CHKanban" / "output")
+LOCAL_OUTPUT_DIR = str(get_user_data_dir() / "output")
 SPO_EXPORT_REQUIRED_COLUMNS = (
     "タイトル", "工程", "groupdata", "GroupedData", "パレット数", "グループ番号",
 )

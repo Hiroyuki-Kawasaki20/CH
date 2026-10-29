@@ -38,7 +38,7 @@ from src.models.constants import (
 from src.services.data_loader import (
     load_data, DataManager,
     get_master_path, load_pickup_time_master_xlsx, save_pickup_time_master_xlsx,
-    MasterFileLockedError, MasterFileReadError,
+    MasterFileLockedError, MasterFileReadError, build_master_not_found_message,
     _resolve_shipments_path,
     parse_ukeire_ch_excel, load_config, save_config, get_export_dir,
     set_flag_value_to_checkbox_mark, checkbox_mark_to_set_flag_value,
@@ -77,7 +77,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-29 ローカル出力先を実行ユーザーのLOCALAPPDATA配下へ変更"
+APP_VERSION = "2026-10-29 共通bat配置とユーザー別DIG_new・設定・終了時刻履歴に対応"
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
@@ -240,8 +240,9 @@ class App(ctk.CTk):
             config["auto_reload_minute"] = int(self.auto_reload_minute.get())
             # バッテリー交換チェックは一時操作のため永続化しない。
             save_config(config)
-        except Exception:
-            pass
+        except Exception as error:
+            logger.error("設定の保存に失敗しました", exc_info=True)
+            messagebox.showwarning("設定保存エラー", f"設定を保存できませんでした。\n{error}")
 
     def _on_close(self):
         """終了時に予約済みタイマーを解放して安全に閉じる。"""
@@ -1145,8 +1146,10 @@ class App(ctk.CTk):
 
     def clear_lane_time_carryover(self):
         # ③ 履歴を完全にリセット
+        if not save_lane_end_times_history([]):
+            messagebox.showerror("引継クリア失敗", "終了時刻履歴を保存できませんでした。履歴はクリアしていません。")
+            return
         self.lane_end_times_history = []
-        save_lane_end_times_history([])
         cleared_values = [
             generate_lane_end_times_label(self.lane_end_times_history, "最新"),
             generate_lane_end_times_label(self.lane_end_times_history, "1つ前"),
@@ -1257,7 +1260,8 @@ class App(ctk.CTk):
                 result_times
             )
             # GUI落ち・仕分けミス時に巻き戻せるようファイルへ永続化
-            save_lane_end_times_history(self.lane_end_times_history)
+            if not save_lane_end_times_history(self.lane_end_times_history):
+                messagebox.showwarning("終了時刻履歴の保存失敗", "今回の終了時刻を保存できませんでした。再起動後には復元されません。必要な時刻を控えてください。")
             # 履歴更新後、combobox値を動的に再生成
             updated_values = [
                 generate_lane_end_times_label(self.lane_end_times_history, "最新"),
@@ -2223,12 +2227,14 @@ class App(ctk.CTk):
         try:
             master_path = get_master_path()
             self.master_data = load_pickup_time_master_xlsx(master_path)
+            if not master_path.exists():
+                messagebox.showwarning("入車時間マスタ未配置", build_master_not_found_message(master_path))
             self.refresh_master_tree()
             self.refresh_routes()
-        except (MasterFileLockedError, MasterFileReadError) as e:      # ← この行を追加
-            messagebox.showwarning("入車時間マスタ読込", str(e))        # ← この行を追加
+        except (MasterFileLockedError, MasterFileReadError) as e:
+            messagebox.showwarning("入車時間マスタ読込", str(e))
         except Exception as e:
-            print(f"入車時間マスタ読込エラー: {e}")
+            messagebox.showwarning("入車時間マスタ読込", str(e))
 
     def save_master(self):
         try:
@@ -2273,7 +2279,6 @@ class App(ctk.CTk):
             # 同じ便名には同じ色を割り当てる
             if 便名 not in 便名タグ:
                 便名タグ[便名] = f"便名色{len(便名タグ) % 2}"
-
             self.master_tree.insert(
                 "",
                 "end",

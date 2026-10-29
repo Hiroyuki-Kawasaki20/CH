@@ -3,6 +3,7 @@
 
 import sys
 import json
+import os
 import logging
 import re
 import tempfile
@@ -26,6 +27,7 @@ from ..utils.normalizer import (
     _normalize_ukeire, _ZEN2HAN_DIGIT_COLON,
 )
 from ..utils.csv_utils import read_csv_ja
+from ..utils.user_paths import get_user_data_dir
 logger = logging.getLogger(__name__)
 
 
@@ -49,28 +51,42 @@ def checkbox_mark_to_set_flag_value(value) -> str:
 
 # ===== 設定ファイル管理 =====
 def get_config_path() -> Path:
-    if getattr(sys, 'frozen', False):
-        return Path(sys.executable).parent / CONFIG_FILENAME
-    else:
-        return Path(__file__).resolve().parents[2] / "config" / CONFIG_FILENAME
+    return get_user_data_dir() / CONFIG_FILENAME
 
 
 def load_config() -> dict:
     config_path = get_config_path()
-    if config_path.exists():
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            config = json.load(f)
+        if isinstance(config, dict):
+            return config
+        logger.warning("設定JSONが辞書ではありません: %s", config_path)
+    except FileNotFoundError:
+        pass
+    except (ValueError, UnicodeError):
+        logger.warning("設定JSONを読み取れません: %s", config_path, exc_info=True)
     return {}
 
 
 def save_config(config: dict):
+    """既存キーを保持し、同一ディレクトリの一時ファイルから原子的に更新する。"""
+    if not isinstance(config, dict):
+        raise TypeError("設定は辞書で指定してください")
+    payload = load_config()
+    payload.update(config)
     config_path = get_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(config_path, 'w', encoding='utf-8') as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+    fd, tmp_name = tempfile.mkstemp(prefix=".settings_", suffix=".json", dir=config_path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, config_path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
 
 
 def select_data_folder() -> Optional[Path]:
@@ -94,7 +110,7 @@ def get_base_dir() -> Path:
     base_dir_str = config.get("base_dir")
     if base_dir_str:
         base_dir = Path(base_dir_str)
-        if base_dir.exists():
+        if base_dir.is_absolute() and base_dir.is_dir():
             return base_dir
     messagebox.showinfo("初期設定", "データフォルダを選択してください。\n（出荷情報_CH_最新版.csv または 出荷情報_全便_最新版.csv と 出荷場一覧.csv があるフォルダ）")
     while True:
@@ -141,7 +157,7 @@ def get_export_dir() -> Path:
     export_dir_str = config.get("export_dir")
     if export_dir_str:
         export_dir = Path(export_dir_str)
-        if export_dir.exists():
+        if export_dir.is_absolute() and export_dir.is_dir():
             return export_dir
     messagebox.showinfo("初期設定", "出力先フォルダを選択してください。\n（SPO用Excelを出力するOneDrive共有フォルダ）")
     while True:
@@ -509,42 +525,34 @@ def _to_master_file_path(raw_value) -> Optional[Path]:
 
 def _resolve_master_path_candidates(config: Optional[dict] = None,
                                     legacy_path: Optional[Path] = None) -> List[Path]:
-    """入車時間マスタの候補パスを優先順に返す（_resolve_shipments_path と同じ流儀）。
-
-    1) config["master_path"]（明示指定。フォルダ指定も可。通常は未設定）
-    2) config["base_dir"] 直下（SharePoint(OneDrive)同期フォルダ＝通常運用の本命）
-    3) 従来位置（frozen: exe同階層 / 開発時: リポジトリ直下）
-    """
+    """明示master_path、base_dirの順。旧配置は呼出側が明示した場合のみ候補にする。"""
     if config is None:
         config = load_config()
-    if legacy_path is None:
-        legacy_path = get_legacy_master_path()
-
     candidates: List[Path] = []
     for raw_value in (config.get("master_path"), config.get("base_dir")):
         p = _to_master_file_path(raw_value)
         if p is not None and p not in candidates:
             candidates.append(p)
-    if legacy_path not in candidates:
+    if legacy_path is not None and legacy_path not in candidates:
         candidates.append(legacy_path)
     return candidates
 
 
 def _resolve_master_path(config: Optional[dict] = None,
                          legacy_path: Optional[Path] = None) -> Path:
-    """候補リストから入車時間マスタのパス（読み書き共通）を決定する。
+    """通常は設定の先頭候補を使用し、未配置でも他マスタへ切り替えない。
 
-    - 既に存在する候補があれば、優先順位の高いものを採用する。
-    - 1件も存在しない場合は例外にせず、親フォルダにアクセスできる先頭候補を
-      「新規作成先」として返す（マスタ未配置でもアプリを起動不能にしない）。
-    - どの候補にもアクセスできない場合（NW未接続・OneDrive未同期）は従来位置を返す。
+    legacy_pathを明示する既存のテスト・呼出側は従来の候補探索を維持する。
     """
     if config is None:
         config = load_config()
-    if legacy_path is None:
-        legacy_path = get_legacy_master_path()
-
     candidates = _resolve_master_path_candidates(config, legacy_path)
+    if legacy_path is None:
+        if not candidates:
+            raise MasterFileError("入力フォルダ（base_dir）を選択してください。入車時間マスタ.xlsxをその直下に配置します。")
+        if not candidates[0].is_absolute():
+            raise MasterFileError("base_dir / master_pathには本人の同期フォルダの絶対パスを指定してください。共通アプリ隣のマスタは使用しません。")
+        return candidates[0]
     for p in candidates:
         try:
             if p.exists():
@@ -601,7 +609,7 @@ def build_master_not_found_message(master_path: Path) -> str:
         "  ・ネットワーク（社内NW/VPN）に接続されているか",
         "  ・OneDriveが起動し、同期が完了しているか（クラウドのみの状態になっていないか）",
         f"  ・ファイル名が『{MASTER_FILENAME}』のままか",
-        f"  ・config/{CONFIG_FILENAME} の base_dir が正しいか",
+        f"  ・{get_config_path()} の base_dir / master_path が正しいか",
     ]
     lines += _conflict_lines(master_path)
     lines += ["", "マスタが無い場合は空の状態で動作します（保存すると上記の場所へ新規作成されます）。"]
@@ -684,7 +692,7 @@ def _build_master_folder_missing_message(master_path: Path,
         "SharePoint(OneDrive) の同期フォルダにアクセスできない可能性があります。",
         "  ・ネットワーク（社内NW/VPN）に接続されているか",
         "  ・OneDriveが起動し、同期が有効になっているか",
-        f"  ・config/{CONFIG_FILENAME} の base_dir が正しいか",
+        f"  ・{get_config_path()} の base_dir / master_path が正しいか",
         "を確認してから、もう一度保存してください。",
         "",
         "画面上の編集内容は残っています（このまま再保存できます）。",
