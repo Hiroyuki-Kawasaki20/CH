@@ -41,14 +41,25 @@ function Find-Conda {
 }
 
 function Write-StartupLog([string]$Message) {
-    Add-Content -LiteralPath $script:logFile -Value $Message -Encoding UTF8
+    Add-Content -LiteralPath $script:logFile -Value $Message -Encoding UTF8 -ErrorAction Stop
     Write-Host $Message
 }
 
 function Invoke-CondaPython([string[]]$PythonArgs) {
-    & $script:conda run -p $script:prefix --no-capture-output $script:python @PythonArgs 2>&1 |
-        ForEach-Object { Write-StartupLog "$_" }
-    if ($LASTEXITCODE -ne 0) { throw "conda / DIG_new Python failed (exit $LASTEXITCODE). See the startup log." }
+    $processResult = @{ ExitCode = $null }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $script:conda run -p $script:prefix --no-capture-output $script:python @PythonArgs 2>&1 |
+            ForEach-Object -Process { Write-StartupLog "$_" } -End {
+                $processResult.ExitCode = $LASTEXITCODE
+            }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($processResult.ExitCode -ne 0) {
+        throw "conda / DIG_new Python failed (exit $($processResult.ExitCode)). See the startup log."
+    }
 }
 
 try {

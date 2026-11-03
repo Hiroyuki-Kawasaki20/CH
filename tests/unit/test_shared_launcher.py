@@ -29,7 +29,16 @@ def launcher(tmp_path):
     (prefix / 'conda-meta').mkdir()
     conda = home / 'miniconda3' / 'condabin' / 'conda.bat'
     conda.parent.mkdir(parents=True)
-    conda.write_text('@echo off\necho %* >> "%CH_TEST_CALLS%"\necho %CD% >> "%CH_TEST_CWD%"\nexit /b %CH_TEST_EXIT%\n', encoding='ascii')
+    conda.write_text(
+        '@echo off\n'
+        'echo %* >> "%CH_TEST_CALLS%"\n'
+        'echo %CD% >> "%CH_TEST_CWD%"\n'
+        'if defined CH_TEST_STDOUT echo %CH_TEST_STDOUT%\n'
+        'if defined CH_TEST_STDERR echo %CH_TEST_STDERR% 1>&2\n'
+        'set "EXIT_TO_USE=%CH_TEST_EXIT%"\n'
+        'echo %* | findstr /c:"src.app.gui" >nul\n'
+        'if not errorlevel 1 set "EXIT_TO_USE=%CH_TEST_GUI_EXIT%"\n'
+        'exit /b %EXIT_TO_USE%\n', encoding='ascii')
     env = os.environ.copy()
     env.update({
         'USERPROFILE': str(home), 'HOME': str(home), 'LOCALAPPDATA': str(home / 'AppData' / 'Local'),
@@ -37,7 +46,8 @@ def launcher(tmp_path):
         'ProgramFiles': str(tmp_path / 'program-files'), 'ProgramFiles(x86)': str(tmp_path / 'program-files-x86'),
         'PATH': str(Path(os.environ['SystemRoot']) / 'System32'),
         'CONDA_EXE': str(conda), 'CH_KANBAN_ENV_PREFIX': str(prefix),
-        'CH_TEST_CALLS': str(tmp_path / 'calls.txt'), 'CH_TEST_CWD': str(tmp_path / 'cwd.txt'), 'CH_TEST_EXIT': '0',
+        'CH_TEST_CALLS': str(tmp_path / 'calls.txt'), 'CH_TEST_CWD': str(tmp_path / 'cwd.txt'),
+        'CH_TEST_EXIT': '0', 'CH_TEST_GUI_EXIT': '0',
     })
     return shared, env
 
@@ -139,6 +149,81 @@ def test_diagnostics_failure_stops_before_gui(launcher):
     result = _launch(launcher, self_test=False)
     assert result.returncode != 0
     assert b'src.app.gui' not in _calls(env)
+
+
+@pytest.mark.parametrize('self_test', [True, False], ids=['self-test', 'gui'])
+def test_bat_logs_stdout_without_stderr_and_succeeds(launcher, self_test):
+    _, env = launcher
+    env['CH_TEST_STDOUT'] = '標準出力: 起動確認'
+    result = _launch(launcher, self_test=self_test)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    log_dir = Path(env['LOCALAPPDATA']) / 'CHKanban' / 'output' / 'logs'
+    logs = list(log_dir.glob('startup_*.log'))
+    assert len(logs) == 1
+    text = logs[0].read_text(encoding='utf-8-sig')
+    assert '標準出力: 起動確認' in text
+    assert '\x00' not in text
+
+
+@pytest.mark.parametrize('self_test', [True, False], ids=['self-test', 'gui'])
+def test_bat_logs_stdout_and_stderr_warning_without_failing(launcher, self_test):
+    _, env = launcher
+    env['CH_TEST_STDOUT'] = '標準出力: 起動確認'
+    env['CH_TEST_STDERR'] = '警告: 任意の確認メッセージ'
+    result = _launch(launcher, self_test=self_test)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    log_dir = Path(env['LOCALAPPDATA']) / 'CHKanban' / 'output' / 'logs'
+    logs = list(log_dir.glob('startup_*.log'))
+    assert len(logs) == 1
+    text = logs[0].read_text(encoding='utf-8-sig')
+    assert '標準出力: 起動確認' in text
+    assert '警告: 任意の確認メッセージ' in text
+    assert '\x00' not in text
+
+
+@pytest.mark.parametrize('self_test', [True, False], ids=['self-test', 'gui'])
+def test_bat_reports_nonzero_exit_after_logging_both_streams(launcher, self_test):
+    _, env = launcher
+    env['CH_TEST_STDOUT'] = '標準出力: 実行結果'
+    env['CH_TEST_STDERR'] = '標準エラー: 実行警告'
+    env['CH_TEST_EXIT'] = '7' if self_test else '0'
+    env['CH_TEST_GUI_EXIT'] = '7' if not self_test else '0'
+    result = _launch(launcher, self_test=self_test)
+    assert result.returncode != 0
+
+    log_dir = Path(env['LOCALAPPDATA']) / 'CHKanban' / 'output' / 'logs'
+    logs = list(log_dir.glob('startup_*.log'))
+    assert len(logs) == 1
+    text = logs[0].read_text(encoding='utf-8-sig')
+    assert '標準出力: 実行結果' in text
+    assert '標準エラー: 実行警告' in text
+    assert 'exit 7' in text
+    assert '\x00' not in text
+
+
+def test_bat_fails_when_conda_process_cannot_start(launcher):
+    _, env = launcher
+    invalid_exe = Path(env['USERPROFILE']) / 'miniconda3' / 'Scripts' / 'conda.exe'
+    invalid_exe.parent.mkdir(parents=True)
+    invalid_exe.write_bytes(b'not a Windows executable')
+    env['CONDA_EXE'] = str(invalid_exe)
+    result = _launch(launcher)
+    assert result.returncode != 0
+    assert b'[ERROR]' in result.stdout + result.stderr
+    assert b'src.app.gui' not in _calls(env)
+
+
+def test_bat_fails_when_startup_log_cannot_be_created(launcher):
+    _, env = launcher
+    localappdata = Path(env['LOCALAPPDATA'])
+    localappdata.parent.mkdir(parents=True)
+    localappdata.write_text('not a directory', encoding='utf-8')
+    result = _launch(launcher)
+    assert result.returncode != 0
+    assert b'[ERROR]' in result.stdout + result.stderr
+    assert not _calls(env)
 
 
 def test_startup_check_reports_interpreter_libraries_and_paths(tmp_path):
