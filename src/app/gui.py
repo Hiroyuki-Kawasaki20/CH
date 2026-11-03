@@ -77,7 +77,7 @@ from src.services.export_validator import verify_export_invariant
 from src.services.export_archive import archive_export, resolve_archive_dir
 from src.utils.normalizer import _normalize_dest_name, _ZEN2HAN_DIGIT_COLON
 
-APP_VERSION = "2026-10-29 共通bat配置とユーザー別DIG_new・設定・終了時刻履歴に対応"
+APP_VERSION = "2026-11-04 起動時stderr警告処理とbat運用案内を修正"
 # ===== CustomTkinter 設定 =====
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")

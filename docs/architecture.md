@@ -117,7 +117,7 @@ SPO用Excel自動出力
   - 出荷場一覧CSV
   - 入車時間マスタExcel
 - 設定ファイル:
-  - `config/ch_kanban_settings.json`
+  - `%LOCALAPPDATA%\CHKanban\ch_kanban_settings.json`（利用者別。`LOCALAPPDATA` 未設定時は本人ホームの `AppData\Local`）
   - 主なキー: `base_dir`, `export_dir`, `auto_reload_minute`
 
 ## 6.5 メモリ内管理（セッション期間中）
