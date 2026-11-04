@@ -18,9 +18,10 @@ import threading
 import time
 import uuid
 from typing import Optional, Tuple
+from pathlib import Path
 
 import pandas as pd
-
+from ..models.constants import LOCAL_OUTPUT_DIR
 from ..utils.excel_utils import _add_table_exact
 
 
@@ -28,7 +29,7 @@ from ..utils.excel_utils import _add_table_exact
 _export_lock = threading.Lock()
 
 # Staging + Move方式の定数
-DEFAULT_STAGING_DIR = r"C:\Temp\spo_staging"
+DEFAULT_STAGING_DIR = str(Path(LOCAL_OUTPUT_DIR) / "_staging")
 SPO_TABLE_NAME = "SPOExport"
 
 # ロギング

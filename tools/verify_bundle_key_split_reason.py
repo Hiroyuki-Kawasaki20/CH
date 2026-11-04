@@ -142,6 +142,7 @@ def main() -> None:
     details = _rebuild_details()
     report, reason_counts, pairs = audit(details)
     output = Path(LOCAL_OUTPUT_DIR) / "bundle_key_split_reason_audit.csv"
+    output.parent.mkdir(parents=True, exist_ok=True)
     report.to_csv(output, index=False, encoding="utf-8-sig")
     print("原因フィールド別件数（分割グループ単位）")
     for reason, count in sorted(reason_counts.items()):

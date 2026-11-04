@@ -1,48 +1,12 @@
-# CHかんばんセット 起動・exe化ガイド
+# 旧・起動 / exe化ガイド
 
-このガイドは、VS Codeを開かずに起動・運用するための最短手順です。
+> この文書は過去の起動・exe手順です。現行運用ではexeを使用・配布しません。bat起動、本人のDIG_new、ユーザー別設定の現行手順は [環境構築手順書.md](環境構築手順書.md) を参照してください。
 
-初回セットアップ（Miniconda 導入・`DIG_new` 環境作成・設定ファイルのパス修正）は [環境構築手順書.md](環境構築手順書.md) を参照してください。本ガイドは環境構築が済んでいる前提です。
+## 現行運用
 
-## 1. ワンクリック起動（bat）
+アプリの起動と初回設定には上記の現行手順書を使用してください。この文書の以下のexe作成・配布内容は現行運用の手順ではありません。
 
-プロジェクト直下にある [run_ch_kanban.bat](../run_ch_kanban.bat) をダブルクリックしてください。
-
-### 1.1 実行内容
-- `conda run -n DIG_new` で環境を切り替え
-- `python -m src.app.gui` でGUIを起動
-
-### 1.2 自己診断（起動テスト）
-
-PowerShell で次を実行します。
-
-```powershell
-./run_ch_kanban.bat --self-test
-```
-
-成功時:
-
-```text
-[OK] self-test passed. conda + DIG_new + python are available.
-```
-
-### 1.3 うまく起動しない場合
-- condaが未インストール
-- conda環境名が `DIG_new` ではない
-- Python依存パッケージが不足
-
-`run_ch_kanban.bat` は診断ログを出力します。
-
-- ログファイル: `%TEMP%\run_ch_kanban_startup.log`
-- まず `CONDA_CMD=...` と `self-test success` の有無を確認
-
-必要に応じて PowerShell で以下を実行してください。
-
-```powershell
-conda run -n DIG_new python -m src.app.gui
-```
-
-## 2. exe配布版の作成（PyInstaller）
+## 過去のexe配布手順（現行運用では不使用）
 
 GUI専用specとして `CH_kanban_set_GUI.spec` を追加済みです。
 
@@ -66,13 +30,13 @@ pyinstaller CH_kanban_set_GUI.spec --noconfirm --clean
 - 実行ファイル: `dist\CH_kanban_set\CH_kanban_set.exe`
 - 配布時は `dist\CH_kanban_set` フォルダごと渡す（onedir構成）
 
-## 3. 運用のおすすめ
+## 過去の運用メモ
 
 - 開発者: `run_ch_kanban.bat` で起動
 - 利用者: `dist\CH_kanban_set\CH_kanban_set.exe` のショートカットをデスクトップ配置
 - 毎日の起動忘れ防止: Windowsタスクスケジューラでログオン時起動
 
-## 4. 注意点
+## 過去の注意点
 
 - 設定ファイル `ch_kanban_settings.json` はexe起動時、exeと同じフォルダを参照します。
 - 入力CSV/マスタの置き場所はアプリの設定値（base_dir）に依存します。

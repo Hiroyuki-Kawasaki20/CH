@@ -28,7 +28,7 @@ CHかんばんセット/
 │     ├─ csv_utils.py              # CSV読込補助
 │     └─ excel_utils.py            # Excel書込補助
 ├─ config/
-│  └─ ch_kanban_settings.json      # base_dir/export_dir/自動再読込分など
+│  └─ ch_kanban_settings.example.json # 配布・参照用の見本（通常設定ではない）
 ├─ tests/
 │  ├─ unit/
 │  │  ├─ test_data_loader.py
@@ -117,8 +117,17 @@ SPO用Excel自動出力
   - 出荷場一覧CSV
   - 入車時間マスタExcel
 - 設定ファイル:
-  - `config/ch_kanban_settings.json`
+  - `%LOCALAPPDATA%\CHKanban\ch_kanban_settings.json`（利用者別。`LOCALAPPDATA` 未設定時は本人ホームの `AppData\Local`）
   - 主なキー: `base_dir`, `export_dir`, `auto_reload_minute`
+- 終了時刻履歴:
+  - `%LOCALAPPDATA%\CHKanban\lane_end_times_history.json`（利用者別。`LOCALAPPDATA` 未設定時は本人ホームの `AppData\Local`）
+- ローカル成果物・ログ:
+  - `%LOCALAPPDATA%\CHKanban\output` 配下（未ヒットCSV、履歴Excel、アプリログ、bat起動ログなど）
+  - `LOCALAPPDATA` 未設定時は本人ホームの `AppData\Local\CHKanban\output`
+- SPO本体Excel:
+  - 設定された `export_dir`（利用者が指定するSPO監視フォルダ）
+
+設定・履歴・ローカル出力は `src/utils/user_paths.py` で実行ユーザー領域へ解決します。リポジトリ内の `config/ch_kanban_settings.example.json` は見本であり、通常起動時の実設定ではありません。配置方式別の起動・更新手順は [環境構築手順書.md](環境構築手順書.md) を参照してください。
 
 ## 6.5 メモリ内管理（セッション期間中）
 
@@ -129,9 +138,15 @@ SPO用Excel自動出力
 
 ## 7. 出力物
 
-- `SPOアップロード用.xlsx`（主出力）
-- `SPOアップロード用_未ヒット一覧.csv`（入車時間未マッチがある場合）
-- 履歴追記ファイル（`append_to_spo_history` が書込可能な場合）
+| 出力物 | 通常保存先 |
+|---|---|
+| `SPOアップロード用.xlsx`（主出力） | 利用者が指定した `export_dir` |
+| `SPOアップロード用_未ヒット一覧.csv`（未ヒットがある場合） | `%LOCALAPPDATA%\CHKanban\output` |
+| `SPOアップロード用_履歴.xlsx` | `%LOCALAPPDATA%\CHKanban\output` |
+| アプリログ・bat起動ログ | `%LOCALAPPDATA%\CHKanban\output\logs` |
+
+`LOCALAPPDATA` が未設定の場合は、これらのローカル保存先を本人ホームの `AppData\Local\CHKanban` 以下に置き換えます。Excelのローカル保存完了はOneDriveからSPOへの同期完了を意味しません。
+
 - 補助出力（ユーティリティとして実装済み）:
   - セットボードHTML
   - 工程別かんばん明細Excel

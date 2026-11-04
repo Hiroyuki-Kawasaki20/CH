@@ -19,21 +19,17 @@ CH（車体）ラインのかんばん自動仕分け・工程割当ツール。
   | ファイル | 出力先 | 備考 |
   |---|---|---|
   | `SPOアップロード用.xlsx` | SPO監視フォルダ（OneDrive共有） | Power Automate監視対象 |
-  | `SPOアップロード用_履歴.xlsx` | ローカル固定フォルダ | トリガー対象外 |
-  | `SPOアップロード用_未ヒット一覧.csv` | ローカル固定フォルダ | 入車時間マスタ照合外の便（調査用ログ） |
+  | `SPOアップロード用_履歴.xlsx` | `%LOCALAPPDATA%\CHKanban\output` | トリガー対象外、Windowsユーザー別 |
+  | `SPOアップロード用_未ヒット一覧.csv` | `%LOCALAPPDATA%\CHKanban\output` | 入車時間マスタ照合外の便（調査用ログ）、Windowsユーザー別 |
 
 - SPO出力のテーブル付与（`SPOExport`）は `src/services/spo_export.py` 側で一元実施する運用です。
 - `src/utils/excel_utils.py` の `_add_table_exact` は同名テーブル再呼び出し時にスキップする冪等実装です。
 
 ## 入車時間マスタの管理（SharePoint同期フォルダ）
 
-`入車時間マスタ.xlsx` は、通常運用では設定ファイル `config/ch_kanban_settings.json` の `base_dir` に設定した SharePoint(OneDrive) 同期フォルダ直下へ配置します。出荷情報CSVや出荷場一覧CSVと同じフォルダに置くことで、読み込みと保存が同じファイルを参照します。
+初回起動時に本人の入力フォルダを選択すると、その `base_dir` 直下の `入車時間マスタ.xlsx` を通常の読み書き先として使います。個別に `master_path` を設定した場合はそちらを使います。通常起動では共通アプリ配置先・リポジトリ・exeの隣にあるマスタへ暗黙に切り替えません。
 
-| 優先順位 | 参照先 | 用途 |
-|---:|---|---|
-| 1 | `master_path` | 個別指定用。ファイルパスまたはフォルダパスを指定できます。通常は未設定です。 |
-| 2 | `base_dir/入車時間マスタ.xlsx` | 通常運用の配置先。SharePoint(OneDrive) 同期フォルダ直下です。 |
-| 3 | 従来位置の `入車時間マスタ.xlsx` | 移行期・ネットワーク未接続時のフォールバックです。開発時はリポジトリ直下、exe時はexe同階層です。 |
+設定・終了時刻履歴・ローカル出力・ログはWindowsユーザーごとの `%LOCALAPPDATA%\CHKanban` に保存されます。初回準備、本人のDIG_newとcondaの指定、入出力先の選択は [docs/環境構築手順書.md](docs/環境構築手順書.md) を参照してください。
 
 SharePointブラウザで編集する場合は、対象ライブラリで `入車時間マスタ.xlsx` を開き、編集後に保存状態とOneDrive同期完了を確認してからツールを操作してください。ツールで保存する前にExcelやブラウザ編集画面で同じファイルを開いていると、保存は中断され、編集内容は `%TEMP%` 配下の `入車時間マスタ_未保存_日時.xlsx` に退避されます。
 
@@ -57,15 +53,7 @@ SharePointブラウザで編集する場合は、対象ライブラリで `入�
 
 ## 起動
 
-最短手順はプロジェクト直下の [run_ch_kanban.bat](run_ch_kanban.bat) をダブルクリックする方法です。
-
-手動起動する場合は次を使います。
-
-```powershell
-conda run -n DIG_new python -m src.app.gui
-```
-
-exe作成と配布手順は [docs/起動・exe化ガイド.md](docs/起動・exe化ガイド.md) を参照してください。
+通常起動は [run_ch_kanban.bat](run_ch_kanban.bat) のダブルクリックです。利用者本人のDIG_newを使い、exeは現行運用で使用・配布しません。初回セットアップと起動前の確認は [docs/環境構築手順書.md](docs/環境構築手順書.md) にまとめています。
 
 ## プロジェクト構造
 
@@ -76,7 +64,7 @@ src/
   services/    仕分け・工程割当・エクスポート（spo_export含む）
   app/         GUI (CustomTkinter)
 qt_setboard/   PySide6/QML 版セットボード（別系統）
-config/        設定 JSON
+config/        アプリ同梱・旧設定資材（利用者設定はユーザー領域）
 tests/         ユニット・結合テスト
 docs/          要件定義・アーキテクチャ
 prompts/       AI開発支援プロンプト（要点は CLAUDE.md に統合）
@@ -86,7 +74,7 @@ prompts/       AI開発支援プロンプト（要点は CLAUDE.md に統合）
 
 - [docs/仕分け・割り振りルール.md](docs/仕分け・割り振りルール.md) - 現行の仕分け・工程割り振りルール
 - [docs/利用マニュアル.md](docs/利用マニュアル.md) - 操作手順
-- [docs/起動・exe化ガイド.md](docs/起動・exe化ガイド.md) - 起動と exe 配布
+- [docs/起動・exe化ガイド.md](docs/起動・exe化ガイド.md) - 旧exe手順（現行bat運用では不使用）
 - [docs/環境構築手順書.md](docs/環境構築手順書.md) - 別PCへの環境構築手順
 - [CLAUDE.md](CLAUDE.md) - AIコーディング支援向けのプロジェクト前提・コーディング規約
 

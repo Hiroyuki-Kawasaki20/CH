@@ -430,7 +430,7 @@ def export_spo_xlsx_staged(
     Args:
         spo_df: 出力対象DataFrame
         watch_dir: Power Automate監視フォルダのパス（OneDrive同期対象）
-        staging_dir: staging領域（デフォルト: C:\\Temp\\spo_staging）
+        staging_dir: staging領域（デフォルト: ユーザー別LOCAL_OUTPUT_DIR配下の_staging）
         base_name: ファイル名の基本部分
 
     Returns:
